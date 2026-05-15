@@ -73,6 +73,19 @@ type StateChange struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+type CertificateInventory struct {
+	Role              string     `json:"role"`
+	Path              string     `json:"path"`
+	Subject           string     `json:"subject,omitempty"`
+	Issuer            string     `json:"issuer,omitempty"`
+	NotBefore         *time.Time `json:"not_before,omitempty"`
+	NotAfter          *time.Time `json:"not_after,omitempty"`
+	SHA256Fingerprint string     `json:"sha256_fingerprint,omitempty"`
+	Status            string     `json:"status"`
+	LastCheckedAt     time.Time  `json:"last_checked_at"`
+	Error             string     `json:"error,omitempty"`
+}
+
 type HistoryLimits struct {
 	Limit int
 	EGMID string

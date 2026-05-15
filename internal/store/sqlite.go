@@ -121,6 +121,47 @@ func (s *SQLiteStore) RecordStateChange(ctx context.Context, change model.StateC
 	return err
 }
 
+func (s *SQLiteStore) ReplaceCertificateInventory(ctx context.Context, records []model.CertificateInventory) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM certificate_inventory`); err != nil {
+		return err
+	}
+	for _, record := range records {
+		var notBefore any
+		var notAfter any
+		if record.NotBefore != nil {
+			notBefore = *record.NotBefore
+		}
+		if record.NotAfter != nil {
+			notAfter = *record.NotAfter
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO certificate_inventory (
+				cert_role, path, subject, issuer, not_before, not_after,
+				sha256_fingerprint, last_checked_at, status
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			record.Role,
+			record.Path,
+			record.Subject,
+			record.Issuer,
+			notBefore,
+			notAfter,
+			record.SHA256Fingerprint,
+			record.LastCheckedAt,
+			statusWithError(record),
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *SQLiteStore) ListIncidents(ctx context.Context, limit int) ([]model.Incident, error) {
 	limit = normalizeLimit(limit)
 	rows, err := s.db.QueryContext(
@@ -262,9 +303,51 @@ func (s *SQLiteStore) ListStateChanges(ctx context.Context, limit int) ([]model.
 	return changes, rows.Err()
 }
 
+func (s *SQLiteStore) ListCertificateInventory(ctx context.Context) ([]model.CertificateInventory, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT cert_role, path, subject, issuer, not_before, not_after,
+			sha256_fingerprint, last_checked_at, status
+		 FROM certificate_inventory
+		 ORDER BY cert_role`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []model.CertificateInventory{}
+	for rows.Next() {
+		var record model.CertificateInventory
+		var notBefore sql.NullTime
+		var notAfter sql.NullTime
+		if err := rows.Scan(
+			&record.Role,
+			&record.Path,
+			&record.Subject,
+			&record.Issuer,
+			&notBefore,
+			&notAfter,
+			&record.SHA256Fingerprint,
+			&record.LastCheckedAt,
+			&record.Status,
+		); err != nil {
+			return nil, err
+		}
+		if notBefore.Valid {
+			record.NotBefore = &notBefore.Time
+		}
+		if notAfter.Valid {
+			record.NotAfter = &notAfter.Time
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}
@@ -274,6 +357,13 @@ func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+func statusWithError(record model.CertificateInventory) string {
+	if record.Error == "" {
+		return record.Status
+	}
+	return record.Status + ": " + record.Error
 }
 
 func normalizeLimit(limit int) int {

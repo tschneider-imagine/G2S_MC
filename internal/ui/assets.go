@@ -87,6 +87,15 @@ const dashboardHTML = `<!doctype html>
         <div id="state-history" class="timeline"></div>
       </div>
     </section>
+
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Certificate Inventory</h2>
+        </div>
+        <div id="certificate-list" class="timeline"></div>
+      </div>
+    </section>
   </main>
 
   <script src="/static/dashboard.js"></script>
@@ -325,7 +334,8 @@ const dashboardJS = `const endpoints = {
   status: "/api/status",
   incidents: "/api/incidents?limit=6",
   egmHistory: "/api/egms/history?limit=8",
-  stateHistory: "/api/state-history?limit=8"
+  stateHistory: "/api/state-history?limit=8",
+  certificates: "/api/certificates"
 };
 
 const $ = (id) => document.getElementById(id);
@@ -383,11 +393,12 @@ function renderItems(id, items, emptyText, mapItem) {
 }
 
 async function refresh() {
-  const [status, incidents, egmHistory, stateHistory] = await Promise.all([
+  const [status, incidents, egmHistory, stateHistory, certificates] = await Promise.all([
     fetchJSON(endpoints.status),
     fetchJSON(endpoints.incidents),
     fetchJSON(endpoints.egmHistory),
-    fetchJSON(endpoints.stateHistory)
+    fetchJSON(endpoints.stateHistory),
+    fetchJSON(endpoints.certificates)
   ]);
 
   renderStatus(status);
@@ -399,6 +410,9 @@ async function refresh() {
   );
   renderItems("state-history", stateHistory, "No state history yet", (item) =>
     "<div class=\"item\"><strong>" + item.old_state + " -> " + item.new_state + "</strong><span>" + item.reason + " at " + fmtTime(item.created_at) + "</span></div>"
+  );
+  renderItems("certificate-list", certificates, "No certificate inventory yet", (item) =>
+    "<div class=\"item\"><strong>" + item.role + " " + statusPill(item.status) + "</strong><span>" + (item.path || "not configured") + " " + (item.not_after ? "expires " + fmtTime(item.not_after) : "") + "</span></div>"
   );
   $("last-refresh").textContent = "Updated " + new Date().toLocaleTimeString();
 }

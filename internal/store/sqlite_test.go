@@ -46,10 +46,27 @@ func TestSQLiteStoreMigratesAndRecordsAuditRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record state change: %v", err)
 	}
+	if err := store.ReplaceCertificateInventory(ctx, []model.CertificateInventory{{
+		Role:          "g2s_client_cert",
+		Path:          "./certs/client.crt",
+		Status:        "MISSING",
+		LastCheckedAt: time.Now(),
+	}}); err != nil {
+		t.Fatalf("replace cert inventory: %v", err)
+	}
 
 	assertCount(t, store, "incident_records", 1)
 	assertCount(t, store, "egm_status_snapshots", 1)
 	assertCount(t, store, "controller_state_history", 1)
+	assertCount(t, store, "certificate_inventory", 1)
+
+	certs, err := store.ListCertificateInventory(ctx)
+	if err != nil {
+		t.Fatalf("list cert inventory: %v", err)
+	}
+	if len(certs) != 1 || certs[0].Role != "g2s_client_cert" {
+		t.Fatalf("unexpected cert inventory: %+v", certs)
+	}
 }
 
 func TestSQLiteStoreListsAuditRows(t *testing.T) {
@@ -129,6 +146,7 @@ func TestSQLiteStoreListsAuditRows(t *testing.T) {
 	if len(changes) != 1 || changes[0].Reason != "SECURITY_LINE_DROP" {
 		t.Fatalf("unexpected changes: %+v", changes)
 	}
+
 }
 
 func assertCount(t *testing.T, store *SQLiteStore, table string, want int) {

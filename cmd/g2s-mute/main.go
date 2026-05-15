@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/certs"
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
@@ -46,6 +47,11 @@ func main() {
 	}
 	defer auditStore.Close()
 
+	certInventory := certs.InspectAll(certs.SourcesFromConfig(cfg.Crypto), time.Now())
+	if err := auditStore.ReplaceCertificateInventory(ctx, certInventory); err != nil {
+		log.Fatalf("record certificate inventory: %v", err)
+	}
+
 	eng := engine.NewWithAuditSink(cfg.ControllerID, cfg.EGMRoster, auditStore)
 	eng.Start(ctx)
 	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now(), Detail: "startup complete"})
@@ -72,6 +78,7 @@ func main() {
 	mux.HandleFunc("/api/egms/history", egmHistoryHandler(auditStore))
 	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
+	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
 
 	server := &http.Server{
 		Addr:              cfg.WebUI.BindAddress,
@@ -154,6 +161,17 @@ func stateHistoryHandler(store *store.SQLiteStore) http.HandlerFunc {
 		}
 		changes, err := store.ListStateChanges(r.Context(), queryLimit(r, 50))
 		writeJSON(w, changes, err)
+	}
+}
+
+func certificatesHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		records, err := store.ListCertificateInventory(r.Context())
+		writeJSON(w, records, err)
 	}
 }
 

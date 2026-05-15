@@ -39,6 +39,7 @@ Once running, the development listener exposes:
 - `GET /api/egms/history`
 - `GET /api/compliance`
 - `GET /api/state-history`
+- `GET /api/certificates`
 - `POST /g2s`
 
 Current project documentation lives in:
