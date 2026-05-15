@@ -554,11 +554,10 @@ Start these in order:
 1. Create Go module and package layout.
 2. Add `configs/config.example.json` matching the agreed schema.
 3. Add config loader and validation tests.
-4. Add dashboard views on top of the live and historical APIs.
-5. Add certificate inventory loading and expiry reporting.
-6. Add mTLS transport with dev certs and SAN validation notes.
-7. Add Raspberry Pi GPIO adapter once pinout is confirmed.
-8. Convert `other info/post_2018_gaming_mfg_list.csv` into the first compatibility tracker seed if a tracker file is needed.
+4. Add certificate inventory loading and expiry reporting.
+5. Add mTLS transport with dev certs and SAN validation notes.
+6. Add Raspberry Pi GPIO adapter once pinout is confirmed.
+7. Convert `other info/post_2018_gaming_mfg_list.csv` into the first compatibility tracker seed if a tracker file is needed.
 
 ## 13. Decisions Needed Soon
 

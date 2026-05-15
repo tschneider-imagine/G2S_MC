@@ -31,6 +31,8 @@ go run ./cmd/g2s-fake-egm -host-url http://127.0.0.1:8444/g2s -egm-id EGM-01
 
 Once running, the development listener exposes:
 
+- `GET /`
+- `GET /dashboard`
 - `GET /healthz`
 - `GET /api/status`
 - `GET /api/incidents`
@@ -49,9 +51,9 @@ Current project documentation lives in:
 
 Recommended first implementation target:
 
-1. Add dashboard views on top of the live and historical APIs.
-2. Add certificate inventory loading and expiry reporting.
-3. Add dev certificate generation and mTLS smoke tests.
+1. Add certificate inventory loading and expiry reporting.
+2. Add dev certificate generation and mTLS smoke tests.
+3. Add Raspberry Pi GPIO adapters once the pinout is confirmed.
 
 ## Verification
 

@@ -18,6 +18,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
+	"github.com/tschneider-imagine/G2S_MC/internal/ui"
 )
 
 func main() {
@@ -57,6 +58,12 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	uiServer, err := ui.NewServer()
+	if err != nil {
+		log.Fatalf("create dashboard: %v", err)
+	}
+	uiServer.RegisterRoutes(mux)
+
 	g2sServer := g2s.NewServer(cfg.G2S.HostID, eng)
 	g2sServer.RegisterRoutes(mux, cfg.G2S.EndpointPath)
 	mux.HandleFunc("/healthz", healthHandler)

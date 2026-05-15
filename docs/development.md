@@ -23,6 +23,8 @@ The default development listener binds to `127.0.0.1:8444`.
 
 Useful endpoints:
 
+- `GET http://127.0.0.1:8444/`
+- `GET http://127.0.0.1:8444/dashboard`
 - `GET http://127.0.0.1:8444/healthz`
 - `GET http://127.0.0.1:8444/api/status`
 - `GET http://127.0.0.1:8444/api/incidents`
