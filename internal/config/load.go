@@ -44,6 +44,16 @@ func (c Config) Validate() error {
 	requireText(&problems, "g2s.host_id", c.G2S.HostID)
 	requireText(&problems, "g2s.host_url", c.G2S.HostURL)
 	requireText(&problems, "g2s.endpoint_path", c.G2S.EndpointPath)
+	if c.G2S.RequireTLS {
+		requireText(&problems, "crypto.web_server_cert_path", c.Crypto.WebServerCertPath)
+		requireText(&problems, "crypto.web_server_key_path", c.Crypto.WebServerKeyPath)
+	}
+	if c.G2S.RequireClientCert {
+		if !c.G2S.RequireTLS {
+			problems = append(problems, "g2s.require_client_cert requires g2s.require_tls")
+		}
+		requireText(&problems, "crypto.g2s_ca_cert_path", c.Crypto.G2SCAPath)
+	}
 
 	if c.HardwareIO.VoltageDropThresholdMS <= 0 {
 		problems = append(problems, "hardware_io.voltage_drop_threshold_ms must be greater than zero")

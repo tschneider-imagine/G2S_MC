@@ -16,9 +16,15 @@ func main() {
 	keepAliveCount := flag.Int("keepalive-count", 1, "number of keepAlive messages to send after commsOnLine")
 	keepAliveInterval := flag.Duration("keepalive-interval", 2*time.Second, "delay between keepAlive messages")
 	timeout := flag.Duration("timeout", 5*time.Second, "per-request timeout")
+	caPath := flag.String("ca", "", "optional CA certificate used to verify an HTTPS G2S host")
+	certPath := flag.String("cert", "", "optional client certificate for mutual TLS")
+	keyPath := flag.String("key", "", "optional client private key for mutual TLS")
 	flag.Parse()
 
-	client := fakeegm.New(*hostURL, *egmID)
+	client, err := fakeegm.NewWithTLSFiles(*hostURL, *egmID, *caPath, *certPath, *keyPath)
+	if err != nil {
+		log.Fatalf("create fake EGM client: %v", err)
+	}
 	client.HTTPClient.Timeout = *timeout
 
 	ctx := context.Background()

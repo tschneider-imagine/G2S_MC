@@ -1,6 +1,7 @@
 bin/
 dist/
 .cache/
+certs/
 coverage.out
 *.exe
 *.db

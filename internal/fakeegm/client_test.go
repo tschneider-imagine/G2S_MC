@@ -2,13 +2,17 @@ package fakeegm
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/certs"
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
@@ -66,5 +70,49 @@ func TestClientSendsKeepAlive(t *testing.T) {
 	}
 	if !sawKeepAlive {
 		t.Fatal("expected keepAlive in request body")
+	}
+}
+
+func TestClientUsesMutualTLSFiles(t *testing.T) {
+	paths, err := certs.GenerateDevCerts(certs.DevCertOptions{OutputDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("generate dev certs: %v", err)
+	}
+
+	hostCert, err := tls.LoadX509KeyPair(paths.HostCert, paths.HostKey)
+	if err != nil {
+		t.Fatalf("load host key pair: %v", err)
+	}
+	caPEM, err := os.ReadFile(paths.CACert)
+	if err != nil {
+		t.Fatalf("read CA: %v", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caPEM) {
+		t.Fatal("expected CA pool to load")
+	}
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+			t.Error("expected verified client certificate")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<keepAliveAck/>"))
+	}))
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{hostCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCAs,
+		MinVersion:   tls.VersionTLS12,
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	client, err := NewWithTLSFiles(server.URL, "EGM-01", paths.CACert, paths.ClientCert, paths.ClientKey)
+	if err != nil {
+		t.Fatalf("create mTLS client: %v", err)
+	}
+	if _, err := client.KeepAlive(context.Background()); err != nil {
+		t.Fatalf("keepAlive with mTLS: %v", err)
 	}
 }

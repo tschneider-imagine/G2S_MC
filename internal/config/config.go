@@ -42,7 +42,7 @@ type Alerts struct {
 }
 
 type Timeouts struct {
-	G2SRequestTimeoutMS      int `json:"g2s_request_timeout_ms"`
+	G2SRequestTimeoutMS     int `json:"g2s_request_timeout_ms"`
 	EGMHeartbeatIntervalMS  int `json:"egm_heartbeat_interval_ms"`
 	UISessionTimeoutMinutes int `json:"ui_session_timeout_minutes"`
 }
@@ -52,16 +52,17 @@ type Database struct {
 }
 
 type WebUI struct {
-	BindAddress              string `json:"bind_address"`
-	RequireLogin             bool   `json:"require_login"`
-	RequireClientCertForAdmin bool  `json:"require_client_cert_for_admin"`
+	BindAddress               string `json:"bind_address"`
+	RequireLogin              bool   `json:"require_login"`
+	RequireClientCertForAdmin bool   `json:"require_client_cert_for_admin"`
 }
 
 type G2S struct {
-	HostID       string `json:"host_id"`
-	HostURL      string `json:"host_url"`
-	EndpointPath string `json:"endpoint_path"`
-	RequireTLS   bool   `json:"require_tls"`
+	HostID            string `json:"host_id"`
+	HostURL           string `json:"host_url"`
+	EndpointPath      string `json:"endpoint_path"`
+	RequireTLS        bool   `json:"require_tls"`
+	RequireClientCert bool   `json:"require_client_cert"`
 }
 
 type EGM struct {

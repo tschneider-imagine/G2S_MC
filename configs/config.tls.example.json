@@ -1,6 +1,6 @@
 {
   "controller_id": "G2S-MC-LAB-001",
-  "site_name": "Lab",
+  "site_name": "Lab TLS",
   "hardware_io": {
     "security_line_gpio_pin": 17,
     "voltage_drop_threshold_ms": 250,
@@ -17,8 +17,8 @@
     "g2s_client_cert_path": "./certs/client.crt",
     "g2s_client_key_path": "./certs/client.key",
     "g2s_ca_cert_path": "./certs/ca.crt",
-    "web_server_cert_path": "",
-    "web_server_key_path": ""
+    "web_server_cert_path": "./certs/host.crt",
+    "web_server_key_path": "./certs/host.key"
   },
   "alerts": {
     "grey_threshold_count_to_buzz": 3,
@@ -30,7 +30,7 @@
     "ui_session_timeout_minutes": 30
   },
   "database": {
-    "path": "./data/controller.db"
+    "path": "./data/controller-tls.db"
   },
   "web_ui": {
     "bind_address": "127.0.0.1:8444",
@@ -39,10 +39,10 @@
   },
   "g2s": {
     "host_id": "HOST-001",
-    "host_url": "http://127.0.0.1:8444/g2s",
+    "host_url": "https://localhost:8444/g2s",
     "endpoint_path": "/g2s",
-    "require_tls": false,
-    "require_client_cert": false
+    "require_tls": true,
+    "require_client_cert": true
   },
   "egm_roster": [
     {

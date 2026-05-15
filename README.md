@@ -11,6 +11,8 @@ The repo now contains the first Go MVP scaffold:
 - in-memory engine event loop
 - G2S host listener for fake `commsOnLine` and `keepAlive` traffic
 - fake EGM command for exercising the host listener
+- development CA/server/client certificate generator
+- HTTPS and mutual TLS smoke-test path for fake EGM traffic
 - SQLite-backed audit store for incidents, EGM status snapshots, compliance logs, and state history
 - Raspberry Pi/systemd packaging starter
 
@@ -27,6 +29,19 @@ In a second terminal, simulate an EGM starting a G2S session:
 
 ```powershell
 go run ./cmd/g2s-fake-egm -host-url http://127.0.0.1:8444/g2s -egm-id EGM-01
+```
+
+For the TLS-shaped local flow:
+
+```powershell
+go run ./cmd/g2s-dev-certs -out .\certs
+go run ./cmd/g2s-mute -config .\configs\config.tls.example.json
+```
+
+In a second terminal:
+
+```powershell
+go run ./cmd/g2s-fake-egm -host-url https://localhost:8444/g2s -egm-id EGM-01 -ca .\certs\ca.crt -cert .\certs\client.crt -key .\certs\client.key
 ```
 
 Once running, the development listener exposes:
@@ -52,9 +67,9 @@ Current project documentation lives in:
 
 Recommended first implementation target:
 
-1. Add certificate inventory loading and expiry reporting.
-2. Add dev certificate generation and mTLS smoke tests.
-3. Add Raspberry Pi GPIO adapters once the pinout is confirmed.
+1. Add Raspberry Pi GPIO adapters once the pinout is confirmed.
+2. Add compatibility tracker seed data from the manufacturer CSV.
+3. Continue real-cabinet readiness around host registration, payload mapping, and certificate source.
 
 ## Verification
 

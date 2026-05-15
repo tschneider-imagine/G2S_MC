@@ -34,6 +34,28 @@ Useful endpoints:
 - `GET http://127.0.0.1:8444/api/certificates`
 - `POST http://127.0.0.1:8444/g2s`
 
+## Local mutual TLS flow
+
+Generate a throwaway development CA, host certificate, and fake EGM client certificate:
+
+```powershell
+go run ./cmd/g2s-dev-certs -out .\certs
+```
+
+Start the controller with HTTPS and client-certificate verification enabled:
+
+```powershell
+go run ./cmd/g2s-mute -config .\configs\config.tls.example.json
+```
+
+In a second terminal, connect the fake EGM with the generated CA and client certificate:
+
+```powershell
+go run ./cmd/g2s-fake-egm -host-url https://localhost:8444/g2s -egm-id EGM-01 -ca .\certs\ca.crt -cert .\certs\client.crt -key .\certs\client.key -keepalive-count 3
+```
+
+The generated certificate files live under `./certs`, which is ignored by Git. Regenerate them whenever the lab host URL changes, because the DNS name or IP used on the wire must match the host certificate SAN.
+
 ## Fake comms-on-line request
 
 ```xml

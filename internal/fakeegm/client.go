@@ -3,9 +3,12 @@ package fakeegm
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -29,6 +32,45 @@ func New(hostURL string, egmID string) *Client {
 			Timeout: 5 * time.Second,
 		},
 	}
+}
+
+func NewWithCAFile(hostURL string, egmID string, caPath string) (*Client, error) {
+	return NewWithTLSFiles(hostURL, egmID, caPath, "", "")
+}
+
+func NewWithTLSFiles(hostURL string, egmID string, caPath string, certPath string, keyPath string) (*Client, error) {
+	client := New(hostURL, egmID)
+	if caPath == "" && certPath == "" && keyPath == "" {
+		return client, nil
+	}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+	if caPath != "" {
+		raw, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, err
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(raw) {
+			return nil, fmt.Errorf("no CA certificate found in %s", caPath)
+		}
+		tlsConfig.RootCAs = pool
+	}
+	if certPath != "" || keyPath != "" {
+		if certPath == "" || keyPath == "" {
+			return nil, fmt.Errorf("both client certificate and key are required when using mutual TLS")
+		}
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+	client.HTTPClient.Transport = &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	return client, nil
 }
 
 func (c *Client) CommsOnLine(ctx context.Context) (Response, error) {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -85,10 +87,24 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	if cfg.G2S.RequireTLS {
+		tlsConfig, err := tlsConfigFromConfig(cfg)
+		if err != nil {
+			log.Fatalf("configure TLS: %v", err)
+		}
+		server.TLSConfig = tlsConfig
+	}
 
 	go func() {
-		log.Printf("listening on http://%s", cfg.WebUI.BindAddress)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.G2S.RequireTLS {
+			log.Printf("listening on https://%s", cfg.WebUI.BindAddress)
+			err = server.ListenAndServeTLS(cfg.Crypto.WebServerCertPath, cfg.Crypto.WebServerKeyPath)
+		} else {
+			log.Printf("listening on http://%s", cfg.WebUI.BindAddress)
+			err = server.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http server: %v", err)
 		}
 	}()
@@ -101,6 +117,27 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown http server: %v", err)
 	}
+}
+
+func tlsConfigFromConfig(cfg config.Config) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+	if !cfg.G2S.RequireClientCert {
+		return tlsConfig, nil
+	}
+
+	raw, err := os.ReadFile(cfg.Crypto.G2SCAPath)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(raw) {
+		return nil, fmt.Errorf("no CA certificate found in %s", cfg.Crypto.G2SCAPath)
+	}
+	tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	tlsConfig.ClientCAs = pool
+	return tlsConfig, nil
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
