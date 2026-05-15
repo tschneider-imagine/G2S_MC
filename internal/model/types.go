@@ -44,3 +44,31 @@ type Incident struct {
 	ResolvedAt    *time.Time      `json:"resolved_at,omitempty"`
 	FinalState    ControllerState `json:"final_state"`
 }
+
+type EGMStatusSnapshot struct {
+	EGMID     string    `json:"egm_id"`
+	Status    EGMHealth `json:"status"`
+	EventType string    `json:"event_type"`
+	Detail    string    `json:"detail,omitempty"`
+	LastError string    `json:"last_error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type EGMComplianceLog struct {
+	IncidentID      int64     `json:"incident_id"`
+	EGMID           string    `json:"egm_id"`
+	IPAddress       string    `json:"ip_address"`
+	ActionSent      string    `json:"action_sent"`
+	StatusResult    string    `json:"status_result"`
+	HTTPStatusCode  int       `json:"http_status_code,omitempty"`
+	LatencyMS       int       `json:"latency_ms,omitempty"`
+	ResponseExcerpt string    `json:"response_excerpt,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type StateChange struct {
+	OldState  ControllerState `json:"old_state"`
+	NewState  ControllerState `json:"new_state"`
+	Reason    string          `json:"reason"`
+	CreatedAt time.Time       `json:"created_at"`
+}

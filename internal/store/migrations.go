@@ -25,6 +25,16 @@ CREATE TABLE IF NOT EXISTS egm_compliance_logs (
     FOREIGN KEY(incident_id) REFERENCES incident_records(incident_id)
 );
 
+CREATE TABLE IF NOT EXISTS egm_status_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    egm_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    detail TEXT,
+    last_error TEXT
+);
+
 CREATE TABLE IF NOT EXISTS controller_state_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

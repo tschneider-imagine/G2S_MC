@@ -59,7 +59,7 @@ These are needed before efficient local implementation:
 - OpenSSL or equivalent TLS/certificate inspection tooling.
 - Decision on whether we build on Windows first, WSL, a Raspberry Pi, or a container/dev VM.
 - Initial Go package layout approval from `docs/G2S_Complete_Executable_Project_Plan.md`.
-- SQLite driver choice for Go. Fast recommendation: use a pure-Go driver first to avoid CGO friction on Windows and Raspberry Pi.
+- SQLite driver choice for Go is now `modernc.org/sqlite`, a pure-Go driver chosen to avoid CGO friction on Windows and Raspberry Pi.
 - XML/SOAP strategy for the fake harness. Fast recommendation: start with `encoding/xml` fixtures and interface boundaries, then replace with generated/schema-aware bindings once the official WSDL/XSD package is available.
 - Exact XML command spelling/case from WSDL/XSD. Public docs use both `commsOnLine` and `commsOnline` styling, so generated code and fixtures should follow the official schema once obtained.
 

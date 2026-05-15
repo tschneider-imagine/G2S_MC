@@ -2,7 +2,7 @@
 
 ## Required tools
 
-- Go 1.22 or newer
+- Go 1.25 or newer
 - Git
 - OpenSSL or equivalent TLS inspection tooling
 

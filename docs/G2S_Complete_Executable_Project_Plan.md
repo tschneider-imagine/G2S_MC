@@ -102,7 +102,7 @@ Out of scope for MVP:
 | PSU input wiring | Warning state and buzzer behavior | Stub adapter until pins are available | Two confirmed input pins and polarity rules |
 | UPS or battery interface | Battery critical emergency | Leave adapter stub in MVP | NUT, USB, serial, I2C, GPIO, or vendor-specific integration |
 | Buzzer output hardware | Audible alert | Log alert pattern in software until hardware is ready | Confirm pin, voltage/current driver, acknowledgement behavior |
-| SQLite driver choice | Build and deployment | Use a pure-Go SQLite driver first to reduce Pi build friction | Pin driver after benchmark and cross-compile check |
+| SQLite driver choice | Build and deployment | Use the pinned pure-Go `modernc.org/sqlite` driver | Revisit only if field performance requires another driver |
 | Web authentication policy | Operator dashboard release | Start with local login and config-controlled auth | Final decision on password, client cert, or both |
 | Raspberry Pi storage and power | Field reliability | Use SSD and supervised shutdown for test unit | Industrial storage, protected power, UPS behavior, and recovery test |
 
@@ -554,15 +554,12 @@ Start these in order:
 1. Create Go module and package layout.
 2. Add `configs/config.example.json` matching the agreed schema.
 3. Add config loader and validation tests.
-4. Add SQLite migrations and store tests.
-5. Add engine event loop and state transition tests.
-6. Add simulated trigger adapter.
-7. Add G2S host listener and fake EGM server with session startup, descriptor, option, and keepalive fixtures.
-8. Add fan-out tests.
-9. Add mTLS transport with dev certs and SAN validation notes.
-10. Add dashboard read model and HTMX polling.
-11. Add Raspberry Pi GPIO adapter once pinout is confirmed.
-12. Convert `other info/post_2018_gaming_mfg_list.csv` into the first compatibility tracker seed if a tracker file is needed.
+4. Add dashboard views on top of the existing status API.
+5. Add read APIs for persisted incidents and EGM history.
+6. Add certificate inventory loading and expiry reporting.
+7. Add mTLS transport with dev certs and SAN validation notes.
+8. Add Raspberry Pi GPIO adapter once pinout is confirmed.
+9. Convert `other info/post_2018_gaming_mfg_list.csv` into the first compatibility tracker seed if a tracker file is needed.
 
 ## 13. Decisions Needed Soon
 

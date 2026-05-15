@@ -2,7 +2,7 @@
 
 ## Local prerequisites
 
-- Go 1.22 or newer
+- Go 1.25 or newer
 - OpenSSL or equivalent certificate inspection tooling
 - Git
 
@@ -41,4 +41,6 @@ The fake EGM command sends this request and then follows with one or more `keepA
 
 ## Current dependency stance
 
-The first scaffold intentionally uses only the Go standard library. SQLite migrations are present, but the actual database driver is not pinned yet. Add the SQLite driver after Go is installed and we can run module and build verification locally.
+The service uses `modernc.org/sqlite` for a pure-Go SQLite driver. This keeps the Windows and Raspberry Pi development path simpler than a CGO-backed driver.
+
+The development config writes the audit database to `./data/controller.db`, which is intentionally ignored by Git.

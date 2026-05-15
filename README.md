@@ -4,17 +4,17 @@ This repository is the working codebase for the Raspberry Pi-based G2S muting co
 
 ## Current Status
 
-The repo now contains the first dependency-light Go scaffold for the MVP:
+The repo now contains the first Go MVP scaffold:
 
 - config loading and validation
 - controller runtime state model
 - in-memory engine event loop
 - G2S host listener for fake `commsOnLine` and `keepAlive` traffic
 - fake EGM command for exercising the host listener
-- SQLite migration files for the future ledger
+- SQLite-backed audit store for incidents, EGM status snapshots, compliance logs, and state history
 - Raspberry Pi/systemd packaging starter
 
-The local machine used to create this scaffold did not have `go` in `PATH`, so compile/test verification still needs to run after Go is installed.
+The scaffold verifies with `.\scripts\check.ps1`.
 
 ## Quick Start
 
@@ -45,9 +45,9 @@ Current project documentation lives in:
 
 Recommended first implementation target:
 
-1. Add SQLite-backed incident and EGM result persistence.
-2. Connect engine events to the persistence layer.
-3. Add dashboard views on top of the existing status API.
+1. Add dashboard views on top of the existing status API.
+2. Add read APIs for persisted incidents and EGM history.
+3. Add certificate inventory loading and expiry reporting.
 
 ## Verification
 

@@ -15,6 +15,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
+	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
 func main() {
@@ -36,7 +37,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
+	auditStore, err := store.Open(ctx, cfg.Database.Path)
+	if err != nil {
+		log.Fatalf("open audit store: %v", err)
+	}
+	defer auditStore.Close()
+
+	eng := engine.NewWithAuditSink(cfg.ControllerID, cfg.EGMRoster, auditStore)
 	eng.Start(ctx)
 	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now(), Detail: "startup complete"})
 
