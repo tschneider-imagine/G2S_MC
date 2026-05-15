@@ -1,0 +1,19 @@
+[Unit]
+Description=G2S Muting Controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=g2s-mute
+Group=g2s-mute
+ExecStart=/usr/local/bin/g2s-mute -config /etc/g2s-mute/config.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/g2s-mute /var/log/g2s-mute
+
+[Install]
+WantedBy=multi-user.target

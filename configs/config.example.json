@@ -1,0 +1,57 @@
+{
+  "controller_id": "G2S-MC-LAB-001",
+  "site_name": "Lab",
+  "hardware_io": {
+    "security_line_gpio_pin": 17,
+    "voltage_drop_threshold_ms": 250,
+    "psu_1_gpio_pin": 22,
+    "psu_2_gpio_pin": 23,
+    "buzzer_gpio_pin": 18,
+    "active_low_inputs": true
+  },
+  "power_management": {
+    "critical_battery_threshold_percent": 5,
+    "buzzer_on_single_psu_failure": true
+  },
+  "crypto": {
+    "g2s_client_cert_path": "./certs/client.crt",
+    "g2s_client_key_path": "./certs/client.key",
+    "g2s_ca_cert_path": "./certs/ca.crt",
+    "web_server_cert_path": "",
+    "web_server_key_path": ""
+  },
+  "alerts": {
+    "grey_threshold_count_to_buzz": 3,
+    "grey_threshold_percent_to_buzz": 15.0
+  },
+  "timeouts": {
+    "g2s_request_timeout_ms": 3000,
+    "egm_heartbeat_interval_ms": 5000,
+    "ui_session_timeout_minutes": 30
+  },
+  "database": {
+    "path": "./data/controller.db"
+  },
+  "web_ui": {
+    "bind_address": "127.0.0.1:8444",
+    "require_login": false,
+    "require_client_cert_for_admin": false
+  },
+  "g2s": {
+    "host_id": "HOST-001",
+    "host_url": "http://127.0.0.1:8444/g2s",
+    "endpoint_path": "/g2s",
+    "require_tls": false
+  },
+  "egm_roster": [
+    {
+      "egm_id": "EGM-01",
+      "ip_address": "127.0.0.1",
+      "port": 9443,
+      "vendor": "fake",
+      "cabinet_family": "lab",
+      "game_title": "Fake EGM",
+      "software_version": "dev"
+    }
+  ]
+}
