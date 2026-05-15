@@ -554,8 +554,8 @@ Start these in order:
 1. Create Go module and package layout.
 2. Add `configs/config.example.json` matching the agreed schema.
 3. Add config loader and validation tests.
-4. Add Raspberry Pi GPIO adapter once pinout is confirmed.
-5. Convert `other info/post_2018_gaming_mfg_list.csv` into the first compatibility tracker seed if a tracker file is needed.
+4. Run `sudo bash ./scripts/pi-install.sh` and `sudo bash ./scripts/pi-smoke.sh` on the target Pi.
+5. Add Raspberry Pi GPIO adapter once pinout is confirmed.
 6. Keep real-cabinet readiness moving: host registration values, payload mapping, endpoint path, and production certificate source.
 
 ## 13. Decisions Needed Soon

@@ -63,12 +63,13 @@ Current project documentation lives in:
 - `docs/G2S_First_Cabinet_Lab_Runbook.md`
 - `docs/G2S_Pre_NextStep_Readiness_Check.md`
 - `docs/development.md`
+- `docs/raspberry-pi.md`
 - `docs/setup-windows.md`
 
 Recommended first implementation target:
 
-1. Add Raspberry Pi GPIO adapters once the pinout is confirmed.
-2. Add compatibility tracker seed data from the manufacturer CSV.
+1. Run the Pi installer and smoke test on the target Pi.
+2. Add Raspberry Pi GPIO adapters once the pinout is confirmed.
 3. Continue real-cabinet readiness around host registration, payload mapping, and certificate source.
 
 ## Verification
