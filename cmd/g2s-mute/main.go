@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
+	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -59,6 +61,10 @@ func main() {
 	g2sServer.RegisterRoutes(mux, cfg.G2S.EndpointPath)
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/api/status", statusHandler(eng))
+	mux.HandleFunc("/api/incidents", incidentsHandler(auditStore))
+	mux.HandleFunc("/api/egms/history", egmHistoryHandler(auditStore))
+	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
+	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 
 	server := &http.Server{
 		Addr:              cfg.WebUI.BindAddress,
@@ -95,4 +101,74 @@ func statusHandler(eng *engine.Engine) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}
+}
+
+func incidentsHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		incidents, err := store.ListIncidents(r.Context(), queryLimit(r, 50))
+		writeJSON(w, incidents, err)
+	}
+}
+
+func egmHistoryHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		history, err := store.ListEGMStatus(r.Context(), model.HistoryLimits{
+			Limit: queryLimit(r, 50),
+			EGMID: r.URL.Query().Get("egm_id"),
+		})
+		writeJSON(w, history, err)
+	}
+}
+
+func complianceHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		logs, err := store.ListEGMComplianceLogs(r.Context(), queryLimit(r, 50))
+		writeJSON(w, logs, err)
+	}
+}
+
+func stateHistoryHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		changes, err := store.ListStateChanges(r.Context(), queryLimit(r, 50))
+		writeJSON(w, changes, err)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, value any, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func queryLimit(r *http.Request, fallback int) int {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return fallback
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return limit
 }

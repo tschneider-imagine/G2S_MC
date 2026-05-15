@@ -25,6 +25,10 @@ Useful endpoints:
 
 - `GET http://127.0.0.1:8444/healthz`
 - `GET http://127.0.0.1:8444/api/status`
+- `GET http://127.0.0.1:8444/api/incidents`
+- `GET http://127.0.0.1:8444/api/egms/history`
+- `GET http://127.0.0.1:8444/api/compliance`
+- `GET http://127.0.0.1:8444/api/state-history`
 - `POST http://127.0.0.1:8444/g2s`
 
 ## Fake comms-on-line request

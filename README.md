@@ -33,6 +33,10 @@ Once running, the development listener exposes:
 
 - `GET /healthz`
 - `GET /api/status`
+- `GET /api/incidents`
+- `GET /api/egms/history`
+- `GET /api/compliance`
+- `GET /api/state-history`
 - `POST /g2s`
 
 Current project documentation lives in:
@@ -45,9 +49,9 @@ Current project documentation lives in:
 
 Recommended first implementation target:
 
-1. Add dashboard views on top of the existing status API.
-2. Add read APIs for persisted incidents and EGM history.
-3. Add certificate inventory loading and expiry reporting.
+1. Add dashboard views on top of the live and historical APIs.
+2. Add certificate inventory loading and expiry reporting.
+3. Add dev certificate generation and mTLS smoke tests.
 
 ## Verification
 

@@ -72,3 +72,8 @@ type StateChange struct {
 	Reason    string          `json:"reason"`
 	CreatedAt time.Time       `json:"created_at"`
 }
+
+type HistoryLimits struct {
+	Limit int
+	EGMID string
+}
