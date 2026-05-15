@@ -13,6 +13,12 @@ go test ./...
 go run ./cmd/g2s-mute -config .\configs\config.example.json -simulate-trigger
 ```
 
+In a second terminal:
+
+```powershell
+go run ./cmd/g2s-fake-egm -host-url http://127.0.0.1:8444/g2s -egm-id EGM-01 -keepalive-count 3
+```
+
 The default development listener binds to `127.0.0.1:8444`.
 
 Useful endpoints:
@@ -30,6 +36,8 @@ Useful endpoints:
 ```
 
 The listener returns a minimal `commsOnLineAck` fixture and updates the in-memory EGM status.
+
+The fake EGM command sends this request and then follows with one or more `keepAlive` messages.
 
 ## Current dependency stance
 

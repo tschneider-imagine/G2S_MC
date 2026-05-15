@@ -10,6 +10,7 @@ The repo now contains the first dependency-light Go scaffold for the MVP:
 - controller runtime state model
 - in-memory engine event loop
 - G2S host listener for fake `commsOnLine` and `keepAlive` traffic
+- fake EGM command for exercising the host listener
 - SQLite migration files for the future ledger
 - Raspberry Pi/systemd packaging starter
 
@@ -20,6 +21,12 @@ The local machine used to create this scaffold did not have `go` in `PATH`, so c
 ```powershell
 go test ./...
 go run ./cmd/g2s-mute -config .\configs\config.example.json
+```
+
+In a second terminal, simulate an EGM starting a G2S session:
+
+```powershell
+go run ./cmd/g2s-fake-egm -host-url http://127.0.0.1:8444/g2s -egm-id EGM-01
 ```
 
 Once running, the development listener exposes:
@@ -38,9 +45,9 @@ Current project documentation lives in:
 
 Recommended first implementation target:
 
-1. Create the Go module and package layout.
-2. Build the host listener plus fake EGM `commsOnLine` flow.
-3. Add config loading, SQLite, and the controller engine.
+1. Add SQLite-backed incident and EGM result persistence.
+2. Connect engine events to the persistence layer.
+3. Add dashboard views on top of the existing status API.
 
 ## Verification
 
