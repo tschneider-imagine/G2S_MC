@@ -324,8 +324,16 @@ func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certifica
 		status.Overall = "DEGRADED"
 		status.Issues = append(status.Issues, "no EGMs configured")
 	}
+	for _, certificate := range certificates {
+		if certificateBlocksRuntime(cfg, certificate) {
+			status.Overall = "DEGRADED"
+			status.Issues = append(status.Issues, certificate.Role+" certificate is "+certificateStatusKey(certificate.Status))
+		}
+	}
 	if !cfg.G2S.RequireTLS {
-		status.Overall = "READY_LAB"
+		if status.Overall == "READY" {
+			status.Overall = "READY_LAB"
+		}
 		status.Warnings = append(status.Warnings, "G2S TLS is disabled for local lab mode")
 	}
 	if !cfg.G2S.RequireClientCert {
@@ -333,12 +341,6 @@ func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certifica
 	}
 	if !cfg.WebUI.RequireLogin {
 		status.Warnings = append(status.Warnings, "web UI login is disabled")
-	}
-	for _, certificate := range certificates {
-		if certificateBlocksRuntime(cfg, certificate) {
-			status.Overall = "DEGRADED"
-			status.Issues = append(status.Issues, certificate.Role+" certificate is "+certificateStatusKey(certificate.Status))
-		}
 	}
 	return status
 }

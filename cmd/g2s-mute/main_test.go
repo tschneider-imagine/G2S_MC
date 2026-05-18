@@ -167,6 +167,95 @@ func TestReadinessHandlerPolicy(t *testing.T) {
 	}
 }
 
+func TestBuildReadinessStatusPrecedence(t *testing.T) {
+	baseCfg := config.Config{
+		G2S: config.G2S{
+			RequireTLS:        false,
+			RequireClientCert: false,
+		},
+		WebUI: config.WebUI{
+			RequireLogin: true,
+		},
+	}
+	healthySnapshot := engine.Snapshot{
+		State: model.StateHealthy,
+		EGMs:  []model.EGM{{ID: "EGM-01"}},
+	}
+
+	tests := []struct {
+		name        string
+		cfg         config.Config
+		snapshot    engine.Snapshot
+		certificates []model.CertificateInventory
+		wantOverall string
+		wantIssue   string
+	}{
+		{
+			name:        "READY_LAB when TLS is disabled without degraded conditions",
+			cfg:         baseCfg,
+			snapshot:    healthySnapshot,
+			wantOverall: "READY_LAB",
+		},
+		{
+			name: "audit error remains DEGRADED even when TLS is disabled",
+			cfg:  baseCfg,
+			snapshot: engine.Snapshot{
+				State:      model.StateHealthy,
+				AuditError: "audit store unavailable",
+				EGMs:       []model.EGM{{ID: "EGM-01"}},
+			},
+			wantOverall: "DEGRADED",
+			wantIssue:   "audit store unavailable",
+		},
+		{
+			name: "no EGMs remains DEGRADED even when TLS is disabled",
+			cfg:  baseCfg,
+			snapshot: engine.Snapshot{
+				State: model.StateHealthy,
+				EGMs:  []model.EGM{},
+			},
+			wantOverall: "DEGRADED",
+			wantIssue:   "no EGMs configured",
+		},
+		{
+			name: "blocking certificate remains DEGRADED even when TLS is disabled",
+			cfg: func() config.Config {
+				cfg := baseCfg
+				cfg.G2S.RequireClientCert = true
+				return cfg
+			}(),
+			snapshot: healthySnapshot,
+			certificates: []model.CertificateInventory{
+				{
+					Role:          "g2s_client_cert",
+					Status:        "MISSING",
+					LastCheckedAt: time.Now(),
+				},
+			},
+			wantOverall: "DEGRADED",
+			wantIssue:   "g2s_client_cert certificate is MISSING",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			status := buildReadinessStatus(tc.snapshot, tc.cfg, tc.certificates)
+			if status.Overall != tc.wantOverall {
+				t.Fatalf("overall = %q, want %q", status.Overall, tc.wantOverall)
+			}
+			if tc.wantIssue == "" {
+				return
+			}
+			for _, issue := range status.Issues {
+				if issue == tc.wantIssue {
+					return
+				}
+			}
+			t.Fatalf("issues = %v, want %q", status.Issues, tc.wantIssue)
+		})
+	}
+}
+
 func waitForLastEvent(t *testing.T, eng *engine.Engine, event string) {
 	t.Helper()
 	deadline := time.Now().Add(500 * time.Millisecond)
