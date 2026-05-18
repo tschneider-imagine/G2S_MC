@@ -69,9 +69,9 @@ install -d -m 0755 "${BIN_DIR}"
 install -d -m 0750 -o "${APP_USER}" -g "${APP_GROUP}" "${CONFIG_DIR}" "${CONFIG_DIR}/certs" "${DATA_DIR}" "${LOG_DIR}"
 
 go test ./...
-go build -trimpath -o "${BUILD_DIR}/g2s-mute" ./cmd/g2s-mute
-go build -trimpath -o "${BUILD_DIR}/g2s-fake-egm" ./cmd/g2s-fake-egm
-go build -trimpath -o "${BUILD_DIR}/g2s-dev-certs" ./cmd/g2s-dev-certs
+go build -buildvcs=false -trimpath -o "${BUILD_DIR}/g2s-mute" ./cmd/g2s-mute
+go build -buildvcs=false -trimpath -o "${BUILD_DIR}/g2s-fake-egm" ./cmd/g2s-fake-egm
+go build -buildvcs=false -trimpath -o "${BUILD_DIR}/g2s-dev-certs" ./cmd/g2s-dev-certs
 
 install -m 0755 "${BUILD_DIR}/g2s-mute" "${BIN_DIR}/g2s-mute"
 install -m 0755 "${BUILD_DIR}/g2s-fake-egm" "${BIN_DIR}/g2s-fake-egm"

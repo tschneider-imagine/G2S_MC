@@ -4,6 +4,7 @@ set -euo pipefail
 CONFIG_PATH="${CONFIG_PATH:-/etc/g2s-mute/config.json}"
 HOST_URL="${HOST_URL:-http://127.0.0.1:8444/g2s}"
 EGM_ID="${EGM_ID:-EGM-01}"
+APP_USER="${APP_USER:-g2s-mute}"
 
 if ! command -v g2s-mute >/dev/null 2>&1; then
   echo "g2s-mute binary is not installed" >&2
@@ -28,7 +29,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-g2s-mute -config "${CONFIG_PATH}" -simulate-trigger &
+if [[ "${EUID}" -eq 0 ]] && id -u "${APP_USER}" >/dev/null 2>&1; then
+  runuser -u "${APP_USER}" -- g2s-mute -config "${CONFIG_PATH}" -simulate-trigger &
+else
+  g2s-mute -config "${CONFIG_PATH}" -simulate-trigger &
+fi
 SERVER_PID="$!"
 
 for _ in $(seq 1 30); do
