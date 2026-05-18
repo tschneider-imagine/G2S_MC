@@ -47,8 +47,8 @@ Pi smoke test passed
 
 ```bash
 sudo systemctl restart g2s-mute.service
-sudo systemctl status g2s-mute.service
-journalctl -u g2s-mute.service -f
+systemctl status g2s-mute.service --no-pager --full
+journalctl -u g2s-mute.service -n 80 --no-pager
 ```
 
 The dashboard should be available at:
@@ -56,6 +56,34 @@ The dashboard should be available at:
 ```text
 http://<pi-ip>:8444/dashboard
 ```
+
+## Appliance Verification
+
+After installation, restart the service and verify the local operator surface:
+
+```bash
+sudo bash ./scripts/pi-install.sh
+sudo systemctl restart g2s-mute.service
+systemctl status g2s-mute.service --no-pager --full
+curl -fsS http://127.0.0.1:8444/healthz
+curl -fsS http://127.0.0.1:8444/api/status
+curl -fsS http://127.0.0.1:8444/api/certificates
+journalctl -u g2s-mute.service -n 80 --no-pager
+```
+
+Expected key lines:
+
+```text
+Active: active (running)
+ok
+"controller_id":"G2S-MC-PI-001"
+"overall":"READY_LAB"
+"input_mode":"SIMULATED_SOFTWARE_ONLY"
+"certificate_summary"
+service ready protocol=http bind_address=0.0.0.0:8444 health=/healthz status=/api/status dashboard=/dashboard
+```
+
+In the default Pi lab config, `/api/certificates` reports the local certificate paths as `MISSING` or `NOT_CONFIGURED` until TLS lab mode is configured. That is expected while `g2s.require_tls` and `g2s.require_client_cert` are false.
 
 ## TLS Lab Mode
 

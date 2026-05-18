@@ -25,6 +25,12 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "G2S Muting Controller") {
 		t.Fatalf("expected dashboard title")
 	}
+	if !strings.Contains(rr.Body.String(), "Appliance Readiness") {
+		t.Fatalf("expected appliance readiness panel")
+	}
+	if !strings.Contains(rr.Body.String(), "Certificate Summary") {
+		t.Fatalf("expected certificate summary panel")
+	}
 }
 
 func TestDashboardAssets(t *testing.T) {

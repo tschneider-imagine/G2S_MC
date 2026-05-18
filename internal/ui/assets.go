@@ -31,12 +31,43 @@ const dashboardHTML = `<!doctype html>
         <strong id="controller-state" class="state-pill">-</strong>
       </div>
       <div>
+        <p class="label">Readiness</p>
+        <strong id="readiness-state" class="state-pill">-</strong>
+      </div>
+      <div>
+        <p class="label">Inputs</p>
+        <strong id="input-mode">-</strong>
+      </div>
+      <div>
         <p class="label">Last event</p>
         <strong id="last-event">-</strong>
       </div>
       <div>
         <p class="label">Active incident</p>
         <strong id="active-incident">None</strong>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Appliance Readiness</h2>
+          <span id="uptime">-</span>
+        </div>
+        <dl class="kv-list">
+          <div><dt>Bind</dt><dd id="bind-address">-</dd></div>
+          <div><dt>Database</dt><dd id="database-path">-</dd></div>
+          <div><dt>G2S endpoint</dt><dd id="g2s-endpoint">-</dd></div>
+          <div><dt>TLS</dt><dd id="tls-mode">-</dd></div>
+          <div><dt>Warnings</dt><dd id="readiness-warnings">-</dd></div>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Certificate Summary</h2>
+        </div>
+        <div id="certificate-summary" class="summary-grid"></div>
       </div>
     </section>
 
@@ -183,7 +214,7 @@ button {
 
 .status-band {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 1px;
   border: 1px solid var(--line);
   background: var(--line);
@@ -218,6 +249,8 @@ button {
 }
 
 .state-healthy,
+.state-ready,
+.state-ready_lab,
 .status-green { background: var(--green); }
 
 .state-warning,
@@ -302,6 +335,58 @@ th {
   font-size: 13px;
 }
 
+.kv-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  background: #e5ece7;
+}
+
+.kv-list div {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 14px;
+  padding: 13px 18px;
+  background: var(--panel);
+}
+
+.kv-list dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.kv-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #e5ece7;
+}
+
+.summary-cell {
+  padding: 16px 18px;
+  background: var(--panel);
+}
+
+.summary-cell strong {
+  display: block;
+  font-size: 24px;
+}
+
+.summary-cell span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .empty {
   padding: 18px;
   color: var(--muted);
@@ -367,9 +452,18 @@ function statusPill(value) {
 function renderStatus(status) {
   $("controller-id").textContent = status.controller_id || "-";
   setStatePill($("controller-state"), status.state);
+  setStatePill($("readiness-state"), status.readiness?.overall);
+  $("input-mode").textContent = status.runtime?.input_mode || "-";
   $("last-event").textContent = status.last_event || "-";
   $("active-incident").textContent = status.incident ? "#" + status.incident.id + " " + status.incident.trigger_type : "None";
   $("egm-count").textContent = (status.egms?.length || 0) + " EGMs";
+  $("uptime").textContent = status.runtime ? Math.max(0, status.runtime.uptime_seconds || 0) + "s uptime" : "-";
+  $("bind-address").textContent = status.runtime?.bind_address || "-";
+  $("database-path").textContent = status.runtime?.database_path || "-";
+  $("g2s-endpoint").textContent = status.runtime ? status.runtime.g2s_host_url + " " + status.runtime.g2s_endpoint_path : "-";
+  $("tls-mode").textContent = status.runtime?.tls_required ? "TLS required" : "HTTP lab mode";
+  $("readiness-warnings").textContent = (status.readiness?.warnings || []).join("; ") || "None";
+  renderCertificateSummary(status.readiness?.certificate_summary || {});
 
   const rows = (status.egms || []).map((egm) =>
     "<tr>" +
@@ -381,6 +475,14 @@ function renderStatus(status) {
     "</tr>"
   );
   $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"5\">No EGMs configured</td></tr>";
+}
+
+function renderCertificateSummary(summary) {
+  const keys = ["OK", "EXPIRING_SOON", "MISSING", "NOT_CONFIGURED", "INVALID", "UNKNOWN"];
+  $("certificate-summary").innerHTML = keys
+    .filter((key) => summary[key])
+    .map((key) => "<div class=\"summary-cell\"><strong>" + summary[key] + "</strong><span>" + key + "</span></div>")
+    .join("") || "<div class=\"empty\">No certificate inventory yet</div>";
 }
 
 function renderItems(id, items, emptyText, mapItem) {
