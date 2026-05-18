@@ -66,6 +66,7 @@ sudo bash ./scripts/pi-install.sh
 sudo systemctl restart g2s-mute.service
 systemctl status g2s-mute.service --no-pager --full
 curl -fsS http://127.0.0.1:8444/healthz
+curl -fsS -i http://127.0.0.1:8444/readyz
 curl -fsS http://127.0.0.1:8444/api/status
 curl -fsS http://127.0.0.1:8444/api/certificates
 journalctl -u g2s-mute.service -n 80 --no-pager
@@ -76,14 +77,21 @@ Expected key lines:
 ```text
 Active: active (running)
 ok
+HTTP/1.1 200 OK
+"overall":"READY_LAB"
 "controller_id":"G2S-MC-PI-001"
 "overall":"READY_LAB"
 "input_mode":"SIMULATED_SOFTWARE_ONLY"
 "certificate_summary"
-service ready protocol=http bind_address=0.0.0.0:8444 health=/healthz status=/api/status dashboard=/dashboard
+service ready protocol=http bind_address=0.0.0.0:8444 health=/healthz ready=/readyz status=/api/status dashboard=/dashboard
 ```
 
 In the default Pi lab config, `/api/certificates` reports the local certificate paths as `MISSING` or `NOT_CONFIGURED` until TLS lab mode is configured. That is expected while `g2s.require_tls` and `g2s.require_client_cert` are false.
+
+`/readyz` readiness policy:
+
+- returns `200` when readiness is `READY` or `READY_LAB`
+- returns `503` when readiness is `DEGRADED` or readiness cannot be computed
 
 ## TLS Lab Mode
 

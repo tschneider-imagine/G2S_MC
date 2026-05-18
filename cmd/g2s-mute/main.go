@@ -99,6 +99,11 @@ func main() {
 		StartedAt:        startedAt,
 		SimulatedTrigger: *simulateTrigger,
 	}))
+	mux.HandleFunc("/readyz", readinessHandler(eng, auditStore, cfg, runtimeInfo{
+		ConfigPath:       *configPath,
+		StartedAt:        startedAt,
+		SimulatedTrigger: *simulateTrigger,
+	}))
 	mux.HandleFunc("/api/incidents", incidentsHandler(auditStore))
 	mux.HandleFunc("/api/egms/history", egmHistoryHandler(auditStore))
 	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
@@ -121,10 +126,10 @@ func main() {
 	go func() {
 		var err error
 		if cfg.G2S.RequireTLS {
-			log.Printf("service ready protocol=https bind_address=%s health=/healthz status=/api/status dashboard=/dashboard", cfg.WebUI.BindAddress)
+			log.Printf("service ready protocol=https bind_address=%s health=/healthz ready=/readyz status=/api/status dashboard=/dashboard", cfg.WebUI.BindAddress)
 			err = server.ListenAndServeTLS(cfg.Crypto.WebServerCertPath, cfg.Crypto.WebServerKeyPath)
 		} else {
-			log.Printf("service ready protocol=http bind_address=%s health=/healthz status=/api/status dashboard=/dashboard", cfg.WebUI.BindAddress)
+			log.Printf("service ready protocol=http bind_address=%s health=/healthz ready=/readyz status=/api/status dashboard=/dashboard", cfg.WebUI.BindAddress)
 			err = server.ListenAndServe()
 		}
 		if err != nil && err != http.ErrServerClosed {
@@ -180,6 +185,11 @@ type applianceStatus struct {
 	Readiness readinessStatus `json:"readiness"`
 }
 
+type readinessResponse struct {
+	Overall string   `json:"overall"`
+	Issues  []string `json:"issues"`
+}
+
 type runtimeStatus struct {
 	StartedAt               time.Time `json:"started_at"`
 	UptimeSeconds           int64     `json:"uptime_seconds"`
@@ -212,21 +222,68 @@ func statusHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.Conf
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		snapshot := eng.Snapshot()
-		certificates, err := store.ListCertificateInventory(r.Context())
+		status, err := computeApplianceStatus(r.Context(), eng, store, cfg, runtime)
 		if err != nil {
 			writeJSON(w, nil, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(applianceStatus{
-			Snapshot:  snapshot,
-			Runtime:   buildRuntimeStatus(cfg, runtime),
-			Readiness: buildReadinessStatus(snapshot, cfg, certificates),
+		if err := json.NewEncoder(w).Encode(status); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
+}
+
+func readinessHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		status, err := computeApplianceStatus(r.Context(), eng, store, cfg, runtime)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(readinessResponse{
+				Overall: "DEGRADED",
+				Issues:  []string{"readiness status unavailable"},
+			})
+			return
+		}
+		issues := append([]string{}, status.Readiness.Issues...)
+		if status.Readiness.Overall != "READY" && status.Readiness.Overall != "READY_LAB" {
+			if len(issues) == 0 {
+				issues = append(issues, "readiness state is "+status.Readiness.Overall)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(readinessResponse{
+				Overall: status.Readiness.Overall,
+				Issues:  issues,
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(readinessResponse{
+			Overall: status.Readiness.Overall,
+			Issues:  issues,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}
+}
+
+func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo) (applianceStatus, error) {
+	snapshot := eng.Snapshot()
+	certificates, err := store.ListCertificateInventory(ctx)
+	if err != nil {
+		return applianceStatus{}, err
+	}
+	return applianceStatus{
+		Snapshot:  snapshot,
+		Runtime:   buildRuntimeStatus(cfg, runtime),
+		Readiness: buildReadinessStatus(snapshot, cfg, certificates),
+	}, nil
 }
 
 func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo) runtimeStatus {

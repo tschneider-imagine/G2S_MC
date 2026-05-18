@@ -72,3 +72,109 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 		t.Fatalf("missing certificate count = %d", body.Readiness.CertificateSummary["MISSING"])
 	}
 }
+
+func TestReadinessHandlerPolicy(t *testing.T) {
+	baseCfg := config.Config{
+		ControllerID: "G2S-MC-TEST",
+		Database:     config.Database{Path: "/var/lib/g2s-mute/controller.db"},
+		WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
+		G2S: config.G2S{
+			HostURL:      "http://127.0.0.1:8444/g2s",
+			EndpointPath: "/g2s",
+		},
+		EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+	}
+
+	tests := []struct {
+		name       string
+		cfg        config.Config
+		seedEvents []engine.Event
+		wantCode   int
+		wantState  string
+	}{
+		{
+			name: "READY returns 200",
+			cfg: func() config.Config {
+				cfg := baseCfg
+				cfg.G2S.RequireTLS = true
+				return cfg
+			}(),
+			seedEvents: []engine.Event{{Type: engine.EventBootComplete, At: time.Now()}},
+			wantCode:   http.StatusOK,
+			wantState:  "READY",
+		},
+		{
+			name: "READY_LAB returns 200",
+			cfg:  baseCfg,
+			seedEvents: []engine.Event{
+				{Type: engine.EventBootComplete, At: time.Now()},
+			},
+			wantCode:  http.StatusOK,
+			wantState: "READY_LAB",
+		},
+		{
+			name: "DEGRADED returns 503",
+			cfg: func() config.Config {
+				cfg := baseCfg
+				cfg.G2S.RequireTLS = true
+				return cfg
+			}(),
+			seedEvents: []engine.Event{
+				{Type: engine.EventBootComplete, At: time.Now()},
+				{Type: engine.EventDegraded, At: time.Now().Add(time.Millisecond)},
+			},
+			wantCode:  http.StatusServiceUnavailable,
+			wantState: "DEGRADED",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			auditStore, err := store.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			t.Cleanup(func() { _ = auditStore.Close() })
+
+			eng := engine.New(tc.cfg.ControllerID, tc.cfg.EGMRoster)
+			runCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			eng.Start(runCtx)
+			for _, event := range tc.seedEvents {
+				eng.Submit(event)
+			}
+			waitForLastEvent(t, eng, string(tc.seedEvents[len(tc.seedEvents)-1].Type))
+
+			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+			rr := httptest.NewRecorder()
+			readinessHandler(eng, auditStore, tc.cfg, runtimeInfo{
+				ConfigPath: "/etc/g2s-mute/config.json",
+				StartedAt:  time.Now().Add(-2 * time.Second),
+			})(rr, req)
+
+			if rr.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d: %s", rr.Code, tc.wantCode, rr.Body.String())
+			}
+			var body readinessResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Overall != tc.wantState {
+				t.Fatalf("overall = %q, want %q", body.Overall, tc.wantState)
+			}
+		})
+	}
+}
+
+func waitForLastEvent(t *testing.T, eng *engine.Engine, event string) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if eng.Snapshot().LastEvent == event {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for last event %q (got %q)", event, eng.Snapshot().LastEvent)
+}
