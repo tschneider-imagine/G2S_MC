@@ -31,6 +31,18 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "Certificate Summary") {
 		t.Fatalf("expected certificate summary panel")
 	}
+	if !strings.Contains(rr.Body.String(), "id=\"operator-alert\"") {
+		t.Fatalf("expected operator alert strip")
+	}
+	if !strings.Contains(rr.Body.String(), "/readyz Primary") {
+		t.Fatalf("expected explicit readyz indicator")
+	}
+	if !strings.Contains(rr.Body.String(), "data-filter=\"unhealthy\"") {
+		t.Fatalf("expected unhealthy filter tab")
+	}
+	if !strings.Contains(rr.Body.String(), "data-sort-key=\"last_seen\"") {
+		t.Fatalf("expected sortable last seen header")
+	}
 }
 
 func TestDashboardAssets(t *testing.T) {
@@ -47,6 +59,21 @@ func TestDashboardAssets(t *testing.T) {
 		mux.ServeHTTP(rr, req)
 		if rr.Code != http.StatusOK {
 			t.Fatalf("%s status = %d, want %d", path, rr.Code, http.StatusOK)
+		}
+		body := rr.Body.String()
+		if path == "/static/dashboard.js" {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz"} {
+				if !strings.Contains(body, marker) {
+					t.Fatalf("%s missing marker %q", path, marker)
+				}
+			}
+		}
+		if path == "/static/dashboard.css" {
+			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item"} {
+				if !strings.Contains(body, marker) {
+					t.Fatalf("%s missing marker %q", path, marker)
+				}
+			}
 		}
 	}
 }

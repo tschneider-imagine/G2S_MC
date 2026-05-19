@@ -1,6 +1,6 @@
 package ui
 
-const dashboardHTML = `<!doctype html>
+const dashboardHTMLLegacy = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -133,7 +133,7 @@ const dashboardHTML = `<!doctype html>
 </body>
 </html>`
 
-const dashboardCSS = `:root {
+const dashboardCSSLegacy = `:root {
   --ink: #17201b;
   --muted: #65736b;
   --line: #cad7ce;
@@ -415,7 +415,7 @@ th {
   }
 }`
 
-const dashboardJS = `const endpoints = {
+const dashboardJSLegacy = `const endpoints = {
   status: "/api/status",
   incidents: "/api/incidents?limit=6",
   egmHistory: "/api/egms/history?limit=8",

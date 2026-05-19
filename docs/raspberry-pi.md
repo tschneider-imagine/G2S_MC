@@ -86,6 +86,14 @@ HTTP/1.1 200 OK
 service ready protocol=http bind_address=0.0.0.0:8444 health=/healthz ready=/readyz status=/api/status dashboard=/dashboard
 ```
 
+Operator Console v2 checks on `/dashboard`:
+
+- top alert strip is visible and reflects readiness/incident/EGM/certificate priority
+- `/readyz` appears as the primary readiness badge and should match `curl -i /readyz`
+- stale data badge starts as fresh and moves to warning after 10s, critical after 30s without a successful poll
+- EGM table supports `All` / `Healthy` / `Unhealthy` filters and client-side sorting on EGM, status, and last seen
+- certificate inventory rows show blocking vs non-blocking state explanations; `NOT_CONFIGURED` is shown as lab-expected
+
 In the default Pi lab config, `/api/certificates` reports the local certificate paths as `MISSING` or `NOT_CONFIGURED` until TLS lab mode is configured. That is expected while `g2s.require_tls` and `g2s.require_client_cert` are false.
 
 `/readyz` readiness policy:
