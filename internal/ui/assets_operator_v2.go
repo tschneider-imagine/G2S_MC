@@ -25,6 +25,10 @@ const dashboardHTML = `<!doctype html>
     <strong id="alert-title">Waiting for readiness</strong>
     <span id="alert-detail">The console is collecting first telemetry snapshots.</span>
   </section>
+  <section id="api-failure-banner" class="api-banner api-banner-hidden">
+    <strong>API polling issue</strong>
+    <span id="api-failure-detail">One or more API requests failed; showing cached data where available.</span>
+  </section>
 
   <main class="shell">
     <section class="status-band">
@@ -271,6 +275,21 @@ h2 { font-size: 18px; }
 .alert-healthy {
   background: var(--green-bg);
   color: #18683f;
+}
+
+.api-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 36px;
+  border-bottom: 1px solid #d7a3a1;
+  background: var(--red-bg);
+  color: #82221f;
+  font-size: 13px;
+}
+
+.api-banner-hidden {
+  display: none;
 }
 
 .stale-badge {
@@ -793,11 +812,11 @@ function updateSortLabels() {
     const key = button.dataset.sortKey;
     const active = key === clientState.egmSortKey;
     button.classList.toggle("is-active", active);
-    const arrow = active ? (clientState.egmSortDir === "asc" ? " ↑" : " ↓") : "";
+    const direction = active ? (clientState.egmSortDir === "asc" ? " (asc)" : " (desc)") : "";
     const base = key === "egm_id" ? "EGM" : key === "last_seen" ? "Last seen" : "Status";
-    button.textContent = base + arrow;
+    button.textContent = base + direction;
   });
-  $("egm-sort-label").textContent = "Sort: " + (clientState.egmSortKey === "egm_id" ? "EGM ID" : clientState.egmSortKey === "last_seen" ? "Last seen" : "Status") + " " + clientState.egmSortDir;
+  $("egm-sort-label").textContent = "Sort: " + (clientState.egmSortKey === "egm_id" ? "EGM ID" : clientState.egmSortKey === "last_seen" ? "Last seen" : "Status") + " " + (clientState.egmSortDir === "asc" ? "(asc)" : "(desc)");
 }
 
 function renderEGMTable(status) {
@@ -876,7 +895,7 @@ function renderAlerts(snapshot) {
   const unhealthy = egms.filter((egm) => unhealthyStates.has(String(egm.status || "").toUpperCase()));
   const blockingCerts = (snapshot?.certificates || []).filter((cert) => certSeverity(cert, runtime) === "blocking");
 
-  const readyzDegraded = readyz.statusCode && !readyz.ok;
+  const readyzDegraded = readyz.ok === false || readyz.overall === "DEGRADED";
   document.body.classList.toggle("console-degraded", readyzDegraded);
 
   if (readyzDegraded || readyz.overall === "DEGRADED") {
@@ -982,6 +1001,16 @@ function updateRefreshText(ok) {
   $("last-refresh").textContent = "Last poll issue: " + (clientState.lastError || "unknown");
 }
 
+function showAPIFailureBanner(summary) {
+  const banner = $("api-failure-banner");
+  banner.classList.remove("api-banner-hidden");
+  $("api-failure-detail").textContent = summary || "One or more API requests failed; showing cached data where available.";
+}
+
+function hideAPIFailureBanner() {
+  $("api-failure-banner").classList.add("api-banner-hidden");
+}
+
 async function pollOnce() {
   if (clientState.inFlight) return;
   clientState.inFlight = true;
@@ -1016,6 +1045,12 @@ async function pollOnce() {
       snapshot.readyz = readyzResult.value;
       readyzOK = true;
     } else {
+      snapshot.readyz = {
+        ok: false,
+        statusCode: 0,
+        overall: "DEGRADED",
+        issues: ["readyz unavailable"]
+      };
       failures.push("readyz unavailable");
     }
 
@@ -1032,6 +1067,11 @@ async function pollOnce() {
     clientState.displaySnapshot = snapshot;
     renderStatus(snapshot);
     renderAlerts(snapshot);
+    if (failures.length > 0) {
+      showAPIFailureBanner(failures.join("; "));
+    } else {
+      hideAPIFailureBanner();
+    }
 
     const goodPoll = statusOK && readyzOK;
     if (goodPoll) {
@@ -1050,6 +1090,7 @@ async function pollOnce() {
     }
   } catch (err) {
     clientState.lastError = err && err.message ? err.message : "poll failed";
+    showAPIFailureBanner(clientState.lastError);
     if (clientState.lastGoodStatus && !clientState.displaySnapshot) {
       clientState.displaySnapshot = copySnapshot(clientState.lastGoodStatus);
       renderStatus(clientState.displaySnapshot);
