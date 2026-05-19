@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PREFLIGHT_URL="${PREFLIGHT_URL:-http://127.0.0.1:8444/api/cabinet-preflight}"
+API_BASE="${API_BASE:-http://127.0.0.1:8444}"
+PREFLIGHT_URL="${PREFLIGHT_URL:-${API_BASE%/}/api/cabinet-preflight}"
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required for cabinet preflight" >&2

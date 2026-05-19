@@ -1,0 +1,74 @@
+{
+  "controller_id": "G2S-MC-TLS-USER-001",
+  "site_name": "TLS User Mode Lab",
+  "cabinet_profile": {
+    "wire_host_url": "https://localhost:9443/g2s",
+    "listener_dns_name": "localhost",
+    "listener_ip": "127.0.0.1",
+    "required_san_dns": [
+      "localhost"
+    ],
+    "required_san_ips": [
+      "127.0.0.1"
+    ],
+    "host_id": "HOST-LOCAL-9443",
+    "first_test_egm_ids": [
+      "EGM-A100"
+    ]
+  },
+  "hardware_io": {
+    "security_line_gpio_pin": 17,
+    "voltage_drop_threshold_ms": 250,
+    "psu_1_gpio_pin": 22,
+    "psu_2_gpio_pin": 23,
+    "buzzer_gpio_pin": 18,
+    "active_low_inputs": true
+  },
+  "power_management": {
+    "critical_battery_threshold_percent": 5,
+    "buzzer_on_single_psu_failure": true
+  },
+  "crypto": {
+    "g2s_client_cert_path": "./certs/tls-lab/client.crt",
+    "g2s_client_key_path": "./certs/tls-lab/client.key",
+    "g2s_ca_cert_path": "./certs/tls-lab/ca.crt",
+    "web_server_cert_path": "./certs/tls-lab/host.crt",
+    "web_server_key_path": "./certs/tls-lab/host.key"
+  },
+  "alerts": {
+    "grey_threshold_count_to_buzz": 3,
+    "grey_threshold_percent_to_buzz": 15.0
+  },
+  "timeouts": {
+    "g2s_request_timeout_ms": 3000,
+    "egm_heartbeat_interval_ms": 5000,
+    "ui_session_timeout_minutes": 30
+  },
+  "database": {
+    "path": "/tmp/g2s-mute-tls-user.db"
+  },
+  "web_ui": {
+    "bind_address": "127.0.0.1:9443",
+    "require_login": false,
+    "require_client_cert_for_admin": false,
+    "allow_private_key_export": false
+  },
+  "g2s": {
+    "host_id": "HOST-LOCAL-9443",
+    "host_url": "https://localhost:9443/g2s",
+    "endpoint_path": "/g2s",
+    "require_tls": true,
+    "require_client_cert": false
+  },
+  "egm_roster": [
+    {
+      "egm_id": "EGM-A100",
+      "ip_address": "127.0.0.1",
+      "port": 9443,
+      "vendor": "fake",
+      "cabinet_family": "lab",
+      "game_title": "Fake EGM",
+      "software_version": "dev"
+    }
+  ]
+}
