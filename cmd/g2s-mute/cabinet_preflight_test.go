@@ -155,6 +155,13 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 		}
 		assertCheckFailed(t, result.Checks, "cabinet_profile")
 		assertCheckFailed(t, result.Checks, "certificate_san_wire_identity")
+		profileCheck := checkByID(t, result.Checks, "cabinet_profile")
+		if !strings.Contains(profileCheck.Detail, "PUT /api/cabinet-profile") {
+			t.Fatalf("expected cabinet_profile detail to include API remediation, got %q", profileCheck.Detail)
+		}
+		if !strings.Contains(profileCheck.Detail, "wire_host_url") || !strings.Contains(profileCheck.Detail, "first_test_egm_ids") {
+			t.Fatalf("expected cabinet_profile detail to include required field names, got %q", profileCheck.Detail)
+		}
 		if len(result.Blockers) == 0 {
 			t.Fatal("expected blocker list for fail case")
 		}
@@ -210,6 +217,11 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 			t.Fatalf("overall = %q, want FAIL", result.Overall)
 		}
 		assertCheckFailed(t, result.Checks, "certificate_mode_requirements")
+		sanCheck := checkByID(t, result.Checks, "certificate_san_wire_identity")
+		expectedPrefix := "role=web_server_cert; path=" + cfg.Crypto.WebServerCertPath + "; parse_error="
+		if !strings.Contains(sanCheck.Detail, expectedPrefix) {
+			t.Fatalf("expected certificate_san_wire_identity detail to include role/path parse context, got %q", sanCheck.Detail)
+		}
 	})
 }
 
@@ -338,6 +350,17 @@ func generateSANCertificateAndKey(t *testing.T, dnsName string, ipAddress string
 	}
 
 	return certificateBuilder.String(), keyBuilder.String()
+}
+
+func checkByID(t *testing.T, checks []cabinetPreflightCheck, id string) cabinetPreflightCheck {
+	t.Helper()
+	for _, check := range checks {
+		if check.ID == id {
+			return check
+		}
+	}
+	t.Fatalf("check %s not found", id)
+	return cabinetPreflightCheck{}
 }
 
 func assertCheckFailed(t *testing.T, checks []cabinetPreflightCheck, id string) {

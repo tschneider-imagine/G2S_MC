@@ -8,7 +8,15 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 2
 fi
 
-payload="$(curl -fsS "${PREFLIGHT_URL}")"
+curl_output=""
+if ! curl_output="$(curl -fsS "${PREFLIGHT_URL}" 2>&1)"; then
+  echo "Cabinet preflight: FAIL"
+  echo " - preflight API unavailable at ${PREFLIGHT_URL}"
+  echo " - start g2s-mute and verify web_ui.bind_address reaches this endpoint"
+  echo " - curl error: ${curl_output}"
+  exit 2
+fi
+payload="${curl_output}"
 overall="$(printf '%s' "${payload}" | sed -n 's/.*"overall":"\([^"]*\)".*/\1/p')"
 
 if [[ -z "${overall}" ]]; then

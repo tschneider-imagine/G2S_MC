@@ -131,11 +131,12 @@ func evaluatePreflightProfileCompleteness(profile resolvedCabinetProfile, profil
 		problems = append(problems, profile.Warning)
 	}
 	if len(problems) > 0 {
+		remediation := "set non-placeholder cabinet profile fields via config.cabinet_profile or PUT /api/cabinet-profile: wire_host_url, listener_dns_name/listener_ip, required_san_dns/required_san_ips, host_id, first_test_egm_ids"
 		return cabinetPreflightCheck{
 			ID:      "cabinet_profile",
 			Result:  preflightFail,
 			Message: "Cabinet profile has missing or placeholder values",
-			Detail:  strings.Join(problems, " | "),
+			Detail:  remediation + " | issues=" + strings.Join(problems, " | "),
 		}
 	}
 	return cabinetPreflightCheck{
@@ -283,11 +284,15 @@ func evaluatePreflightWireIdentitySAN(profile resolvedCabinetProfile, profileErr
 
 	serverCert, err := loadCertificateFromPath(record.Path)
 	if err != nil {
+		recordPath := strings.TrimSpace(record.Path)
+		if recordPath == "" {
+			recordPath = "(empty)"
+		}
 		return cabinetPreflightCheck{
 			ID:      "certificate_san_wire_identity",
 			Result:  preflightFail,
 			Message: "Web server certificate could not be parsed for SAN checks",
-			Detail:  err.Error(),
+			Detail:  "role=web_server_cert; path=" + recordPath + "; parse_error=" + err.Error(),
 		}
 	}
 
