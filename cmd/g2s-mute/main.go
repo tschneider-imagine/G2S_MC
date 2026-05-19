@@ -129,6 +129,11 @@ func main() {
 	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
 	mux.HandleFunc("/api/cabinet-profile", cabinetProfileHandler(auditStore, cfg))
+	mux.HandleFunc("/api/cabinet-preflight", cabinetPreflightHandler(eng, auditStore, cfg, runtimeInfo{
+		ConfigPath:       *configPath,
+		StartedAt:        startedAt,
+		SimulatedTrigger: *simulateTrigger,
+	}))
 
 	server := &http.Server{
 		Addr:              cfg.WebUI.BindAddress,
@@ -408,7 +413,7 @@ func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certifica
 
 func certificateBlocksRuntime(cfg config.Config, certificate model.CertificateInventory) bool {
 	key := certificateStatusKey(certificate.Status)
-	if key == "OK" || key == "EXPIRING_SOON" || key == "NOT_CONFIGURED" {
+	if key == "OK" || key == "VALID" || key == "EXPIRING_SOON" || key == "NOT_CONFIGURED" {
 		return false
 	}
 	switch certificate.Role {

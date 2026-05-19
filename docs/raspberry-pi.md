@@ -175,6 +175,7 @@ Runtime endpoints:
 
 - `GET /api/status` includes `cabinet_profile`, `profile_source`, `profile_last_updated_at`, and `profile_differs_from_file`
 - `GET /api/cabinet-profile` returns effective profile and override metadata
+- `GET /api/cabinet-preflight` runs actionable cabinet readiness checks and returns `overall`, `checks`, and `blockers`
 - `PUT /api/cabinet-profile` writes/updates override values (lab-only endpoint until auth is added)
 - `DELETE /api/cabinet-profile` clears override and reverts to file values
 
@@ -183,6 +184,18 @@ Reset/recovery path:
 1. Confirm file defaults in `/etc/g2s-mute/config.json`
 2. Clear override via `DELETE /api/cabinet-profile`
 3. Verify `profile_source=file` in `/api/status`
+
+Run cabinet preflight:
+
+```bash
+curl -fsS http://127.0.0.1:8444/api/cabinet-preflight
+bash ./scripts/cabinet-preflight.sh
+```
+
+Interpretation:
+
+- `overall=PASS`: the current runtime state satisfies all required cabinet preflight checks.
+- `overall=FAIL`: one or more blockers were detected; use `blockers` and per-check details to resolve them before a real cabinet session.
 
 ## First Cabinet Session Plan
 
