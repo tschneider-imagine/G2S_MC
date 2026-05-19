@@ -1,19 +1,19 @@
 {
   "controller_id": "G2S-MC-PI-001",
-  "site_name": "Pi Lab (User Mode)",
+  "site_name": "Pi Lab (User Mode Local)",
   "cabinet_profile": {
-    "wire_host_url": "https://pi-cabinet-host.example:8444/g2s",
-    "listener_dns_name": "pi-cabinet-host.example",
-    "listener_ip": "192.168.50.40",
+    "wire_host_url": "https://tspi4.local:8444/g2s",
+    "listener_dns_name": "tspi4.local",
+    "listener_ip": "192.168.10.25",
     "required_san_dns": [
-      "pi-cabinet-host.example"
+      "tspi4.local"
     ],
     "required_san_ips": [
-      "192.168.50.40"
+      "192.168.10.25"
     ],
-    "host_id": "HOST-PI-001",
+    "host_id": "HOST-TSPI4-001",
     "first_test_egm_ids": [
-      "EGM-01"
+      "EGM-A100"
     ]
   },
   "hardware_io": {
@@ -32,8 +32,8 @@
     "g2s_client_cert_path": "/tmp/g2s-user-certs/client.crt",
     "g2s_client_key_path": "/tmp/g2s-user-certs/client.key",
     "g2s_ca_cert_path": "/tmp/g2s-user-certs/ca.crt",
-    "web_server_cert_path": "/tmp/g2s-user-certs/host.crt",
-    "web_server_key_path": "/tmp/g2s-user-certs/host.key"
+    "web_server_cert_path": "./certs/web_server_cert.pem",
+    "web_server_key_path": "./certs/web_server_key.pem"
   },
   "alerts": {
     "grey_threshold_count_to_buzz": 3,
@@ -54,7 +54,7 @@
     "allow_private_key_export": false
   },
   "g2s": {
-    "host_id": "HOST-PI-001",
+    "host_id": "HOST-TSPI4-001",
     "host_url": "http://127.0.0.1:8444/g2s",
     "endpoint_path": "/g2s",
     "require_tls": false,
