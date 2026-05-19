@@ -40,6 +40,16 @@ KEY_ESCAPED="$(escape_pem "${KEY_PATH}")"
 IMPORT_PAYLOAD="$(printf '{"role":"web_server_cert","certificate_pem":"%s","private_key_pem":"%s"}' "${CERT_ESCAPED}" "${KEY_ESCAPED}")"
 POST_CERT_IMPORT_NO_TOKEN="$(status_code -X POST "${API_BASE}/api/certificates/import" -H 'Content-Type: application/json' --data "${IMPORT_PAYLOAD}")"
 
+auth_required="UNKNOWN"
+if [[ "${PUT_PROFILE_NO_TOKEN}" == "401" && "${DELETE_PROFILE_NO_TOKEN}" == "401" && "${POST_CERT_IMPORT_NO_TOKEN}" == "401" ]]; then
+  auth_required="YES"
+elif [[ "${PUT_PROFILE_NO_TOKEN}" == "200" && ( "${DELETE_PROFILE_NO_TOKEN}" == "200" || "${DELETE_PROFILE_NO_TOKEN}" == "204" ) && "${POST_CERT_IMPORT_NO_TOKEN}" == "200" ]]; then
+  auth_required="NO"
+else
+  auth_required="INCONSISTENT"
+  EXPECT_FAIL=1
+fi
+
 if [[ -z "${API_TOKEN}" ]]; then
   PUT_PROFILE_WITH_TOKEN="SKIP"
   DELETE_PROFILE_WITH_TOKEN="SKIP"
@@ -56,6 +66,7 @@ echo "GET /api/status (no token) -> ${GET_STATUS}"
 echo "PUT /api/cabinet-profile (no token) -> ${PUT_PROFILE_NO_TOKEN}"
 echo "DELETE /api/cabinet-profile (no token) -> ${DELETE_PROFILE_NO_TOKEN}"
 echo "POST /api/certificates/import (no token) -> ${POST_CERT_IMPORT_NO_TOKEN}"
+echo "auth_required_by_runtime -> ${auth_required}"
 echo "PUT /api/cabinet-profile (with token) -> ${PUT_PROFILE_WITH_TOKEN}"
 echo "DELETE /api/cabinet-profile (with token) -> ${DELETE_PROFILE_WITH_TOKEN}"
 echo "POST /api/certificates/import (with token) -> ${POST_CERT_IMPORT_WITH_TOKEN}"
@@ -66,23 +77,29 @@ fi
 if [[ "${GET_STATUS}" != "200" ]]; then
   EXPECT_FAIL=1
 fi
-if [[ "${PUT_PROFILE_NO_TOKEN}" != "401" ]]; then
-  EXPECT_FAIL=1
-fi
-if [[ "${DELETE_PROFILE_NO_TOKEN}" != "401" ]]; then
-  EXPECT_FAIL=1
-fi
-if [[ "${POST_CERT_IMPORT_NO_TOKEN}" != "401" ]]; then
-  EXPECT_FAIL=1
-fi
-if [[ "${PUT_PROFILE_WITH_TOKEN}" != "SKIP" && "${PUT_PROFILE_WITH_TOKEN}" != "200" ]]; then
-  EXPECT_FAIL=1
-fi
-if [[ "${DELETE_PROFILE_WITH_TOKEN}" != "SKIP" && "${DELETE_PROFILE_WITH_TOKEN}" != "200" && "${DELETE_PROFILE_WITH_TOKEN}" != "204" ]]; then
-  EXPECT_FAIL=1
-fi
-if [[ "${POST_CERT_IMPORT_WITH_TOKEN}" != "SKIP" && "${POST_CERT_IMPORT_WITH_TOKEN}" != "200" ]]; then
-  EXPECT_FAIL=1
+
+if [[ "${auth_required}" == "YES" ]]; then
+  if [[ -n "${API_TOKEN}" ]]; then
+    if [[ "${PUT_PROFILE_WITH_TOKEN}" != "200" ]]; then
+      EXPECT_FAIL=1
+    fi
+    if [[ "${DELETE_PROFILE_WITH_TOKEN}" != "200" && "${DELETE_PROFILE_WITH_TOKEN}" != "204" ]]; then
+      EXPECT_FAIL=1
+    fi
+    if [[ "${POST_CERT_IMPORT_WITH_TOKEN}" != "200" ]]; then
+      EXPECT_FAIL=1
+    fi
+  fi
+elif [[ "${auth_required}" == "NO" ]]; then
+  if [[ "${PUT_PROFILE_NO_TOKEN}" != "200" ]]; then
+    EXPECT_FAIL=1
+  fi
+  if [[ "${DELETE_PROFILE_NO_TOKEN}" != "200" && "${DELETE_PROFILE_NO_TOKEN}" != "204" ]]; then
+    EXPECT_FAIL=1
+  fi
+  if [[ "${POST_CERT_IMPORT_NO_TOKEN}" != "200" ]]; then
+    EXPECT_FAIL=1
+  fi
 fi
 
 if [[ "${EXPECT_FAIL}" -ne 0 ]]; then

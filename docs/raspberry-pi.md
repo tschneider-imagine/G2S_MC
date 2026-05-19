@@ -237,6 +237,30 @@ Interpretation:
 - `overall=PASS`: the current runtime state satisfies all required cabinet preflight checks.
 - `overall=FAIL`: one or more blockers were detected; use `blockers` and per-check details to resolve them before a real cabinet session.
 
+## One-Command Release Gate
+
+Use the combined first-cabinet gate script to validate runtime health, readiness, preflight policy, and API auth behavior in one run.
+
+Default (service-mode HTTP on port 8444):
+
+```bash
+bash ./scripts/release-gate.sh
+```
+
+TLS/user-mode example:
+
+```bash
+API_BASE=https://127.0.0.1:9443 API_TOKEN=replace-with-token bash ./scripts/release-gate.sh
+```
+
+Gate behavior:
+
+- checks `/healthz`, `/readyz`, and `/api/status` (HTTP 200 required)
+- checks `/api/cabinet-preflight` and requires `overall=PASS`
+- runs `scripts/api-auth-smoke.sh` using the same `API_BASE`/`API_TOKEN`
+- exits non-zero on any required failure
+- writes a markdown run report to `docs/pi-runs/<UTC-date>-release-gate-run.md`
+
 ## First Cabinet Session Plan
 
 For the operator-grade first live cabinet sequence (preconditions, command order, evidence, triage, and Go/No-Go gates), use:
