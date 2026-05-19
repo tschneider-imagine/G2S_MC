@@ -116,13 +116,21 @@ else
     if [[ -z "${auth_mode}" ]]; then
       auth_mode="unknown"
     fi
-    record_row "api-auth-smoke" "PASS" "auth_required=${auth_mode}"
-  else
-    auth_tail="$(tail -n 1 "${AUTH_OUTPUT_FILE}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
-    if [[ -z "${auth_tail}" ]]; then
-      auth_tail="smoke script exited non-zero"
+    cert_with_token_line="$(grep -m1 '^POST /api/certificates/import (with token) -> ' "${AUTH_OUTPUT_FILE}" || true)"
+    if [[ -n "${cert_with_token_line}" ]]; then
+      record_row "api-auth-smoke" "PASS" "auth_required=${auth_mode}; ${cert_with_token_line}"
+    else
+      record_row "api-auth-smoke" "PASS" "auth_required=${auth_mode}"
     fi
-    record_row "api-auth-smoke" "FAIL" "${auth_tail}"
+  else
+    auth_failure="$(grep -m1 '(FAIL' "${AUTH_OUTPUT_FILE}" || true)"
+    if [[ -z "${auth_failure}" ]]; then
+      auth_failure="$(tail -n 1 "${AUTH_OUTPUT_FILE}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+    fi
+    if [[ -z "${auth_failure}" ]]; then
+      auth_failure="smoke script exited non-zero"
+    fi
+    record_row "api-auth-smoke" "FAIL" "${auth_failure}"
   fi
 fi
 
