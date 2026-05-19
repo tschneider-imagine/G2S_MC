@@ -138,6 +138,12 @@ Reset/recovery path:
 2. Clear override via `DELETE /api/cabinet-profile`
 3. Verify `profile_source=file` in `/api/status`
 
+## First Cabinet Session Plan
+
+For the operator-grade first live cabinet sequence (preconditions, command order, evidence, triage, and Go/No-Go gates), use:
+
+- [First Cabinet Session Execution Plan](./First-Cabinet-Session-Execution-Plan.md)
+
 ## Next Hardware Checks
 
 Before enabling real GPIO behavior, confirm:
