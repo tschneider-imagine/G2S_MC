@@ -56,6 +56,7 @@ type WebUI struct {
 	BindAddress               string `json:"bind_address"`
 	RequireLogin              bool   `json:"require_login"`
 	RequireClientCertForAdmin bool   `json:"require_client_cert_for_admin"`
+	AllowPrivateKeyExport     bool   `json:"allow_private_key_export"`
 }
 
 type G2S struct {

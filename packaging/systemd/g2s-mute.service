@@ -13,7 +13,7 @@ RestartSec=5s
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/var/lib/g2s-mute /var/log/g2s-mute
+ReadWritePaths=/var/lib/g2s-mute /var/log/g2s-mute /etc/g2s-mute/certs
 
 [Install]
 WantedBy=multi-user.target

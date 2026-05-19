@@ -51,7 +51,8 @@
   "web_ui": {
     "bind_address": "127.0.0.1:8444",
     "require_login": false,
-    "require_client_cert_for_admin": false
+    "require_client_cert_for_admin": false,
+    "allow_private_key_export": false
   },
   "g2s": {
     "host_id": "HOST-001",

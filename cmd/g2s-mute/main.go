@@ -126,6 +126,8 @@ func main() {
 	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
+	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
+	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
 	mux.HandleFunc("/api/cabinet-profile", cabinetProfileHandler(auditStore, cfg))
 
 	server := &http.Server{

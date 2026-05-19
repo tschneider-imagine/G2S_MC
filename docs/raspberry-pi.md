@@ -112,6 +112,52 @@ sudo chown -R g2s-mute:g2s-mute /etc/g2s-mute/certs
 
 Then edit `/etc/g2s-mute/config.json` to use the certificate paths from `configs/config.tls.example.json`, update `g2s.host_url` to the real Pi DNS name or IP, and ensure that value exists in the host certificate SAN before expecting real cabinet TLS to work.
 
+## Certificate Import/Export API (Lab-Only)
+
+Certificate material can now be managed through local-only endpoints:
+
+- `POST /api/certificates/import`
+- `GET /api/certificates/export?role=<role>&include_key=<true|false>`
+
+Supported roles:
+
+- `g2s_ca_cert` (certificate only)
+- `g2s_client_cert` (certificate + key)
+- `web_server_cert` (certificate + key)
+
+Security limits:
+
+- Import/export endpoints only allow loopback callers (`127.0.0.1` or `::1`).
+- `include_key=true` is blocked by default.
+- Private-key export requires `web_ui.allow_private_key_export=true` in `/etc/g2s-mute/config.json`.
+
+Example import (client cert/key):
+
+```bash
+CERT_JSON="$(sed ':a;N;$!ba;s/\n/\\n/g' /etc/g2s-mute/certs/client.crt)"
+KEY_JSON="$(sed ':a;N;$!ba;s/\n/\\n/g' /etc/g2s-mute/certs/client.key)"
+printf '{"role":"g2s_client_cert","certificate_pem":"%s","private_key_pem":"%s"}' "$CERT_JSON" "$KEY_JSON" >/tmp/g2s-cert-import.json
+curl -fsS -X POST http://127.0.0.1:8444/api/certificates/import \
+  -H 'Content-Type: application/json' \
+  --data-binary @/tmp/g2s-cert-import.json
+```
+
+Example export (certificate only):
+
+```bash
+curl -fsS 'http://127.0.0.1:8444/api/certificates/export?role=g2s_client_cert'
+```
+
+Write and backup behavior on import:
+
+- writes to configured runtime paths in `crypto.*_path`
+- safe write pattern: temp file + rename
+- replaced files are backed up with timestamp suffix: `*.bak-YYYYMMDDTHHMMSSZ`
+- file permissions:
+  - certificate files: `0644`
+  - private keys: `0600`
+- certificate inventory is refreshed after import (`GET /api/certificates`)
+
 ## Cabinet Profile Persistence
 
 Cabinet-facing identity values are now explicit in `cabinet_profile` and have two persistence layers:
