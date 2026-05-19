@@ -457,3 +457,83 @@ func waitForLastEvent(t *testing.T, eng *engine.Engine, event string) {
 	}
 	t.Fatalf("timed out waiting for last event %q (got %q)", event, eng.Snapshot().LastEvent)
 }
+
+func TestCabinetProfileHandlerAuthTokenGuard(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://file.example/g2s",
+			ListenerDNSName: "file.example",
+			RequiredSANDNS:  []string{"file.example"},
+			HostID:          "HOST-FILE",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+	}
+	handler := cabinetProfileHandler(auditStore, cfg)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/cabinet-profile", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	override := config.CabinetProfile{
+		WireHostURL:     "https://override.example/g2s",
+		ListenerDNSName: "override.example",
+		ListenerIP:      "10.20.30.40",
+		RequiredSANDNS:  []string{"override.example"},
+		RequiredSANIPs:  []string{"10.20.30.40"},
+		HostID:          "HOST-OVERRIDE",
+		FirstTestEGMIDs: []string{"EGM-99"},
+	}
+	raw, _ := json.Marshal(override)
+
+	putReqUnauthorized := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
+	putReqUnauthorized.Header.Set("Content-Type", "application/json")
+	putRecUnauthorized := httptest.NewRecorder()
+	handler(putRecUnauthorized, putReqUnauthorized)
+	if putRecUnauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("PUT without token status = %d, want %d", putRecUnauthorized.Code, http.StatusUnauthorized)
+	}
+
+	putReqInvalid := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
+	putReqInvalid.Header.Set("Content-Type", "application/json")
+	putReqInvalid.Header.Set("Authorization", "Bearer wrong-token")
+	putRecInvalid := httptest.NewRecorder()
+	handler(putRecInvalid, putReqInvalid)
+	if putRecInvalid.Code != http.StatusUnauthorized {
+		t.Fatalf("PUT with invalid token status = %d, want %d", putRecInvalid.Code, http.StatusUnauthorized)
+	}
+
+	putReq := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("Authorization", "Bearer lab-secret")
+	putRec := httptest.NewRecorder()
+	handler(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d: %s", putRec.Code, putRec.Body.String())
+	}
+
+	deleteReqUnauthorized := httptest.NewRequest(http.MethodDelete, "/api/cabinet-profile", nil)
+	deleteRecUnauthorized := httptest.NewRecorder()
+	handler(deleteRecUnauthorized, deleteReqUnauthorized)
+	if deleteRecUnauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("DELETE without token status = %d, want %d", deleteRecUnauthorized.Code, http.StatusUnauthorized)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/cabinet-profile", nil)
+	deleteReq.Header.Set("Authorization", "Bearer lab-secret")
+	deleteRec := httptest.NewRecorder()
+	handler(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+}

@@ -7,6 +7,7 @@ type Config struct {
 	HardwareIO      HardwareIO      `json:"hardware_io"`
 	PowerManagement PowerManagement `json:"power_management"`
 	Crypto          Crypto          `json:"crypto"`
+	API             API             `json:"api"`
 	Alerts          Alerts          `json:"alerts"`
 	Timeouts        Timeouts        `json:"timeouts"`
 	Database        Database        `json:"database"`
@@ -35,6 +36,10 @@ type Crypto struct {
 	G2SCAPath         string `json:"g2s_ca_cert_path"`
 	WebServerCertPath string `json:"web_server_cert_path"`
 	WebServerKeyPath  string `json:"web_server_key_path"`
+}
+
+type API struct {
+	AuthToken string `json:"auth_token"`
 }
 
 type Alerts struct {

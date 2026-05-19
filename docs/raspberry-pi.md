@@ -130,6 +130,7 @@ Security limits:
 - Import/export endpoints only allow loopback callers (`127.0.0.1` or `::1`).
 - `include_key=true` is blocked by default.
 - Private-key export requires `web_ui.allow_private_key_export=true` in `/etc/g2s-mute/config.json`.
+- When `api.auth_token` is set, mutating operations require `Authorization: Bearer <token>`.
 
 Example import (client cert/key):
 
@@ -146,6 +147,45 @@ Example export (certificate only):
 
 ```bash
 curl -fsS 'http://127.0.0.1:8444/api/certificates/export?role=g2s_client_cert'
+```
+
+## API Auth Token For Mutating Endpoints
+
+To keep lab mode simple, API auth is optional. If `api.auth_token` is empty or omitted, mutating endpoints keep existing behavior.
+If `api.auth_token` is set, callers must present `Authorization: Bearer <token>` for:
+
+- `PUT /api/cabinet-profile`
+- `DELETE /api/cabinet-profile`
+- `POST /api/certificates/import`
+- `GET /api/certificates/export?...&include_key=true`
+
+Config example:
+
+```json
+{
+  "api": {
+    "auth_token": "replace-with-long-random-token"
+  }
+}
+```
+
+Authenticated write examples:
+
+```bash
+TOKEN='replace-with-long-random-token'
+
+curl -fsS -X PUT http://127.0.0.1:8444/api/cabinet-profile \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' \
+  --data '{"wire_host_url":"https://pi-host.local:8444/g2s","listener_dns_name":"pi-host.local","listener_ip":"192.168.50.40","required_san_dns":["pi-host.local"],"required_san_ips":["192.168.50.40"],"host_id":"HOST-PI-001","first_test_egm_ids":["EGM-01"]}'
+
+curl -fsS -X POST http://127.0.0.1:8444/api/certificates/import \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' \
+  --data-binary @/tmp/g2s-cert-import.json
+
+curl -fsS "http://127.0.0.1:8444/api/certificates/export?role=g2s_client_cert&include_key=true" \
+  -H "Authorization: Bearer ${TOKEN}"
 ```
 
 Write and backup behavior on import:
@@ -176,8 +216,8 @@ Runtime endpoints:
 - `GET /api/status` includes `cabinet_profile`, `profile_source`, `profile_last_updated_at`, and `profile_differs_from_file`
 - `GET /api/cabinet-profile` returns effective profile and override metadata
 - `GET /api/cabinet-preflight` runs actionable cabinet readiness checks and returns `overall`, `checks`, and `blockers`
-- `PUT /api/cabinet-profile` writes/updates override values (lab-only endpoint until auth is added)
-- `DELETE /api/cabinet-profile` clears override and reverts to file values
+- `PUT /api/cabinet-profile` writes/updates override values (requires bearer token when `api.auth_token` is set)
+- `DELETE /api/cabinet-profile` clears override and reverts to file values (requires bearer token when `api.auth_token` is set)
 
 Reset/recovery path:
 

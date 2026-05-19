@@ -376,3 +376,111 @@ func generateTestCertificateAndKey(t *testing.T, commonName string, validFor tim
 
 	return certificateBuilder.String(), keyBuilder.String()
 }
+
+func TestCertificateImportHandlerAuthTokenGuard(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		Crypto: config.Crypto{
+			G2SClientCertPath: filepath.Join(t.TempDir(), "client.crt"),
+			G2SClientKeyPath:  filepath.Join(t.TempDir(), "client.key"),
+		},
+	}
+	handler := certificateImportHandler(auditStore, cfg)
+
+	requestNoToken := httptest.NewRequest(http.MethodPost, "/api/certificates/import", bytes.NewBufferString(`{}`))
+	requestNoToken.RemoteAddr = "127.0.0.1:4444"
+	responseNoToken := httptest.NewRecorder()
+	handler(responseNoToken, requestNoToken)
+	if responseNoToken.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", responseNoToken.Code, http.StatusUnauthorized)
+	}
+
+	requestInvalidToken := httptest.NewRequest(http.MethodPost, "/api/certificates/import", bytes.NewBufferString(`{}`))
+	requestInvalidToken.RemoteAddr = "127.0.0.1:4445"
+	requestInvalidToken.Header.Set("Authorization", "Bearer wrong-token")
+	responseInvalidToken := httptest.NewRecorder()
+	handler(responseInvalidToken, requestInvalidToken)
+	if responseInvalidToken.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", responseInvalidToken.Code, http.StatusUnauthorized)
+	}
+
+	requestValidToken := httptest.NewRequest(http.MethodPost, "/api/certificates/import", bytes.NewBufferString(`{}`))
+	requestValidToken.RemoteAddr = "127.0.0.1:4446"
+	requestValidToken.Header.Set("Authorization", "Bearer lab-secret")
+	responseValidToken := httptest.NewRecorder()
+	handler(responseValidToken, requestValidToken)
+	if responseValidToken.Code == http.StatusUnauthorized {
+		t.Fatalf("expected auth to pass, got status %d: %s", responseValidToken.Code, responseValidToken.Body.String())
+	}
+}
+
+func TestCertificateExportHandlerPrivateKeyAuthTokenGuard(t *testing.T) {
+	tempDir := t.TempDir()
+	certificatePEM, privateKeyPEM := generateTestCertificateAndKey(t, "export-auth-test.local", 90*24*time.Hour)
+	clientCertPath := filepath.Join(tempDir, "client.crt")
+	clientKeyPath := filepath.Join(tempDir, "client.key")
+	if err := os.WriteFile(clientCertPath, []byte(certificatePEM), 0o644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(clientKeyPath, []byte(privateKeyPEM), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		Crypto: config.Crypto{
+			G2SClientCertPath: clientCertPath,
+			G2SClientKeyPath:  clientKeyPath,
+		},
+		WebUI: config.WebUI{AllowPrivateKeyExport: true},
+	}
+	handler := certificateExportHandler(cfg)
+
+	certificateOnlyReq := httptest.NewRequest(http.MethodGet, "/api/certificates/export?role=g2s_client_cert", nil)
+	certificateOnlyReq.RemoteAddr = "127.0.0.1:9010"
+	certificateOnlyRec := httptest.NewRecorder()
+	handler(certificateOnlyRec, certificateOnlyReq)
+	if certificateOnlyRec.Code != http.StatusOK {
+		t.Fatalf("certificate-only status = %d: %s", certificateOnlyRec.Code, certificateOnlyRec.Body.String())
+	}
+
+	withKeyNoTokenReq := httptest.NewRequest(http.MethodGet, "/api/certificates/export?role=g2s_client_cert&include_key=true", nil)
+	withKeyNoTokenReq.RemoteAddr = "127.0.0.1:9011"
+	withKeyNoTokenRec := httptest.NewRecorder()
+	handler(withKeyNoTokenRec, withKeyNoTokenReq)
+	if withKeyNoTokenRec.Code != http.StatusUnauthorized {
+		t.Fatalf("include_key without token status = %d, want %d", withKeyNoTokenRec.Code, http.StatusUnauthorized)
+	}
+
+	withKeyBadTokenReq := httptest.NewRequest(http.MethodGet, "/api/certificates/export?role=g2s_client_cert&include_key=true", nil)
+	withKeyBadTokenReq.RemoteAddr = "127.0.0.1:9012"
+	withKeyBadTokenReq.Header.Set("Authorization", "Bearer wrong-token")
+	withKeyBadTokenRec := httptest.NewRecorder()
+	handler(withKeyBadTokenRec, withKeyBadTokenReq)
+	if withKeyBadTokenRec.Code != http.StatusUnauthorized {
+		t.Fatalf("include_key with invalid token status = %d, want %d", withKeyBadTokenRec.Code, http.StatusUnauthorized)
+	}
+
+	withKeyReq := httptest.NewRequest(http.MethodGet, "/api/certificates/export?role=g2s_client_cert&include_key=true", nil)
+	withKeyReq.RemoteAddr = "127.0.0.1:9013"
+	withKeyReq.Header.Set("Authorization", "Bearer lab-secret")
+	withKeyRec := httptest.NewRecorder()
+	handler(withKeyRec, withKeyReq)
+	if withKeyRec.Code != http.StatusOK {
+		t.Fatalf("include_key with token status = %d: %s", withKeyRec.Code, withKeyRec.Body.String())
+	}
+	var withKeyBody certificateExportResponse
+	if err := json.Unmarshal(withKeyRec.Body.Bytes(), &withKeyBody); err != nil {
+		t.Fatalf("decode include_key response: %v", err)
+	}
+	if strings.TrimSpace(withKeyBody.PrivateKeyPEM) == "" {
+		t.Fatal("expected private key in include_key export response")
+	}
+}
