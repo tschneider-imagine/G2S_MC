@@ -306,6 +306,38 @@ func TestCabinetPreflightHandler(t *testing.T) {
 	}
 }
 
+func TestFormatCertificateParseFailureDetail(t *testing.T) {
+	t.Run("empty path includes config action", func(t *testing.T) {
+		detail := formatCertificateParseFailureDetail("web_server_cert", "", os.ErrNotExist)
+		if !strings.Contains(detail, "role=web_server_cert; path=(empty)") {
+			t.Fatalf("unexpected detail: %q", detail)
+		}
+		if !strings.Contains(detail, "set crypto.web_server_cert_path and crypto.web_server_key_path") {
+			t.Fatalf("expected config remediation in detail: %q", detail)
+		}
+	})
+
+	t.Run("permission error includes permission action", func(t *testing.T) {
+		detail := formatCertificateParseFailureDetail("web_server_cert", "/etc/g2s-mute/certs/host.crt", os.ErrPermission)
+		if !strings.Contains(detail, "path=/etc/g2s-mute/certs/host.crt") {
+			t.Fatalf("unexpected detail: %q", detail)
+		}
+		if !strings.Contains(detail, "action=grant read permission to service user") {
+			t.Fatalf("expected permission remediation in detail: %q", detail)
+		}
+	})
+
+	t.Run("missing file includes import action", func(t *testing.T) {
+		detail := formatCertificateParseFailureDetail("web_server_cert", "/etc/g2s-mute/certs/host.crt", os.ErrNotExist)
+		if !strings.Contains(detail, "path=/etc/g2s-mute/certs/host.crt") {
+			t.Fatalf("unexpected detail: %q", detail)
+		}
+		if !strings.Contains(detail, "action=write/import certificate PEM to configured path and restart g2s-mute") {
+			t.Fatalf("expected missing-file remediation in detail: %q", detail)
+		}
+	})
+}
+
 func generateSANCertificateAndKey(t *testing.T, dnsName string, ipAddress string) (string, string) {
 	t.Helper()
 

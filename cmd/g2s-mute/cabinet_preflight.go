@@ -284,15 +284,11 @@ func evaluatePreflightWireIdentitySAN(profile resolvedCabinetProfile, profileErr
 
 	serverCert, err := loadCertificateFromPath(record.Path)
 	if err != nil {
-		recordPath := strings.TrimSpace(record.Path)
-		if recordPath == "" {
-			recordPath = "(empty)"
-		}
 		return cabinetPreflightCheck{
 			ID:      "certificate_san_wire_identity",
 			Result:  preflightFail,
 			Message: "Web server certificate could not be parsed for SAN checks",
-			Detail:  "role=web_server_cert; path=" + recordPath + "; parse_error=" + err.Error(),
+			Detail:  formatCertificateParseFailureDetail("web_server_cert", record.Path, err),
 		}
 	}
 
@@ -411,4 +407,20 @@ func loadCertificateFromPath(path string) (*x509.Certificate, error) {
 		return nil, err
 	}
 	return certificate, nil
+}
+
+func formatCertificateParseFailureDetail(role string, path string, parseErr error) string {
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedPath == "" {
+		return "role=" + role + "; path=(empty); action=set crypto.web_server_cert_path and crypto.web_server_key_path in active config and restart g2s-mute; parse_error=" + parseErr.Error()
+	}
+
+	detail := "role=" + role + "; path=" + trimmedPath + "; parse_error=" + parseErr.Error()
+	if os.IsPermission(parseErr) {
+		detail += "; action=grant read permission to service user for certificate path"
+	}
+	if os.IsNotExist(parseErr) {
+		detail += "; action=write/import certificate PEM to configured path and restart g2s-mute"
+	}
+	return detail
 }
