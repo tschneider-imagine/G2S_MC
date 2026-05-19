@@ -76,7 +76,7 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 	addCheck(evaluatePreflightProfileCompleteness(profile, profileErr), "")
 	addCheck(evaluatePreflightProfileSource(profile, profileErr), "")
 	addCheck(evaluatePreflightModeCertificates(cfg, certificates, certificatesErr), "")
-	addCheck(evaluatePreflightWireIdentitySAN(profile, profileErr, certificates, certificatesErr), "")
+	addCheck(evaluatePreflightWireIdentitySAN(cfg, profile, profileErr, certificates, certificatesErr), "")
 
 	return response
 }
@@ -244,7 +244,7 @@ func evaluatePreflightModeCertificates(cfg config.Config, certificates []model.C
 	}
 }
 
-func evaluatePreflightWireIdentitySAN(profile resolvedCabinetProfile, profileErr error, certificates []model.CertificateInventory, certificatesErr error) cabinetPreflightCheck {
+func evaluatePreflightWireIdentitySAN(cfg config.Config, profile resolvedCabinetProfile, profileErr error, certificates []model.CertificateInventory, certificatesErr error) cabinetPreflightCheck {
 	if profileErr != nil {
 		return cabinetPreflightCheck{
 			ID:      "certificate_san_wire_identity",
@@ -274,11 +274,27 @@ func evaluatePreflightWireIdentitySAN(profile resolvedCabinetProfile, profileErr
 
 	record, ok := certificateByRole(certificates, "web_server_cert")
 	if !ok {
+		if !runtimeModeRequiresServerCertificates(cfg) {
+			return cabinetPreflightCheck{
+				ID:      "certificate_san_wire_identity",
+				Result:  preflightPass,
+				Message: "Wire identity SAN check is skipped for certificate-optional runtime mode",
+				Detail:  "g2s.require_tls=false; g2s.require_client_cert=false; reason=web_server_cert inventory record is missing",
+			}
+		}
 		return cabinetPreflightCheck{
 			ID:      "certificate_san_wire_identity",
 			Result:  preflightFail,
 			Message: "Web server certificate inventory record is missing",
 			Detail:  "role=web_server_cert",
+		}
+	}
+	if !runtimeModeRequiresServerCertificates(cfg) && strings.TrimSpace(record.Path) == "" {
+		return cabinetPreflightCheck{
+			ID:      "certificate_san_wire_identity",
+			Result:  preflightPass,
+			Message: "Wire identity SAN check is skipped for certificate-optional runtime mode",
+			Detail:  "g2s.require_tls=false; g2s.require_client_cert=false; reason=web_server_cert path is empty",
 		}
 	}
 
@@ -307,6 +323,10 @@ func evaluatePreflightWireIdentitySAN(profile resolvedCabinetProfile, profileErr
 		Message: "Web server certificate SAN matches configured wire identity",
 		Detail:  "wire_identity=" + wireHost,
 	}
+}
+
+func runtimeModeRequiresServerCertificates(cfg config.Config) bool {
+	return cfg.G2S.RequireTLS || cfg.G2S.RequireClientCert
 }
 
 func cabinetProfilePlaceholderProblems(profile config.CabinetProfile) []string {
