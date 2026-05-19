@@ -35,6 +35,9 @@
     "web_server_cert_path": "./certs/tls-lab/host.crt",
     "web_server_key_path": "./certs/tls-lab/host.key"
   },
+  "api": {
+    "auth_token": "lab-token-9443"
+  },
   "alerts": {
     "grey_threshold_count_to_buzz": 3,
     "grey_threshold_percent_to_buzz": 15.0
