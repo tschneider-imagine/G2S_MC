@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -34,6 +35,13 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 		ControllerID: "G2S-MC-TEST",
 		Database:     config.Database{Path: "/var/lib/g2s-mute/controller.db"},
 		WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://host-a.example/g2s",
+			ListenerDNSName: "host-a.example",
+			RequiredSANDNS:  []string{"host-a.example"},
+			HostID:          "HOST-TEST-001",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
 		G2S: config.G2S{
 			HostURL:      "http://127.0.0.1:8444/g2s",
 			EndpointPath: "/g2s",
@@ -70,6 +78,12 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 	}
 	if body.Readiness.CertificateSummary["MISSING"] != 1 {
 		t.Fatalf("missing certificate count = %d", body.Readiness.CertificateSummary["MISSING"])
+	}
+	if body.ProfileSource != "file" {
+		t.Fatalf("profile_source = %q, want file", body.ProfileSource)
+	}
+	if body.CabinetProfile.WireHostURL != "https://host-a.example/g2s" {
+		t.Fatalf("wire_host_url = %q", body.CabinetProfile.WireHostURL)
 	}
 }
 
@@ -183,12 +197,12 @@ func TestBuildReadinessStatusPrecedence(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		cfg         config.Config
-		snapshot    engine.Snapshot
+		name         string
+		cfg          config.Config
+		snapshot     engine.Snapshot
 		certificates []model.CertificateInventory
-		wantOverall string
-		wantIssue   string
+		wantOverall  string
+		wantIssue    string
 	}{
 		{
 			name:        "READY_LAB when TLS is disabled without degraded conditions",
@@ -239,7 +253,7 @@ func TestBuildReadinessStatusPrecedence(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			status := buildReadinessStatus(tc.snapshot, tc.cfg, tc.certificates)
+			status := buildReadinessStatus(tc.snapshot, tc.cfg, tc.certificates, "")
 			if status.Overall != tc.wantOverall {
 				t.Fatalf("overall = %q, want %q", status.Overall, tc.wantOverall)
 			}
@@ -253,6 +267,182 @@ func TestBuildReadinessStatusPrecedence(t *testing.T) {
 			}
 			t.Fatalf("issues = %v, want %q", status.Issues, tc.wantIssue)
 		})
+	}
+}
+
+func TestResolveCabinetProfileUsesOverrideAndSourceMetadata(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	fileProfile := config.CabinetProfile{
+		WireHostURL:     "https://file.example/g2s",
+		ListenerDNSName: "file.example",
+		RequiredSANDNS:  []string{"file.example"},
+		HostID:          "HOST-FILE",
+		FirstTestEGMIDs: []string{"EGM-01"},
+	}
+
+	resolved, err := resolveCabinetProfile(ctx, auditStore, fileProfile)
+	if err != nil {
+		t.Fatalf("resolve file profile: %v", err)
+	}
+	if resolved.ProfileSource != "file" {
+		t.Fatalf("profile_source = %q, want file", resolved.ProfileSource)
+	}
+
+	override := config.CabinetProfile{
+		WireHostURL:     "https://override.example/g2s",
+		ListenerDNSName: "override.example",
+		ListenerIP:      "10.20.30.40",
+		RequiredSANDNS:  []string{"override.example"},
+		RequiredSANIPs:  []string{"10.20.30.40"},
+		HostID:          "HOST-OVERRIDE",
+		FirstTestEGMIDs: []string{"EGM-99"},
+	}
+	if err := auditStore.UpsertCabinetProfileOverride(ctx, override, "tester"); err != nil {
+		t.Fatalf("upsert override: %v", err)
+	}
+	resolved, err = resolveCabinetProfile(ctx, auditStore, fileProfile)
+	if err != nil {
+		t.Fatalf("resolve override profile: %v", err)
+	}
+	if resolved.ProfileSource != "override" {
+		t.Fatalf("profile_source = %q, want override", resolved.ProfileSource)
+	}
+	if resolved.Effective.HostID != "HOST-OVERRIDE" {
+		t.Fatalf("effective host_id = %q", resolved.Effective.HostID)
+	}
+	if resolved.ProfileLastUpdatedAt == nil {
+		t.Fatal("expected profile_last_updated_at to be set")
+	}
+	if !resolved.ProfileDiffersFromFile {
+		t.Fatal("expected profile_differs_from_file to be true")
+	}
+}
+
+func TestResolveCabinetProfileInvalidOverrideFallsBackWithWarning(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	fileProfile := config.CabinetProfile{
+		WireHostURL:     "https://file.example/g2s",
+		ListenerDNSName: "file.example",
+		RequiredSANDNS:  []string{"file.example"},
+		HostID:          "HOST-FILE",
+		FirstTestEGMIDs: []string{"EGM-01"},
+	}
+
+	invalidOverride := config.CabinetProfile{
+		WireHostURL:     "https://override.example/g2s",
+		ListenerDNSName: "override.example",
+		ListenerIP:      "not-an-ip",
+		RequiredSANDNS:  []string{"override.example"},
+		HostID:          "HOST-OVERRIDE",
+		FirstTestEGMIDs: []string{"EGM-99"},
+	}
+	if err := auditStore.UpsertCabinetProfileOverride(ctx, invalidOverride, "tester"); err != nil {
+		t.Fatalf("upsert invalid override: %v", err)
+	}
+	resolved, err := resolveCabinetProfile(ctx, auditStore, fileProfile)
+	if err != nil {
+		t.Fatalf("resolve profile: %v", err)
+	}
+	if resolved.Warning == "" {
+		t.Fatal("expected warning for invalid override")
+	}
+	if resolved.Effective.WireHostURL != fileProfile.WireHostURL {
+		t.Fatalf("expected fallback to file profile, got %q", resolved.Effective.WireHostURL)
+	}
+}
+
+func TestCabinetProfileHandlerCRUD(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://file.example/g2s",
+			ListenerDNSName: "file.example",
+			RequiredSANDNS:  []string{"file.example"},
+			HostID:          "HOST-FILE",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+	}
+	handler := cabinetProfileHandler(auditStore, cfg)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/cabinet-profile", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var getBody cabinetProfileResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("decode GET: %v", err)
+	}
+	if getBody.ProfileSource != "file" {
+		t.Fatalf("GET profile_source = %q", getBody.ProfileSource)
+	}
+	if getBody.OverridePresent {
+		t.Fatal("expected no override on GET")
+	}
+
+	override := config.CabinetProfile{
+		WireHostURL:     "https://override.example/g2s",
+		ListenerDNSName: "override.example",
+		ListenerIP:      "10.20.30.40",
+		RequiredSANDNS:  []string{"override.example"},
+		RequiredSANIPs:  []string{"10.20.30.40"},
+		HostID:          "HOST-OVERRIDE",
+		FirstTestEGMIDs: []string{"EGM-99"},
+	}
+	raw, _ := json.Marshal(override)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("X-Operator", "tester")
+	putRec := httptest.NewRecorder()
+	handler(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d: %s", putRec.Code, putRec.Body.String())
+	}
+	var putBody cabinetProfileResponse
+	if err := json.Unmarshal(putRec.Body.Bytes(), &putBody); err != nil {
+		t.Fatalf("decode PUT: %v", err)
+	}
+	if putBody.ProfileSource != "override" {
+		t.Fatalf("PUT profile_source = %q", putBody.ProfileSource)
+	}
+	if !putBody.OverridePresent {
+		t.Fatal("expected override_present on PUT")
+	}
+	if putBody.Effective.HostID != "HOST-OVERRIDE" {
+		t.Fatalf("PUT host_id = %q", putBody.Effective.HostID)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/cabinet-profile", nil)
+	deleteRec := httptest.NewRecorder()
+	handler(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+	var deleteBody cabinetProfileResponse
+	if err := json.Unmarshal(deleteRec.Body.Bytes(), &deleteBody); err != nil {
+		t.Fatalf("decode DELETE: %v", err)
+	}
+	if deleteBody.ProfileSource != "file" || deleteBody.OverridePresent {
+		t.Fatalf("DELETE response unexpected: %+v", deleteBody)
 	}
 }
 

@@ -65,4 +65,17 @@ CREATE TABLE IF NOT EXISTS operator_actions (
     result TEXT NOT NULL,
     remote_addr TEXT
 );
+
+CREATE TABLE IF NOT EXISTS cabinet_profile_overrides (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    wire_host_url TEXT,
+    listener_dns_name TEXT,
+    listener_ip TEXT,
+    required_san_dns_json TEXT,
+    required_san_ips_json TEXT,
+    host_id TEXT,
+    first_test_egm_ids_json TEXT,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
+);
 `

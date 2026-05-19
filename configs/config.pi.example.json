@@ -1,6 +1,21 @@
 {
   "controller_id": "G2S-MC-PI-001",
   "site_name": "Pi Lab",
+  "cabinet_profile": {
+    "wire_host_url": "https://pi-cabinet-host.example:8444/g2s",
+    "listener_dns_name": "pi-cabinet-host.example",
+    "listener_ip": "192.168.50.40",
+    "required_san_dns": [
+      "pi-cabinet-host.example"
+    ],
+    "required_san_ips": [
+      "192.168.50.40"
+    ],
+    "host_id": "HOST-PI-001",
+    "first_test_egm_ids": [
+      "EGM-01"
+    ]
+  },
   "hardware_io": {
     "security_line_gpio_pin": 17,
     "voltage_drop_threshold_ms": 250,

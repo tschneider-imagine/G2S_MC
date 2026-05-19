@@ -3,6 +3,7 @@ package config
 type Config struct {
 	ControllerID    string          `json:"controller_id"`
 	SiteName        string          `json:"site_name"`
+	CabinetProfile  CabinetProfile  `json:"cabinet_profile"`
 	HardwareIO      HardwareIO      `json:"hardware_io"`
 	PowerManagement PowerManagement `json:"power_management"`
 	Crypto          Crypto          `json:"crypto"`
@@ -73,4 +74,14 @@ type EGM struct {
 	CabinetFamily   string `json:"cabinet_family"`
 	GameTitle       string `json:"game_title"`
 	SoftwareVersion string `json:"software_version"`
+}
+
+type CabinetProfile struct {
+	WireHostURL     string   `json:"wire_host_url"`
+	ListenerDNSName string   `json:"listener_dns_name"`
+	ListenerIP      string   `json:"listener_ip"`
+	RequiredSANDNS  []string `json:"required_san_dns"`
+	RequiredSANIPs  []string `json:"required_san_ips"`
+	HostID          string   `json:"host_id"`
+	FirstTestEGMIDs []string `json:"first_test_egm_ids"`
 }

@@ -10,6 +10,23 @@ Related docs:
 - [G2S Pre-Next-Step Readiness Check](./G2S_Pre_NextStep_Readiness_Check.md)
 - [Raspberry Pi Bring-Up](./raspberry-pi.md)
 
+## Profile Persistence And Precedence
+
+- File defaults source of truth: `/etc/g2s-mute/config.json` under `cabinet_profile`.
+- Optional operator override storage: SQLite table `cabinet_profile_overrides` in the configured controller database (`/var/lib/g2s-mute/controller.db` on Pi defaults).
+- Effective runtime profile precedence:
+  1. Start from file `cabinet_profile`.
+  2. Apply DB override fields when present.
+  3. Mark `profile_source` as:
+     - `file`: no override row
+     - `override`: override row has all cabinet profile fields
+     - `mixed`: override row exists but relies on file fallback for one or more fields
+- Runtime visibility:
+  - `/api/status` includes `cabinet_profile`, `profile_source`, `profile_last_updated_at`, and `profile_differs_from_file`.
+  - `/api/cabinet-profile` supports GET/PUT/DELETE for lab/operator override management.
+- Recovery/reset:
+  - `DELETE /api/cabinet-profile` clears override row and reverts effective profile to file values immediately.
+
 ## A) Frozen Identity Fields
 
 | Field | Current Value (Frozen Today) | To Confirm Before First Cabinet Session |
@@ -117,4 +134,3 @@ All items must be **YES** before first real cabinet attempt.
 8. [ ] YES / NO: At least one real EGM ID is confirmed and mapped to test plan.
 9. [ ] YES / NO: Evidence capture method is ready (transcripts, fingerprints, screenshots).
 10. [ ] YES / NO: Site/vendor approval window and rollback/restore plan are in place.
-

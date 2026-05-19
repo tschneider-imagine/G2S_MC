@@ -87,6 +87,26 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Cabinet Identity Profile</h2>
+          <span id="cabinet-profile-source" class="source-pill source-file">file</span>
+        </div>
+        <dl class="kv-list">
+          <div><dt>Wire Host URL</dt><dd id="cabinet-wire-host-url">-</dd></div>
+          <div><dt>Listener DNS</dt><dd id="cabinet-listener-dns">-</dd></div>
+          <div><dt>Listener IP</dt><dd id="cabinet-listener-ip">-</dd></div>
+          <div><dt>Required SAN DNS</dt><dd id="cabinet-required-san-dns">-</dd></div>
+          <div><dt>Required SAN IPs</dt><dd id="cabinet-required-san-ips">-</dd></div>
+          <div><dt>Host ID</dt><dd id="cabinet-host-id">-</dd></div>
+          <div><dt>First Test EGM IDs</dt><dd id="cabinet-first-test-egm-ids">-</dd></div>
+          <div><dt>Profile Updated</dt><dd id="cabinet-profile-updated-at">-</dd></div>
+          <div><dt>Profile Warning</dt><dd id="cabinet-profile-warning">None</dd></div>
+        </dl>
+      </div>
+    </section>
+
     <section class="grid two">
       <div class="panel wide">
         <div class="panel-head panel-head-stack">
@@ -357,6 +377,28 @@ h2 { font-size: 18px; }
   color: white;
   background: var(--grey);
   font-size: 13px;
+}
+
+.source-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-file { background: var(--green); }
+.source-override { background: var(--blue); }
+.source-mixed { background: var(--yellow); }
+
+.cabinet-warning {
+  color: #7b2d2a;
+  background: var(--red-bg);
+  padding: 2px 6px;
+  border-radius: 5px;
 }
 
 .state-healthy,
@@ -836,6 +878,35 @@ function renderEGMTable(status) {
   updateSortLabels();
 }
 
+function renderCabinetProfile(status) {
+  const profile = status?.cabinet_profile || {};
+  const source = status?.profile_source || "file";
+  const differs = !!status?.profile_differs_from_file;
+  const updatedAt = status?.profile_last_updated_at;
+
+  $("cabinet-wire-host-url").textContent = profile.wire_host_url || "-";
+  $("cabinet-listener-dns").textContent = profile.listener_dns_name || "-";
+  $("cabinet-listener-ip").textContent = profile.listener_ip || "-";
+  $("cabinet-required-san-dns").textContent = Array.isArray(profile.required_san_dns) && profile.required_san_dns.length ? profile.required_san_dns.join(", ") : "-";
+  $("cabinet-required-san-ips").textContent = Array.isArray(profile.required_san_ips) && profile.required_san_ips.length ? profile.required_san_ips.join(", ") : "-";
+  $("cabinet-host-id").textContent = profile.host_id || "-";
+  $("cabinet-first-test-egm-ids").textContent = Array.isArray(profile.first_test_egm_ids) && profile.first_test_egm_ids.length ? profile.first_test_egm_ids.join(", ") : "-";
+  $("cabinet-profile-updated-at").textContent = updatedAt ? fmtTime(updatedAt) : "file baseline";
+
+  const sourceBadge = $("cabinet-profile-source");
+  sourceBadge.textContent = source;
+  sourceBadge.className = "source-pill source-" + source;
+
+  const warning = $("cabinet-profile-warning");
+  if (source === "override" && differs) {
+    warning.innerHTML = "<span class=\"cabinet-warning\">Override differs from file baseline</span>";
+  } else if (source === "mixed" && differs) {
+    warning.innerHTML = "<span class=\"cabinet-warning\">Mixed profile includes override values</span>";
+  } else {
+    warning.textContent = "None";
+  }
+}
+
 function renderStatus(snapshot) {
   const status = snapshot?.status || {};
   const readyz = snapshot?.readyz || {};
@@ -859,6 +930,7 @@ function renderStatus(snapshot) {
   $("readiness-warnings").textContent = Array.isArray(readiness.warnings) && readiness.warnings.length ? readiness.warnings.join("; ") : "None";
 
   renderCertificateSummary(readiness.certificate_summary || {});
+  renderCabinetProfile(status);
   renderEGMTable(status);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"

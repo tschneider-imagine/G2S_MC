@@ -3,17 +3,26 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	_ "modernc.org/sqlite"
 )
 
 type SQLiteStore struct {
 	db *sql.DB
+}
+
+type CabinetProfileOverride struct {
+	Profile   config.CabinetProfile
+	UpdatedAt time.Time
+	UpdatedBy string
 }
 
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
@@ -345,9 +354,119 @@ func (s *SQLiteStore) ListCertificateInventory(ctx context.Context) ([]model.Cer
 	return records, rows.Err()
 }
 
+func (s *SQLiteStore) GetCabinetProfileOverride(ctx context.Context) (*CabinetProfileOverride, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT wire_host_url, listener_dns_name, listener_ip, required_san_dns_json,
+		        required_san_ips_json, host_id, first_test_egm_ids_json, updated_at, COALESCE(updated_by, '')
+		   FROM cabinet_profile_overrides
+		  WHERE id = 1`,
+	)
+
+	var wireHostURL string
+	var listenerDNSName string
+	var listenerIP string
+	var requiredSANDNSJSON string
+	var requiredSANIPsJSON string
+	var hostID string
+	var firstTestEGMIDsJSON string
+	var updatedAt time.Time
+	var updatedBy string
+	if err := row.Scan(
+		&wireHostURL,
+		&listenerDNSName,
+		&listenerIP,
+		&requiredSANDNSJSON,
+		&requiredSANIPsJSON,
+		&hostID,
+		&firstTestEGMIDsJSON,
+		&updatedAt,
+		&updatedBy,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	requiredSANDNS := []string{}
+	if err := decodeJSONStringSlice(requiredSANDNSJSON, &requiredSANDNS); err != nil {
+		return nil, fmt.Errorf("decode required_san_dns_json: %w", err)
+	}
+	requiredSANIPs := []string{}
+	if err := decodeJSONStringSlice(requiredSANIPsJSON, &requiredSANIPs); err != nil {
+		return nil, fmt.Errorf("decode required_san_ips_json: %w", err)
+	}
+	firstTestEGMIDs := []string{}
+	if err := decodeJSONStringSlice(firstTestEGMIDsJSON, &firstTestEGMIDs); err != nil {
+		return nil, fmt.Errorf("decode first_test_egm_ids_json: %w", err)
+	}
+
+	return &CabinetProfileOverride{
+		Profile: config.CabinetProfile{
+			WireHostURL:     wireHostURL,
+			ListenerDNSName: listenerDNSName,
+			ListenerIP:      listenerIP,
+			RequiredSANDNS:  requiredSANDNS,
+			RequiredSANIPs:  requiredSANIPs,
+			HostID:          hostID,
+			FirstTestEGMIDs: firstTestEGMIDs,
+		},
+		UpdatedAt: updatedAt,
+		UpdatedBy: updatedBy,
+	}, nil
+}
+
+func (s *SQLiteStore) UpsertCabinetProfileOverride(ctx context.Context, profile config.CabinetProfile, updatedBy string) error {
+	requiredSANDNSJSON, err := encodeJSONStringSlice(profile.RequiredSANDNS)
+	if err != nil {
+		return err
+	}
+	requiredSANIPsJSON, err := encodeJSONStringSlice(profile.RequiredSANIPs)
+	if err != nil {
+		return err
+	}
+	firstTestEGMIDsJSON, err := encodeJSONStringSlice(profile.FirstTestEGMIDs)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`INSERT INTO cabinet_profile_overrides (
+		    id, wire_host_url, listener_dns_name, listener_ip, required_san_dns_json,
+		    required_san_ips_json, host_id, first_test_egm_ids_json, updated_at, updated_by
+		 ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		    wire_host_url = excluded.wire_host_url,
+		    listener_dns_name = excluded.listener_dns_name,
+		    listener_ip = excluded.listener_ip,
+		    required_san_dns_json = excluded.required_san_dns_json,
+		    required_san_ips_json = excluded.required_san_ips_json,
+		    host_id = excluded.host_id,
+		    first_test_egm_ids_json = excluded.first_test_egm_ids_json,
+		    updated_at = CURRENT_TIMESTAMP,
+		    updated_by = excluded.updated_by`,
+		profile.WireHostURL,
+		profile.ListenerDNSName,
+		profile.ListenerIP,
+		requiredSANDNSJSON,
+		requiredSANIPsJSON,
+		profile.HostID,
+		firstTestEGMIDsJSON,
+		updatedBy,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ClearCabinetProfileOverride(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM cabinet_profile_overrides WHERE id = 1`)
+	return err
+}
+
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}
@@ -374,4 +493,20 @@ func normalizeLimit(limit int) int {
 		return 500
 	}
 	return limit
+}
+
+func encodeJSONStringSlice(values []string) (string, error) {
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func decodeJSONStringSlice(raw string, out *[]string) error {
+	if strings.TrimSpace(raw) == "" {
+		*out = []string{}
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), out)
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -73,6 +74,22 @@ func main() {
 	}
 	log.Printf("certificate inventory %s", summarizeCertificateInventory(certInventory))
 
+	profileOnStartup, err := resolveCabinetProfile(ctx, auditStore, cfg.CabinetProfile)
+	if err != nil {
+		log.Fatalf("load cabinet profile override: %v", err)
+	}
+	log.Printf(
+		"cabinet profile source=%s wire_host_url=%s host_id=%s first_test_egm_ids=%d differs_from_file=%t",
+		profileOnStartup.ProfileSource,
+		profileOnStartup.Effective.WireHostURL,
+		profileOnStartup.Effective.HostID,
+		len(profileOnStartup.Effective.FirstTestEGMIDs),
+		profileOnStartup.ProfileDiffersFromFile,
+	)
+	if profileOnStartup.Warning != "" {
+		log.Printf("cabinet profile warning: %s", profileOnStartup.Warning)
+	}
+
 	eng := engine.NewWithAuditSink(cfg.ControllerID, cfg.EGMRoster, auditStore)
 	eng.Start(ctx)
 	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now(), Detail: "startup complete"})
@@ -109,6 +126,7 @@ func main() {
 	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
+	mux.HandleFunc("/api/cabinet-profile", cabinetProfileHandler(auditStore, cfg))
 
 	server := &http.Server{
 		Addr:              cfg.WebUI.BindAddress,
@@ -181,8 +199,12 @@ type runtimeInfo struct {
 
 type applianceStatus struct {
 	engine.Snapshot
-	Runtime   runtimeStatus   `json:"runtime"`
-	Readiness readinessStatus `json:"readiness"`
+	Runtime                runtimeStatus         `json:"runtime"`
+	Readiness              readinessStatus       `json:"readiness"`
+	CabinetProfile         config.CabinetProfile `json:"cabinet_profile"`
+	ProfileSource          string                `json:"profile_source"`
+	ProfileLastUpdatedAt   *time.Time            `json:"profile_last_updated_at,omitempty"`
+	ProfileDiffersFromFile bool                  `json:"profile_differs_from_file"`
 }
 
 type readinessResponse struct {
@@ -214,6 +236,32 @@ type readinessStatus struct {
 	Warnings           []string       `json:"warnings"`
 	EGMCount           int            `json:"egm_count"`
 	CertificateSummary map[string]int `json:"certificate_summary"`
+}
+
+type resolvedCabinetProfile struct {
+	Effective              config.CabinetProfile
+	File                   config.CabinetProfile
+	Override               *store.CabinetProfileOverride
+	ProfileSource          string
+	ProfileLastUpdatedAt   *time.Time
+	ProfileDiffersFromFile bool
+	Warning                string
+}
+
+type cabinetProfileResponse struct {
+	Effective              config.CabinetProfile       `json:"effective"`
+	ProfileSource          string                      `json:"profile_source"`
+	ProfileLastUpdatedAt   *time.Time                  `json:"profile_last_updated_at,omitempty"`
+	ProfileDiffersFromFile bool                        `json:"profile_differs_from_file"`
+	OverridePresent        bool                        `json:"override_present"`
+	Override               *cabinetProfileOverrideView `json:"override,omitempty"`
+	Warning                string                      `json:"warning,omitempty"`
+}
+
+type cabinetProfileOverrideView struct {
+	Profile   config.CabinetProfile `json:"profile"`
+	UpdatedAt time.Time             `json:"updated_at"`
+	UpdatedBy string                `json:"updated_by,omitempty"`
 }
 
 func statusHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo) http.HandlerFunc {
@@ -279,10 +327,18 @@ func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *stor
 	if err != nil {
 		return applianceStatus{}, err
 	}
+	profile, err := resolveCabinetProfile(ctx, store, cfg.CabinetProfile)
+	if err != nil {
+		return applianceStatus{}, err
+	}
 	return applianceStatus{
-		Snapshot:  snapshot,
-		Runtime:   buildRuntimeStatus(cfg, runtime),
-		Readiness: buildReadinessStatus(snapshot, cfg, certificates),
+		Snapshot:               snapshot,
+		Runtime:                buildRuntimeStatus(cfg, runtime),
+		Readiness:              buildReadinessStatus(snapshot, cfg, certificates, profile.Warning),
+		CabinetProfile:         profile.Effective,
+		ProfileSource:          profile.ProfileSource,
+		ProfileLastUpdatedAt:   profile.ProfileLastUpdatedAt,
+		ProfileDiffersFromFile: profile.ProfileDiffersFromFile,
 	}, nil
 }
 
@@ -306,7 +362,7 @@ func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo) runtimeStatus {
 	}
 }
 
-func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certificates []model.CertificateInventory) readinessStatus {
+func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certificates []model.CertificateInventory, profileWarning string) readinessStatus {
 	status := readinessStatus{
 		Overall:            "READY",
 		Issues:             []string{},
@@ -341,6 +397,9 @@ func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certifica
 	}
 	if !cfg.WebUI.RequireLogin {
 		status.Warnings = append(status.Warnings, "web UI login is disabled")
+	}
+	if profileWarning != "" {
+		status.Warnings = append(status.Warnings, profileWarning)
 	}
 	return status
 }
@@ -441,6 +500,187 @@ func certificatesHandler(store *store.SQLiteStore) http.HandlerFunc {
 		records, err := store.ListCertificateInventory(r.Context())
 		writeJSON(w, records, err)
 	}
+}
+
+// cabinetProfileHandler is intentionally lab-only until auth controls are added.
+func cabinetProfileHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			profile, err := resolveCabinetProfile(r.Context(), store, cfg.CabinetProfile)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildCabinetProfileResponse(profile), nil)
+		case http.MethodPut:
+			var profile config.CabinetProfile
+			if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			if err := config.ValidateCabinetProfile(profile); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			updatedBy := strings.TrimSpace(r.Header.Get("X-Operator"))
+			if updatedBy == "" {
+				updatedBy = "lab-api"
+			}
+			if err := store.UpsertCabinetProfileOverride(r.Context(), profile, updatedBy); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			resolved, err := resolveCabinetProfile(r.Context(), store, cfg.CabinetProfile)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildCabinetProfileResponse(resolved), nil)
+		case http.MethodDelete:
+			if err := store.ClearCabinetProfileOverride(r.Context()); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			resolved, err := resolveCabinetProfile(r.Context(), store, cfg.CabinetProfile)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildCabinetProfileResponse(resolved), nil)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func buildCabinetProfileResponse(profile resolvedCabinetProfile) cabinetProfileResponse {
+	response := cabinetProfileResponse{
+		Effective:              profile.Effective,
+		ProfileSource:          profile.ProfileSource,
+		ProfileLastUpdatedAt:   profile.ProfileLastUpdatedAt,
+		ProfileDiffersFromFile: profile.ProfileDiffersFromFile,
+		OverridePresent:        profile.Override != nil,
+		Warning:                profile.Warning,
+	}
+	if profile.Override != nil {
+		response.Override = &cabinetProfileOverrideView{
+			Profile:   profile.Override.Profile,
+			UpdatedAt: profile.Override.UpdatedAt,
+			UpdatedBy: profile.Override.UpdatedBy,
+		}
+	}
+	return response
+}
+
+func resolveCabinetProfile(ctx context.Context, store *store.SQLiteStore, fileProfile config.CabinetProfile) (resolvedCabinetProfile, error) {
+	resolved := resolvedCabinetProfile{
+		Effective:              fileProfile,
+		File:                   fileProfile,
+		ProfileSource:          "file",
+		ProfileDiffersFromFile: false,
+	}
+
+	override, err := store.GetCabinetProfileOverride(ctx)
+	if err != nil {
+		return resolved, err
+	}
+	if override == nil {
+		return resolved, nil
+	}
+
+	merged, usage := mergeCabinetProfile(fileProfile, override.Profile)
+	resolved.Override = override
+	resolved.Effective = merged
+	resolved.ProfileLastUpdatedAt = &override.UpdatedAt
+	resolved.ProfileDiffersFromFile = !cabinetProfilesEqual(merged, fileProfile)
+	if usage.allFieldsSet {
+		resolved.ProfileSource = "override"
+	} else {
+		resolved.ProfileSource = "mixed"
+	}
+
+	if err := config.ValidateCabinetProfile(merged); err != nil {
+		resolved.Warning = "cabinet profile override invalid: " + err.Error() + "; using file defaults"
+		resolved.Effective = fileProfile
+		resolved.ProfileDiffersFromFile = false
+		resolved.ProfileSource = "mixed"
+	}
+
+	return resolved, nil
+}
+
+type cabinetProfileOverrideUsage struct {
+	allFieldsSet bool
+}
+
+func mergeCabinetProfile(fileProfile config.CabinetProfile, overrideProfile config.CabinetProfile) (config.CabinetProfile, cabinetProfileOverrideUsage) {
+	merged := fileProfile
+	fieldsSet := 0
+	totalFields := 7
+
+	if value := strings.TrimSpace(overrideProfile.WireHostURL); value != "" {
+		merged.WireHostURL = value
+		fieldsSet++
+	}
+	if value := strings.TrimSpace(overrideProfile.ListenerDNSName); value != "" {
+		merged.ListenerDNSName = value
+		fieldsSet++
+	}
+	if value := strings.TrimSpace(overrideProfile.ListenerIP); value != "" {
+		merged.ListenerIP = value
+		fieldsSet++
+	}
+	if len(overrideProfile.RequiredSANDNS) > 0 {
+		merged.RequiredSANDNS = append([]string{}, overrideProfile.RequiredSANDNS...)
+		fieldsSet++
+	}
+	if len(overrideProfile.RequiredSANIPs) > 0 {
+		merged.RequiredSANIPs = append([]string{}, overrideProfile.RequiredSANIPs...)
+		fieldsSet++
+	}
+	if value := strings.TrimSpace(overrideProfile.HostID); value != "" {
+		merged.HostID = value
+		fieldsSet++
+	}
+	if len(overrideProfile.FirstTestEGMIDs) > 0 {
+		merged.FirstTestEGMIDs = append([]string{}, overrideProfile.FirstTestEGMIDs...)
+		fieldsSet++
+	}
+
+	return merged, cabinetProfileOverrideUsage{
+		allFieldsSet: fieldsSet == totalFields,
+	}
+}
+
+func cabinetProfilesEqual(a config.CabinetProfile, b config.CabinetProfile) bool {
+	if a.WireHostURL != b.WireHostURL ||
+		a.ListenerDNSName != b.ListenerDNSName ||
+		a.ListenerIP != b.ListenerIP ||
+		a.HostID != b.HostID {
+		return false
+	}
+	if len(a.RequiredSANDNS) != len(b.RequiredSANDNS) ||
+		len(a.RequiredSANIPs) != len(b.RequiredSANIPs) ||
+		len(a.FirstTestEGMIDs) != len(b.FirstTestEGMIDs) {
+		return false
+	}
+	for i := range a.RequiredSANDNS {
+		if a.RequiredSANDNS[i] != b.RequiredSANDNS[i] {
+			return false
+		}
+	}
+	for i := range a.RequiredSANIPs {
+		if a.RequiredSANIPs[i] != b.RequiredSANIPs[i] {
+			return false
+		}
+	}
+	for i := range a.FirstTestEGMIDs {
+		if a.FirstTestEGMIDs[i] != b.FirstTestEGMIDs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, value any, err error) {

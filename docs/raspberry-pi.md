@@ -112,6 +112,32 @@ sudo chown -R g2s-mute:g2s-mute /etc/g2s-mute/certs
 
 Then edit `/etc/g2s-mute/config.json` to use the certificate paths from `configs/config.tls.example.json`, update `g2s.host_url` to the real Pi DNS name or IP, and ensure that value exists in the host certificate SAN before expecting real cabinet TLS to work.
 
+## Cabinet Profile Persistence
+
+Cabinet-facing identity values are now explicit in `cabinet_profile` and have two persistence layers:
+
+- file defaults in `/etc/g2s-mute/config.json`
+- optional DB override row in `cabinet_profile_overrides` (inside the configured SQLite database)
+
+Effective runtime behavior:
+
+- file profile only: `profile_source=file`
+- full override row: `profile_source=override`
+- partial override row with file fallback: `profile_source=mixed`
+
+Runtime endpoints:
+
+- `GET /api/status` includes `cabinet_profile`, `profile_source`, `profile_last_updated_at`, and `profile_differs_from_file`
+- `GET /api/cabinet-profile` returns effective profile and override metadata
+- `PUT /api/cabinet-profile` writes/updates override values (lab-only endpoint until auth is added)
+- `DELETE /api/cabinet-profile` clears override and reverts to file values
+
+Reset/recovery path:
+
+1. Confirm file defaults in `/etc/g2s-mute/config.json`
+2. Clear override via `DELETE /api/cabinet-profile`
+3. Verify `profile_source=file` in `/api/status`
+
 ## Next Hardware Checks
 
 Before enabling real GPIO behavior, confirm:

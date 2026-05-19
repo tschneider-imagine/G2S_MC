@@ -1,6 +1,22 @@
 {
   "controller_id": "G2S-MC-LAB-001",
   "site_name": "Lab",
+  "cabinet_profile": {
+    "wire_host_url": "https://cabinet-host.example:8444/g2s",
+    "listener_dns_name": "cabinet-host.example",
+    "listener_ip": "10.10.20.50",
+    "required_san_dns": [
+      "cabinet-host.example"
+    ],
+    "required_san_ips": [
+      "10.10.20.50"
+    ],
+    "host_id": "HOST-CAB-001",
+    "first_test_egm_ids": [
+      "EGM-01",
+      "EGM-02"
+    ]
+  },
   "hardware_io": {
     "security_line_gpio_pin": 17,
     "voltage_drop_threshold_ms": 250,

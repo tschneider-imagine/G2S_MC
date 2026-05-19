@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -44,6 +46,7 @@ func (c Config) Validate() error {
 	requireText(&problems, "g2s.host_id", c.G2S.HostID)
 	requireText(&problems, "g2s.host_url", c.G2S.HostURL)
 	requireText(&problems, "g2s.endpoint_path", c.G2S.EndpointPath)
+	problems = append(problems, validateCabinetProfile(c.CabinetProfile)...)
 	if c.G2S.RequireTLS {
 		requireText(&problems, "crypto.web_server_cert_path", c.Crypto.WebServerCertPath)
 		requireText(&problems, "crypto.web_server_key_path", c.Crypto.WebServerKeyPath)
@@ -86,4 +89,63 @@ func requireText(problems *[]string, field string, value string) {
 	if strings.TrimSpace(value) == "" {
 		*problems = append(*problems, field+" is required")
 	}
+}
+
+func ValidateCabinetProfile(profile CabinetProfile) error {
+	problems := validateCabinetProfile(profile)
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid cabinet_profile: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func validateCabinetProfile(profile CabinetProfile) []string {
+	problems := []string{}
+
+	requireText(&problems, "cabinet_profile.wire_host_url", profile.WireHostURL)
+	if strings.TrimSpace(profile.WireHostURL) != "" {
+		u, err := url.ParseRequestURI(profile.WireHostURL)
+		if err != nil {
+			problems = append(problems, "cabinet_profile.wire_host_url must be a valid URL")
+		} else if u.Scheme != "http" && u.Scheme != "https" {
+			problems = append(problems, "cabinet_profile.wire_host_url must use http or https")
+		}
+	}
+
+	if strings.TrimSpace(profile.ListenerDNSName) == "" && strings.TrimSpace(profile.ListenerIP) == "" {
+		problems = append(problems, "cabinet_profile.listener_dns_name or cabinet_profile.listener_ip is required")
+	}
+	if strings.TrimSpace(profile.ListenerIP) != "" && net.ParseIP(strings.TrimSpace(profile.ListenerIP)) == nil {
+		problems = append(problems, "cabinet_profile.listener_ip must be a valid IP address")
+	}
+
+	if len(profile.RequiredSANDNS) == 0 && len(profile.RequiredSANIPs) == 0 {
+		problems = append(problems, "cabinet_profile.required_san_dns or cabinet_profile.required_san_ips must contain at least one entry")
+	}
+	for i, value := range profile.RequiredSANDNS {
+		if strings.TrimSpace(value) == "" {
+			problems = append(problems, fmt.Sprintf("cabinet_profile.required_san_dns[%d] is required", i))
+		}
+	}
+	for i, value := range profile.RequiredSANIPs {
+		if strings.TrimSpace(value) == "" {
+			problems = append(problems, fmt.Sprintf("cabinet_profile.required_san_ips[%d] is required", i))
+			continue
+		}
+		if net.ParseIP(strings.TrimSpace(value)) == nil {
+			problems = append(problems, fmt.Sprintf("cabinet_profile.required_san_ips[%d] must be a valid IP address", i))
+		}
+	}
+
+	requireText(&problems, "cabinet_profile.host_id", profile.HostID)
+	if len(profile.FirstTestEGMIDs) == 0 {
+		problems = append(problems, "cabinet_profile.first_test_egm_ids must contain at least one EGM ID")
+	}
+	for i, value := range profile.FirstTestEGMIDs {
+		if strings.TrimSpace(value) == "" {
+			problems = append(problems, fmt.Sprintf("cabinet_profile.first_test_egm_ids[%d] is required", i))
+		}
+	}
+
+	return problems
 }
