@@ -64,6 +64,7 @@ def main() -> int:
         config = json.load(handle)
 
     config.setdefault("api", {})["auth_token"] = token
+    config.setdefault("web_ui", {})["allow_trusted_private_network_mutations"] = True
     config["cabinet_profile"] = {
         "wire_host_url": require_text("wire_host_url", args.wire_host_url),
         "listener_dns_name": args.listener_dns_name.strip(),

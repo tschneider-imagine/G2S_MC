@@ -68,7 +68,7 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 		}
 	}
 
-	status, statusErr := computeApplianceStatus(ctx, eng, store, cfg, runtime)
+	status, statusErr := computeApplianceStatus(ctx, eng, store, cfg, runtime, nil)
 	profile, profileErr := resolveCabinetProfile(ctx, store, cfg.CabinetProfile)
 	certificates, certificatesErr := store.ListCertificateInventory(ctx)
 

@@ -54,7 +54,8 @@
     "bind_address": "127.0.0.1:9443",
     "require_login": false,
     "require_client_cert_for_admin": false,
-    "allow_private_key_export": false
+    "allow_private_key_export": false,
+    "allow_trusted_private_network_mutations": true
   },
   "g2s": {
     "host_id": "HOST-LOCAL-9443",

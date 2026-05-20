@@ -154,10 +154,10 @@ const dashboardHTML = `<!doctype html>
             <label>Required SAN DNS<input id="setup-required-san-dns" name="required_san_dns" autocomplete="off"></label>
             <label>Required SAN IPs<input id="setup-required-san-ips" name="required_san_ips" autocomplete="off"></label>
             <label>First Test EGM IDs<input id="setup-first-test-egm-ids" name="first_test_egm_ids" autocomplete="off"></label>
-            <label>API Token Required for Save/Clear<input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
+            <label><span id="setup-api-token-label">API Token Required for Save/Clear</span><input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
           </div>
           <div class="token-help">
-            <span>Enter the appliance API token to save or clear cabinet setup overrides.</span>
+            <span id="setup-token-help-text">Enter the appliance API token to save or clear cabinet setup overrides.</span>
             <button id="setup-copy-token-button" type="button" class="secondary-button" disabled>Copy Entered Token</button>
           </div>
           <div class="setup-details">
@@ -256,10 +256,10 @@ const dashboardHTML = `<!doctype html>
                 <option value="web_server_cert">Web Server Certificate + Key</option>
               </select>
             </label>
-            <label>API Token (required for import/export key)<input id="cert-api-token" name="api_token" type="password" autocomplete="off"></label>
+            <label><span id="cert-api-token-label">API Token (required for import/export key)</span><input id="cert-api-token" name="api_token" type="password" autocomplete="off"></label>
           </div>
           <div class="token-help">
-            <span>Use API token for import and private-key export actions.</span>
+            <span id="cert-token-help-text">Use API token for import and private-key export actions.</span>
             <button id="cert-copy-token-button" type="button" class="secondary-button" disabled>Copy Entered Token</button>
           </div>
           <div id="cert-role-summary" class="cert-role-summary">Select a role to review support and status.</div>
@@ -1071,6 +1071,18 @@ const clientState = {
   certSelectedRole: "g2s_ca_cert"
 };
 
+function currentRuntime() {
+  return clientState.displaySnapshot?.status?.runtime || clientState.lastGoodStatus?.status?.runtime || {};
+}
+
+function setupActionsRequireToken() {
+  return currentRuntime().api_mutation_auth_required === true;
+}
+
+function trustedMutationBypassActive() {
+  return currentRuntime().trusted_mutation_bypass_active === true;
+}
+
 function emptySnapshot() {
   return {
     status: null,
@@ -1279,9 +1291,10 @@ function renderFirstCabinetSession(snapshot) {
   const profileSource = profilePayload?.profile_source || status.profile_source || "-";
   const certCounts = summarizeSessionCertCounts(snapshot?.certificates, runtime);
   const firstEGMIDs = Array.isArray(profile.first_test_egm_ids) ? profile.first_test_egm_ids : [];
+  const trustedBypass = runtime.trusted_mutation_bypass_active === true;
   const authRequired = runtime.api_mutation_auth_required === true;
   const authDisabled = runtime.api_mutation_auth_required === false;
-  const authState = authRequired ? "REQUIRED" : (authDisabled ? "DISABLED" : "UNKNOWN");
+  const authState = trustedBypass ? "TRUSTED_PRIVATE_NETWORK" : (authRequired ? "REQUIRED" : (authDisabled ? "DISABLED" : "UNKNOWN"));
   const readyzState = readyz ? (readyz.overall || (readyz.ok ? "READY" : "DEGRADED")) : "UNAVAILABLE";
   const preflightState = preflight ? (preflight.overall || "UNKNOWN") : "UNAVAILABLE";
   const lastCheckedValue = preflight?.timestamp || (clientState.lastGoodAt ? new Date(clientState.lastGoodAt).toISOString() : "");
@@ -1515,14 +1528,19 @@ function renderCabinetSetupValidation() {
   const result = validateCabinetSetupProfile(profile);
   const host = result.parsedURL ? result.parsedURL.hostname : "-";
   const tokenPresent = !!getSetupToken();
+  const tokenRequired = setupActionsRequireToken();
   const sanValues = []
     .concat(profile.required_san_dns.map((item) => "DNS:" + item))
     .concat(profile.required_san_ips.map((item) => "IP:" + item));
   $("setup-san-summary").textContent = "wire host " + host + "; " + (sanValues.length ? sanValues.join(", ") : "no SAN values");
-  $("setup-validation-summary").textContent = result.problems.length ? result.problems.length + " issue(s)" : tokenPresent ? "Ready to save" : "Token required to save";
+  $("setup-api-token-label").textContent = tokenRequired ? "API Token Required for Save/Clear" : "API Token Optional for Save/Clear";
+  $("setup-token-help-text").textContent = tokenRequired
+    ? "Enter the appliance API token to save or clear cabinet setup overrides."
+    : "Trusted private network bypass is active for this browser; token is optional for setup actions.";
+  $("setup-validation-summary").textContent = result.problems.length ? result.problems.length + " issue(s)" : (tokenPresent || !tokenRequired) ? "Ready to save" : "Token required to save";
   $("setup-validation-list").innerHTML = result.problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
-  $("setup-save-button").disabled = result.problems.length > 0 || !tokenPresent;
-  $("setup-reset-button").disabled = !tokenPresent;
+  $("setup-save-button").disabled = result.problems.length > 0 || (tokenRequired && !tokenPresent);
+  $("setup-reset-button").disabled = tokenRequired && !tokenPresent;
   $("setup-copy-token-button").disabled = !tokenPresent;
   return result;
 }
@@ -1582,7 +1600,7 @@ async function reloadCabinetProfileForm() {
 async function saveCabinetProfileOverride(event) {
   event.preventDefault();
   const validation = renderCabinetSetupValidation();
-  if (!getSetupToken()) {
+  if (setupActionsRequireToken() && !getSetupToken()) {
     setSetupState("blocked", "Enter an API token before saving.");
     return;
   }
@@ -1612,7 +1630,7 @@ async function saveCabinetProfileOverride(event) {
 }
 
 async function clearCabinetProfileOverride() {
-  if (!getSetupToken()) {
+  if (setupActionsRequireToken() && !getSetupToken()) {
     setSetupState("blocked", "Enter an API token before clearing.");
     return;
   }
@@ -1704,6 +1722,7 @@ function renderCertificateManager(snapshot) {
   const configured = certRoleConfigured(record);
   const details = certRoleDetails(role);
   const tokenPresent = !!getCertToken();
+  const tokenRequired = runtime.api_mutation_auth_required === true;
   const required = certRequired(runtime, role);
   const status = parseCertState(record?.status || "UNKNOWN");
   const severity = record ? certSeverity(record, runtime) : (required ? "blocking" : "lab");
@@ -1712,11 +1731,15 @@ function renderCertificateManager(snapshot) {
   const stateDetail = record ? status + " (" + impact + ")" : "no inventory record available";
   const privateKeyText = details.requiresKey ? "Role supports private key import/export." : "Role is certificate-only.";
   $("cert-role-summary").textContent = roleDisplayName(role) + ": " + support + "; state " + stateDetail + "; " + privateKeyText;
+  $("cert-api-token-label").textContent = tokenRequired ? "API Token (required for import/export key)" : "API Token (optional on trusted private network)";
+  $("cert-token-help-text").textContent = tokenRequired
+    ? "Use API token for import and private-key export actions."
+    : "Trusted private network bypass is active for this browser; token is optional for import and private-key export.";
 
   setCertKeyFieldVisible(details.requiresKey);
-  $("cert-import-button").disabled = !tokenPresent || !configured;
+  $("cert-import-button").disabled = !configured || (tokenRequired && !tokenPresent);
   $("cert-export-cert-button").disabled = !configured;
-  $("cert-export-key-button").disabled = !details.requiresKey || !tokenPresent || !configured;
+  $("cert-export-key-button").disabled = !details.requiresKey || !configured || (tokenRequired && !tokenPresent);
   $("cert-copy-token-button").disabled = !tokenPresent;
 }
 
@@ -1765,7 +1788,7 @@ async function exportCertificateMaterial(role, includeKey) {
       setCertManagerState("blocked", roleDisplayName(role) + " does not support private key export.");
       return;
     }
-    if (!getCertToken()) {
+    if (setupActionsRequireToken() && !getCertToken()) {
       setCertManagerState("blocked", "Enter an API token before exporting private key material.");
       return;
     }
@@ -1806,7 +1829,7 @@ async function importCertificateMaterial(event) {
   event.preventDefault();
   const payload = certImportPayload();
   const details = certRoleDetails(payload.role);
-  if (!getCertToken()) {
+  if (setupActionsRequireToken() && !getCertToken()) {
     setCertManagerState("blocked", "Enter an API token before importing certificate material.");
     return;
   }

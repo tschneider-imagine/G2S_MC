@@ -103,6 +103,32 @@ func TestExampleConfigsLoad(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsTrustedPrivateNetworkMutationsWhenLoginRequired(t *testing.T) {
+	cfg := Config{
+		ControllerID: "controller",
+		Database:     Database{Path: "controller.db"},
+		WebUI: WebUI{
+			BindAddress:                         "127.0.0.1:8444",
+			RequireLogin:                        true,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+		G2S: G2S{HostID: "HOST-1", HostURL: "http://127.0.0.1:8444/g2s", EndpointPath: "/g2s"},
+		CabinetProfile: CabinetProfile{
+			WireHostURL:     "https://host.example/g2s",
+			ListenerDNSName: "host.example",
+			RequiredSANDNS:  []string{"host.example"},
+			HostID:          "HOST-1",
+			FirstTestEGMIDs: []string{"EGM-1"},
+		},
+		HardwareIO: HardwareIO{VoltageDropThresholdMS: 250},
+		EGMRoster:  []EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected trusted private network mutations with login required to fail validation")
+	}
+}
+
 func TestValidateCabinetProfileRules(t *testing.T) {
 	valid := CabinetProfile{
 		WireHostURL:     "https://cabinet-host.example/g2s",

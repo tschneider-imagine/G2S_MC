@@ -251,6 +251,36 @@ func TestCertificateImportHandlerLoopbackRestriction(t *testing.T) {
 	}
 }
 
+func TestCertificateImportHandlerAllowsTrustedPrivateNetworkWithoutToken(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		WebUI: config.WebUI{
+			RequireLogin:                        false,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+		Crypto: config.Crypto{
+			G2SClientCertPath: filepath.Join(t.TempDir(), "client.crt"),
+			G2SClientKeyPath:  filepath.Join(t.TempDir(), "client.key"),
+		},
+	}
+	handler := certificateImportHandler(auditStore, cfg)
+	request := httptest.NewRequest(http.MethodPost, "/api/certificates/import", bytes.NewBufferString(`{}`))
+	request.RemoteAddr = "192.168.10.55:4444"
+	response := httptest.NewRecorder()
+	handler(response, request)
+
+	if response.Code == http.StatusUnauthorized {
+		t.Fatalf("expected trusted private network request to bypass token auth, got %d", response.Code)
+	}
+}
+
 func TestCertificateExportHandlerIncludeKeyGuardAndSuccess(t *testing.T) {
 	tempDir := t.TempDir()
 	certificatePEM, privateKeyPEM := generateTestCertificateAndKey(t, "export-test.local", 90*24*time.Hour)
@@ -342,6 +372,33 @@ func TestCertificateExportHandlerLoopbackRestriction(t *testing.T) {
 	handler(response, request)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+}
+
+func TestCertificateExportHandlerAllowsTrustedPrivateNetwork(t *testing.T) {
+	tempDir := t.TempDir()
+	certificatePEM, _ := generateTestCertificateAndKey(t, "export-private.local", 90*24*time.Hour)
+	caPath := filepath.Join(tempDir, "ca.crt")
+	if err := os.WriteFile(caPath, []byte(certificatePEM), 0o644); err != nil {
+		t.Fatalf("write ca cert: %v", err)
+	}
+
+	cfg := config.Config{
+		WebUI: config.WebUI{
+			RequireLogin:                        false,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+		Crypto: config.Crypto{
+			G2SCAPath: caPath,
+		},
+	}
+	handler := certificateExportHandler(cfg)
+	request := httptest.NewRequest(http.MethodGet, "/api/certificates/export?role=g2s_ca_cert", nil)
+	request.RemoteAddr = "192.168.10.56:4040"
+	response := httptest.NewRecorder()
+	handler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
 	}
 }
 

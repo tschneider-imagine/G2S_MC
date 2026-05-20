@@ -58,10 +58,11 @@ type Database struct {
 }
 
 type WebUI struct {
-	BindAddress               string `json:"bind_address"`
-	RequireLogin              bool   `json:"require_login"`
-	RequireClientCertForAdmin bool   `json:"require_client_cert_for_admin"`
-	AllowPrivateKeyExport     bool   `json:"allow_private_key_export"`
+	BindAddress                         string `json:"bind_address"`
+	RequireLogin                        bool   `json:"require_login"`
+	RequireClientCertForAdmin           bool   `json:"require_client_cert_for_admin"`
+	AllowPrivateKeyExport               bool   `json:"allow_private_key_export"`
+	AllowTrustedPrivateNetworkMutations bool   `json:"allow_trusted_private_network_mutations"`
 }
 
 type G2S struct {

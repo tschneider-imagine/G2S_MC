@@ -132,7 +132,7 @@ func main() {
 		"/api/cabinet-profile",
 		requireMutationAuthForMethods(
 			cabinetProfileHandler(auditStore, cfg),
-			cfg.API.AuthToken,
+			cfg,
 			http.MethodPut,
 			http.MethodDelete,
 		),
@@ -228,22 +228,23 @@ type readinessResponse struct {
 }
 
 type runtimeStatus struct {
-	StartedAt               time.Time `json:"started_at"`
-	UptimeSeconds           int64     `json:"uptime_seconds"`
-	ConfigPath              string    `json:"config_path"`
-	DatabasePath            string    `json:"database_path"`
-	BindAddress             string    `json:"bind_address"`
-	DashboardPath           string    `json:"dashboard_path"`
-	HealthPath              string    `json:"health_path"`
-	G2SEndpointPath         string    `json:"g2s_endpoint_path"`
-	G2SHostURL              string    `json:"g2s_host_url"`
-	TLSRequired             bool      `json:"tls_required"`
-	ClientCertRequired      bool      `json:"client_cert_required"`
-	WebLoginRequired        bool      `json:"web_login_required"`
-	AdminClientCertRequired bool      `json:"admin_client_cert_required"`
-	APIMutationAuthRequired bool      `json:"api_mutation_auth_required"`
-	InputMode               string    `json:"input_mode"`
-	SimulatedTrigger        bool      `json:"simulated_trigger"`
+	StartedAt                   time.Time `json:"started_at"`
+	UptimeSeconds               int64     `json:"uptime_seconds"`
+	ConfigPath                  string    `json:"config_path"`
+	DatabasePath                string    `json:"database_path"`
+	BindAddress                 string    `json:"bind_address"`
+	DashboardPath               string    `json:"dashboard_path"`
+	HealthPath                  string    `json:"health_path"`
+	G2SEndpointPath             string    `json:"g2s_endpoint_path"`
+	G2SHostURL                  string    `json:"g2s_host_url"`
+	TLSRequired                 bool      `json:"tls_required"`
+	ClientCertRequired          bool      `json:"client_cert_required"`
+	WebLoginRequired            bool      `json:"web_login_required"`
+	AdminClientCertRequired     bool      `json:"admin_client_cert_required"`
+	APIMutationAuthRequired     bool      `json:"api_mutation_auth_required"`
+	TrustedMutationBypassActive bool      `json:"trusted_mutation_bypass_active"`
+	InputMode                   string    `json:"input_mode"`
+	SimulatedTrigger            bool      `json:"simulated_trigger"`
 }
 
 type readinessStatus struct {
@@ -286,7 +287,7 @@ func statusHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.Conf
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		status, err := computeApplianceStatus(r.Context(), eng, store, cfg, runtime)
+		status, err := computeApplianceStatus(r.Context(), eng, store, cfg, runtime, r)
 		if err != nil {
 			writeJSON(w, nil, err)
 			return
@@ -304,7 +305,7 @@ func readinessHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.C
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		status, err := computeApplianceStatus(r.Context(), eng, store, cfg, runtime)
+		status, err := computeApplianceStatus(r.Context(), eng, store, cfg, runtime, r)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -337,7 +338,7 @@ func readinessHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.C
 	}
 }
 
-func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo) (applianceStatus, error) {
+func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo, request *http.Request) (applianceStatus, error) {
 	snapshot := eng.Snapshot()
 	certificates, err := store.ListCertificateInventory(ctx)
 	if err != nil {
@@ -349,7 +350,7 @@ func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *stor
 	}
 	return applianceStatus{
 		Snapshot:               snapshot,
-		Runtime:                buildRuntimeStatus(cfg, runtime),
+		Runtime:                buildRuntimeStatus(cfg, runtime, request),
 		Readiness:              buildReadinessStatus(snapshot, cfg, certificates, profile.Warning),
 		CabinetProfile:         profile.Effective,
 		ProfileSource:          profile.ProfileSource,
@@ -358,24 +359,27 @@ func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *stor
 	}, nil
 }
 
-func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo) runtimeStatus {
+func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo, request *http.Request) runtimeStatus {
+	authRequired := requestRequiresMutationAuth(request, cfg)
+	trustedBypass := trustedPrivateNetworkMutationBypassAllowed(request, cfg)
 	return runtimeStatus{
-		StartedAt:               runtime.StartedAt,
-		UptimeSeconds:           int64(time.Since(runtime.StartedAt).Seconds()),
-		ConfigPath:              runtime.ConfigPath,
-		DatabasePath:            cfg.Database.Path,
-		BindAddress:             cfg.WebUI.BindAddress,
-		DashboardPath:           "/dashboard",
-		HealthPath:              "/healthz",
-		G2SEndpointPath:         cfg.G2S.EndpointPath,
-		G2SHostURL:              cfg.G2S.HostURL,
-		TLSRequired:             cfg.G2S.RequireTLS,
-		ClientCertRequired:      cfg.G2S.RequireClientCert,
-		WebLoginRequired:        cfg.WebUI.RequireLogin,
-		AdminClientCertRequired: cfg.WebUI.RequireClientCertForAdmin,
-		APIMutationAuthRequired: strings.TrimSpace(cfg.API.AuthToken) != "",
-		InputMode:               "SIMULATED_SOFTWARE_ONLY",
-		SimulatedTrigger:        runtime.SimulatedTrigger,
+		StartedAt:                   runtime.StartedAt,
+		UptimeSeconds:               int64(time.Since(runtime.StartedAt).Seconds()),
+		ConfigPath:                  runtime.ConfigPath,
+		DatabasePath:                cfg.Database.Path,
+		BindAddress:                 cfg.WebUI.BindAddress,
+		DashboardPath:               "/dashboard",
+		HealthPath:                  "/healthz",
+		G2SEndpointPath:             cfg.G2S.EndpointPath,
+		G2SHostURL:                  cfg.G2S.HostURL,
+		TLSRequired:                 cfg.G2S.RequireTLS,
+		ClientCertRequired:          cfg.G2S.RequireClientCert,
+		WebLoginRequired:            cfg.WebUI.RequireLogin,
+		AdminClientCertRequired:     cfg.WebUI.RequireClientCertForAdmin,
+		APIMutationAuthRequired:     authRequired,
+		TrustedMutationBypassActive: trustedBypass,
+		InputMode:                   "SIMULATED_SOFTWARE_ONLY",
+		SimulatedTrigger:            runtime.SimulatedTrigger,
 	}
 }
 
@@ -414,6 +418,9 @@ func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certifica
 	}
 	if !cfg.WebUI.RequireLogin {
 		status.Warnings = append(status.Warnings, "web UI login is disabled")
+	}
+	if cfg.WebUI.AllowTrustedPrivateNetworkMutations {
+		status.Warnings = append(status.Warnings, "trusted private network mutation bypass is enabled for lab mode")
 	}
 	if profileWarning != "" {
 		status.Warnings = append(status.Warnings, profileWarning)

@@ -67,6 +67,9 @@ func (c Config) Validate() error {
 	if c.Alerts.GreyThresholdPercentToBuzz < 0 || c.Alerts.GreyThresholdPercentToBuzz > 100 {
 		problems = append(problems, "alerts.grey_threshold_percent_to_buzz must be between 0 and 100")
 	}
+	if c.WebUI.AllowTrustedPrivateNetworkMutations && c.WebUI.RequireLogin {
+		problems = append(problems, "web_ui.allow_trusted_private_network_mutations requires web_ui.require_login=false")
+	}
 	if len(c.EGMRoster) == 0 {
 		problems = append(problems, "egm_roster must contain at least one EGM")
 	}

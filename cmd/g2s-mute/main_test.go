@@ -106,9 +106,38 @@ func TestBuildRuntimeStatusIncludesAPIMutationAuthFlag(t *testing.T) {
 			AuthToken: "lab-secret",
 		},
 	}
-	status := buildRuntimeStatus(cfg, runtimeInfo{ConfigPath: "configs/config.example.json", StartedAt: time.Now()})
+	status := buildRuntimeStatus(cfg, runtimeInfo{ConfigPath: "configs/config.example.json", StartedAt: time.Now()}, nil)
 	if !status.APIMutationAuthRequired {
 		t.Fatalf("api_mutation_auth_required = %t, want true", status.APIMutationAuthRequired)
+	}
+}
+
+func TestBuildRuntimeStatusTrustedPrivateNetworkBypassForRequest(t *testing.T) {
+	cfg := config.Config{
+		Database: config.Database{Path: "/tmp/controller.db"},
+		WebUI: config.WebUI{
+			BindAddress:                         "0.0.0.0:8444",
+			RequireLogin:                        false,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+		G2S: config.G2S{
+			HostURL:           "http://127.0.0.1:8444/g2s",
+			EndpointPath:      "/g2s",
+			RequireTLS:        false,
+			RequireClientCert: false,
+		},
+		API: config.API{
+			AuthToken: "lab-secret",
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.RemoteAddr = "192.168.10.50:5151"
+	status := buildRuntimeStatus(cfg, runtimeInfo{ConfigPath: "configs/config.pi.example.json", StartedAt: time.Now()}, req)
+	if status.APIMutationAuthRequired {
+		t.Fatalf("api_mutation_auth_required = %t, want false for trusted private network request", status.APIMutationAuthRequired)
+	}
+	if !status.TrustedMutationBypassActive {
+		t.Fatal("expected trusted_mutation_bypass_active to be true")
 	}
 }
 
@@ -507,7 +536,7 @@ func TestCabinetProfileRouteMutationAuthTokenGuard(t *testing.T) {
 	}
 	handler := requireMutationAuthForMethods(
 		cabinetProfileHandler(auditStore, cfg),
-		cfg.API.AuthToken,
+		cfg,
 		http.MethodPut,
 		http.MethodDelete,
 	)
@@ -569,5 +598,64 @@ func TestCabinetProfileRouteMutationAuthTokenGuard(t *testing.T) {
 	handler(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("DELETE status = %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
+func TestCabinetProfileRouteAllowsTrustedPrivateNetworkWithoutToken(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		WebUI: config.WebUI{
+			RequireLogin:                        false,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://file.example/g2s",
+			ListenerDNSName: "file.example",
+			RequiredSANDNS:  []string{"file.example"},
+			HostID:          "HOST-FILE",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+	}
+	handler := requireMutationAuthForMethods(
+		cabinetProfileHandler(auditStore, cfg),
+		cfg,
+		http.MethodPut,
+		http.MethodDelete,
+	)
+
+	override := config.CabinetProfile{
+		WireHostURL:     "https://override.example/g2s",
+		ListenerDNSName: "override.example",
+		ListenerIP:      "10.20.30.40",
+		RequiredSANDNS:  []string{"override.example"},
+		RequiredSANIPs:  []string{"10.20.30.40"},
+		HostID:          "HOST-OVERRIDE",
+		FirstTestEGMIDs: []string{"EGM-99"},
+	}
+	raw, _ := json.Marshal(override)
+
+	privateReq := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
+	privateReq.RemoteAddr = "192.168.10.99:5544"
+	privateReq.Header.Set("Content-Type", "application/json")
+	privateRec := httptest.NewRecorder()
+	handler(privateRec, privateReq)
+	if privateRec.Code != http.StatusOK {
+		t.Fatalf("PUT from trusted private network without token status = %d: %s", privateRec.Code, privateRec.Body.String())
+	}
+
+	publicReq := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
+	publicReq.RemoteAddr = "198.51.100.25:5544"
+	publicReq.Header.Set("Content-Type", "application/json")
+	publicRec := httptest.NewRecorder()
+	handler(publicRec, publicReq)
+	if !deniedByAuth(publicRec.Code) {
+		t.Fatalf("PUT from public network without token status = %d, want 401/403", publicRec.Code)
 	}
 }

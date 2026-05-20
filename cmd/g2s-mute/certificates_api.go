@@ -8,7 +8,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,11 +56,11 @@ func certificateImportHandler(store *store.SQLiteStore, cfg config.Config) http.
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !requireMutationAuth(w, r, cfg.API.AuthToken) {
+		if !requireMutationAuth(w, r, cfg) {
 			return
 		}
-		if !isLoopbackRequest(r) {
-			http.Error(w, "forbidden: loopback requests only", http.StatusForbidden)
+		if !certificateMaterialRequestAllowed(r, cfg) {
+			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
 			return
 		}
 
@@ -117,8 +116,8 @@ func certificateExportHandler(cfg config.Config) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !isLoopbackRequest(r) {
-			http.Error(w, "forbidden: loopback requests only", http.StatusForbidden)
+		if !certificateMaterialRequestAllowed(r, cfg) {
+			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
 			return
 		}
 
@@ -133,7 +132,7 @@ func certificateExportHandler(cfg config.Config) http.HandlerFunc {
 			return
 		}
 		if includeKey {
-			if !requireMutationAuth(w, r, cfg.API.AuthToken) {
+			if !requireMutationAuth(w, r, cfg) {
 				return
 			}
 			if !cfg.WebUI.AllowPrivateKeyExport {
@@ -427,21 +426,4 @@ func httpStatusForReadError(err error) int {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
-}
-
-func isLoopbackRequest(r *http.Request) bool {
-	remote := strings.TrimSpace(r.RemoteAddr)
-	if remote == "" {
-		return false
-	}
-
-	host := remote
-	if parsedHost, _, err := net.SplitHostPort(remote); err == nil {
-		host = parsedHost
-	}
-	host = strings.TrimPrefix(host, "[")
-	host = strings.TrimSuffix(host, "]")
-
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
