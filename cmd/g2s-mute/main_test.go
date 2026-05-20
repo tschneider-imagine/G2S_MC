@@ -35,6 +35,7 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 		ControllerID: "G2S-MC-TEST",
 		Database:     config.Database{Path: "/var/lib/g2s-mute/controller.db"},
 		WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
+		Timeouts:     config.Timeouts{EGMHeartbeatIntervalMS: 5000},
 		CabinetProfile: config.CabinetProfile{
 			WireHostURL:     "https://host-a.example/g2s",
 			ListenerDNSName: "host-a.example",
@@ -85,6 +86,9 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 	if body.Runtime.AllowPrivateKeyExport {
 		t.Fatalf("allow_private_key_export = %t, want false", body.Runtime.AllowPrivateKeyExport)
 	}
+	if body.Runtime.EGMHeartbeatIntervalMS != 5000 {
+		t.Fatalf("egm_heartbeat_interval_ms = %d, want 5000", body.Runtime.EGMHeartbeatIntervalMS)
+	}
 	if body.ProfileSource != "file" {
 		t.Fatalf("profile_source = %q, want file", body.ProfileSource)
 	}
@@ -98,6 +102,9 @@ func TestBuildRuntimeStatusIncludesAPIMutationAuthFlag(t *testing.T) {
 		Database: config.Database{Path: "/tmp/controller.db"},
 		WebUI: config.WebUI{
 			BindAddress: "127.0.0.1:8444",
+		},
+		Timeouts: config.Timeouts{
+			EGMHeartbeatIntervalMS: 7000,
 		},
 		G2S: config.G2S{
 			HostURL:           "http://127.0.0.1:8444/g2s",
@@ -116,6 +123,9 @@ func TestBuildRuntimeStatusIncludesAPIMutationAuthFlag(t *testing.T) {
 	if status.AllowPrivateKeyExport {
 		t.Fatalf("allow_private_key_export = %t, want false", status.AllowPrivateKeyExport)
 	}
+	if status.EGMHeartbeatIntervalMS != 7000 {
+		t.Fatalf("egm_heartbeat_interval_ms = %d, want 7000", status.EGMHeartbeatIntervalMS)
+	}
 }
 
 func TestBuildRuntimeStatusTrustedPrivateNetworkBypassForRequest(t *testing.T) {
@@ -126,6 +136,9 @@ func TestBuildRuntimeStatusTrustedPrivateNetworkBypassForRequest(t *testing.T) {
 			RequireLogin:                        false,
 			AllowTrustedPrivateNetworkMutations: true,
 			AllowPrivateKeyExport:               true,
+		},
+		Timeouts: config.Timeouts{
+			EGMHeartbeatIntervalMS: 5000,
 		},
 		G2S: config.G2S{
 			HostURL:           "http://127.0.0.1:8444/g2s",
@@ -148,6 +161,9 @@ func TestBuildRuntimeStatusTrustedPrivateNetworkBypassForRequest(t *testing.T) {
 	}
 	if !status.AllowPrivateKeyExport {
 		t.Fatal("expected allow_private_key_export to be true")
+	}
+	if status.EGMHeartbeatIntervalMS != 5000 {
+		t.Fatalf("egm_heartbeat_interval_ms = %d, want 5000", status.EGMHeartbeatIntervalMS)
 	}
 }
 

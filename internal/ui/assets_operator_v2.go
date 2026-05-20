@@ -149,6 +149,8 @@ const dashboardHTML = `<!doctype html>
           <div><dt>Incidents in Snapshot</dt><dd id="session-evidence-incident-count">0</dd></div>
           <div><dt>State History Rows</dt><dd id="session-evidence-state-count">0</dd></div>
           <div><dt>Run Markers in Snapshot</dt><dd id="session-evidence-run-marker-count">0</dd></div>
+          <div><dt>Heartbeat Events in Snapshot</dt><dd id="session-evidence-heartbeat-count">0</dd></div>
+          <div><dt>Heartbeat Health</dt><dd id="session-evidence-heartbeat-health">-</dd></div>
         </dl>
         <label class="cert-textarea-label evidence-notes-label">Operator Notes
           <textarea id="session-evidence-notes" rows="5" placeholder="Optional test notes, cabinet observations, or follow-up context."></textarea>
@@ -259,6 +261,7 @@ const dashboardHTML = `<!doctype html>
               <button type="button" class="timeline-filter-tab is-active" data-timeline-filter="all">All</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="incident">Incidents</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="egm">EGM</button>
+              <button type="button" class="timeline-filter-tab" data-timeline-filter="heartbeat">Heartbeat</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="state">State</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="marker">Markers</button>
             </div>
@@ -313,6 +316,16 @@ const dashboardHTML = `<!doctype html>
             <button id="run-report-markdown-button" type="button" class="secondary-button">Download Run Markdown</button>
           </div>
         </form>
+        <div class="heartbeat-summary-wrap">
+          <p class="label">Heartbeat Summary</p>
+          <div class="heartbeat-summary-grid">
+            <div><p class="label">Health</p><strong id="heartbeat-health">-</strong></div>
+            <div><p class="label">Observed</p><strong id="heartbeat-observed">-</strong></div>
+            <div><p class="label">Last Keepalive</p><strong id="heartbeat-last-keepalive">-</strong></div>
+            <div><p class="label">Max Gap</p><strong id="heartbeat-max-gap">-</strong></div>
+          </div>
+          <div id="heartbeat-summary-message" class="muted-text heartbeat-summary-message">Waiting for heartbeat telemetry.</div>
+        </div>
         <div id="cabinet-run-timeline" class="timeline"></div>
       </div>
 
@@ -826,6 +839,11 @@ th {
   color: #245f91;
 }
 
+.timeline-kind-heartbeat {
+  background: #eef3ff;
+  color: #35528f;
+}
+
 .timeline-kind-state {
   background: var(--green-bg);
   color: #1e6c47;
@@ -991,6 +1009,37 @@ th {
   display: grid;
   gap: 12px;
   border-top: 1px solid var(--line);
+}
+
+.heartbeat-summary-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+}
+
+.heartbeat-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 8px;
+  background: var(--line);
+}
+
+.heartbeat-summary-grid > div {
+  min-width: 0;
+  padding: 13px 14px;
+  background: var(--panel);
+}
+
+.heartbeat-summary-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.heartbeat-summary-message {
+  display: block;
+  margin-top: 10px;
 }
 
 .run-report-grid {
@@ -1331,6 +1380,7 @@ const dashboardJS = `const endpoints = {
 const $ = (id) => document.getElementById(id);
 const unhealthyStates = new Set(["RED", "GREY"]);
 const healthyStates = new Set(["GREEN", "YELLOW"]);
+const heartbeatEventTypes = new Set(["G2S_SESSION_ONLINE", "G2S_KEEPALIVE"]);
 
 const clientState = {
   lastGoodStatus: null,
@@ -1400,6 +1450,82 @@ function copySnapshot(snapshot) {
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
     cabinetProfile: snapshot.cabinetProfile || null,
     cabinetPreflight: snapshot.cabinetPreflight || null
+  };
+}
+
+function isHeartbeatEventType(eventType) {
+  return heartbeatEventTypes.has(String(eventType || "").toUpperCase());
+}
+
+function fmtDurationMs(ms) {
+  if (!ms || ms <= 0) return "0s";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return seconds + "s";
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = seconds % 60;
+  if (minutes < 60) return remSeconds ? (minutes + "m " + remSeconds + "s") : (minutes + "m");
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes ? (hours + "h " + remMinutes + "m") : (hours + "h");
+}
+
+function heartbeatEventsFromHistory(records) {
+  return (Array.isArray(records) ? records : []).filter((item) => isHeartbeatEventType(item?.event_type));
+}
+
+function heartbeatSummary(records, intervalMs, referenceTime) {
+  const heartbeats = heartbeatEventsFromHistory(records)
+    .slice()
+    .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+  const commsOnline = heartbeats.filter((item) => String(item.event_type || "").toUpperCase() === "G2S_SESSION_ONLINE");
+  const keepAlives = heartbeats.filter((item) => String(item.event_type || "").toUpperCase() === "G2S_KEEPALIVE");
+  const lastKeepAlive = keepAlives.length ? keepAlives[keepAlives.length - 1] : null;
+  let maxGapMs = 0;
+  for (let i = 1; i < keepAlives.length; i++) {
+    const prev = new Date(keepAlives[i - 1].created_at || 0).getTime();
+    const next = new Date(keepAlives[i].created_at || 0).getTime();
+    if (Number.isFinite(prev) && Number.isFinite(next) && next >= prev) {
+      maxGapMs = Math.max(maxGapMs, next - prev);
+    }
+  }
+  const refTimeMs = referenceTime ? new Date(referenceTime).getTime() : Date.now();
+  const lastKeepAliveMs = lastKeepAlive ? new Date(lastKeepAlive.created_at || 0).getTime() : 0;
+  const sinceLastKeepAliveMs = lastKeepAliveMs && Number.isFinite(refTimeMs) ? Math.max(0, refTimeMs - lastKeepAliveMs) : 0;
+  const thresholdMs = intervalMs > 0 ? Math.max(intervalMs * 3, intervalMs + 1000) : 0;
+  let health = "NO_TRAFFIC";
+  let label = "No heartbeat observed";
+  let message = "No commsOnLine or keepAlive traffic is present in the current window.";
+  if (heartbeats.length > 0) {
+    if (keepAlives.length === 0) {
+      health = "ONLINE_ONLY";
+      label = "Online only";
+      message = "commsOnLine was observed, but keepAlive traffic has not started in this window.";
+    } else if (intervalMs <= 0) {
+      health = "OBSERVED";
+      label = "Observed";
+      message = "Heartbeat traffic is present; configured interval is unavailable so gap checks are disabled.";
+    } else if (maxGapMs > thresholdMs || sinceLastKeepAliveMs > thresholdMs) {
+      health = "DEGRADED";
+      label = "Gap detected";
+      message = "Heartbeat traffic is present, but a keepAlive gap exceeded the configured cadence.";
+    } else {
+      health = "HEALTHY";
+      label = "Healthy";
+      message = "Heartbeat traffic matches the configured cadence for this run window.";
+    }
+  }
+  return {
+    health: health,
+    label: label,
+    message: message,
+    total: heartbeats.length,
+    comms_online_count: commsOnline.length,
+    keepalive_count: keepAlives.length,
+    first_comms_online_at: commsOnline.length ? commsOnline[0].created_at : "",
+    last_keepalive_at: lastKeepAlive ? lastKeepAlive.created_at : "",
+    interval_ms: intervalMs || 0,
+    max_gap_ms: maxGapMs,
+    since_last_keepalive_ms: sinceLastKeepAliveMs
   };
 }
 
@@ -1663,6 +1789,7 @@ function buildSessionEvidence(snapshot) {
   const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
   const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
   const runMarkers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
+  const heartbeat = heartbeatSummary(egmHistory, Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
@@ -1700,6 +1827,7 @@ function buildSessionEvidence(snapshot) {
       warnings: Array.isArray(readiness.warnings) ? readiness.warnings : []
     },
     egm_snapshot_count: Array.isArray(status.egms) ? status.egms.length : 0,
+    heartbeat_summary: heartbeat,
     incidents: incidents,
     egm_history: egmHistory,
     state_history: stateHistory,
@@ -1729,6 +1857,8 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- Incident rows captured: " + String((evidence.incidents || []).length),
     "- State history rows captured: " + String((evidence.state_history || []).length),
     "- Run markers captured: " + String((evidence.run_markers || []).length),
+    "- Heartbeat events captured: " + String(evidence?.heartbeat_summary?.total || 0),
+    "- Heartbeat health: " + (evidence?.heartbeat_summary?.label || "-"),
     ""
   ];
   lines.push("## Blockers", "");
@@ -1751,6 +1881,13 @@ function buildSessionEvidenceMarkdown(evidence) {
   } else {
     lines.push("- None");
   }
+  lines.push("", "## Heartbeat Summary", "");
+  lines.push("- Health: " + (evidence?.heartbeat_summary?.label || "-"));
+  lines.push("- Total events: " + String(evidence?.heartbeat_summary?.total || 0));
+  lines.push("- keepAlive events: " + String(evidence?.heartbeat_summary?.keepalive_count || 0));
+  lines.push("- Last keepAlive: " + (evidence?.heartbeat_summary?.last_keepalive_at || "-"));
+  lines.push("- Max gap: " + fmtDurationMs(evidence?.heartbeat_summary?.max_gap_ms || 0));
+  lines.push("- Notes: " + (evidence?.heartbeat_summary?.message || "-"));
   lines.push("", "## JSON Payload", "", "~~~json", JSON.stringify(evidence, null, 2), "~~~");
   return lines.join("\n");
 }
@@ -1809,12 +1946,13 @@ function renderSelectedSavedSessionEvidence(record) {
   const blockers = Array.isArray(evidence?.session?.blockers) ? evidence.session.blockers : [];
   const warnings = Array.isArray(evidence?.readiness?.warnings) ? evidence.readiness.warnings : [];
   const runMarkers = Array.isArray(evidence?.run_markers) ? evidence.run_markers : [];
+  const heartbeat = evidence?.heartbeat_summary || {};
   renderItems("session-evidence-selected", [record], "", () =>
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
       "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + "</span></div>" +
-      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ")</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
   );
@@ -1952,6 +2090,8 @@ function renderSessionEvidence(snapshot) {
   $("session-evidence-incident-count").textContent = String((evidence.incidents || []).length);
   $("session-evidence-state-count").textContent = String((evidence.state_history || []).length);
   $("session-evidence-run-marker-count").textContent = String((evidence.run_markers || []).length);
+  $("session-evidence-heartbeat-count").textContent = String(evidence?.heartbeat_summary?.total || 0);
+  $("session-evidence-heartbeat-health").textContent = evidence?.heartbeat_summary?.label || "-";
   const ready = !!snapshot?.status;
   $("session-evidence-save-button").disabled = !ready || (setupActionsRequireToken() && !getSetupToken() && !getCertToken());
   $("session-evidence-json-button").disabled = !ready;
@@ -2142,13 +2282,14 @@ function buildCabinetRunTimeline(snapshot) {
   });
 
   egmHistory.forEach((item) => {
+    const heartbeat = isHeartbeatEventType(item.event_type);
     timeline.push({
-      kind: "egm",
+      kind: heartbeat ? "heartbeat" : "egm",
       createdAt: item.created_at || "",
       sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
-      title: String(item.egm_id || "-") + " " + String(item.status || "-"),
+      title: String(item.egm_id || "-") + " " + (heartbeat ? String(item.event_type || "heartbeat") : String(item.status || "-")),
       detail: String(item.event_type || "-") + (item.detail ? " | " + String(item.detail) : ""),
-      meta: item.last_error ? ("last error: " + String(item.last_error)) : "egm history"
+      meta: heartbeat ? "heartbeat traffic" : (item.last_error ? ("last error: " + String(item.last_error)) : "egm history")
     });
   });
 
@@ -2180,16 +2321,17 @@ function buildCabinetRunTimeline(snapshot) {
 
 function applyTimelineFilter(items) {
   if (clientState.timelineFilter === "all") {
-    return items;
+    return items.filter((item) => item.kind !== "heartbeat");
   }
   return items.filter((item) => item.kind === clientState.timelineFilter);
 }
 
-function updateTimelineFilterLabels(total, filtered) {
+function updateTimelineFilterLabels(total, filtered, heartbeatCount) {
   const map = {
-    all: "Showing all timeline events",
+    all: heartbeatCount > 0 ? ("Showing all timeline events with " + heartbeatCount + " heartbeat row(s) collapsed") : "Showing all timeline events",
     incident: "Showing incident timeline events",
     egm: "Showing EGM timeline events",
+    heartbeat: "Showing raw heartbeat timeline events",
     state: "Showing controller state timeline events",
     marker: "Showing operator run markers"
   };
@@ -2257,6 +2399,7 @@ function boundedRunReport(snapshot) {
   const stateHistory = (snapshot?.stateHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const runMarkers = (snapshot?.runMarkers || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const sessionEvidence = (snapshot?.sessionEvidence || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const heartbeat = heartbeatSummary(egmHistory, Number(snapshot?.status?.runtime?.egm_heartbeat_interval_ms || 0), endMarker.created_at || "");
   return {
     generated_at: new Date().toISOString(),
     window: {
@@ -2273,10 +2416,12 @@ function boundedRunReport(snapshot) {
     summary: {
       incidents: incidents.length,
       egm_events: egmHistory.length,
+      heartbeat_events: heartbeat.total,
       state_changes: stateHistory.length,
       run_markers: runMarkers.length,
       saved_evidence: sessionEvidence.length
     },
+    heartbeat_summary: heartbeat,
     incidents: incidents,
     egm_history: egmHistory,
     state_history: stateHistory,
@@ -2299,9 +2444,19 @@ function buildRunReportMarkdown(report) {
     "- Duration (s): " + String(report.window.duration_seconds || 0),
     "- Incidents: " + String(report.summary.incidents || 0),
     "- EGM events: " + String(report.summary.egm_events || 0),
+    "- Heartbeat events: " + String(report.summary.heartbeat_events || 0),
     "- State changes: " + String(report.summary.state_changes || 0),
     "- Run markers: " + String(report.summary.run_markers || 0),
     "- Saved evidence captures: " + String(report.summary.saved_evidence || 0),
+    "- Heartbeat health: " + (report?.heartbeat_summary?.label || "-"),
+    "",
+    "## Heartbeat Summary",
+    "",
+    "- Total events: " + String(report?.heartbeat_summary?.total || 0),
+    "- keepAlive events: " + String(report?.heartbeat_summary?.keepalive_count || 0),
+    "- Last keepAlive: " + (report?.heartbeat_summary?.last_keepalive_at || "-"),
+    "- Max gap: " + fmtDurationMs(report?.heartbeat_summary?.max_gap_ms || 0),
+    "- Notes: " + (report?.heartbeat_summary?.message || "-"),
     "",
     "## JSON Payload",
     "",
@@ -2341,10 +2496,21 @@ function renderRunReportControls(snapshot) {
     return;
   }
   $("run-report-window-summary").textContent = fmtTime(report.window.started_at) + " -> " + fmtTime(report.window.ended_at) + " (" + report.window.duration_seconds + "s)";
-  $("run-report-count-summary").textContent = "incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + ", state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
+  $("run-report-count-summary").textContent = "incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + ", heartbeat " + report.summary.heartbeat_events + ", state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
   $("run-report-state").textContent = "ready";
   $("run-report-state").className = "source-pill source-file";
-  $("run-report-message").textContent = "Run report window is ready to export.";
+  $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ".";
+}
+
+function renderHeartbeatSummary(snapshot) {
+  const runtime = snapshot?.status?.runtime || currentRuntime();
+  const summary = heartbeatSummary(snapshot?.egmHistory || [], Number(runtime.egm_heartbeat_interval_ms || 0), snapshot?.status?.updated_at || "");
+  $("heartbeat-health").textContent = summary.label;
+  $("heartbeat-observed").textContent = summary.total + " total / " + summary.keepalive_count + " keepAlive";
+  $("heartbeat-last-keepalive").textContent = summary.last_keepalive_at ? fmtTime(summary.last_keepalive_at) : "-";
+  $("heartbeat-max-gap").textContent = fmtDurationMs(summary.max_gap_ms || 0);
+  const intervalText = summary.interval_ms > 0 ? ("configured " + fmtDurationMs(summary.interval_ms)) : "configured interval unavailable";
+  $("heartbeat-summary-message").textContent = summary.message + " (" + intervalText + ")";
 }
 
 function exportRunReportJSON() {
@@ -2374,7 +2540,8 @@ function exportRunReportMarkdown() {
 function renderCabinetRunTimeline(snapshot) {
   const items = buildCabinetRunTimeline(snapshot);
   const filtered = applyTimelineFilter(items);
-  updateTimelineFilterLabels(items.length, filtered.length);
+  const heartbeatCount = items.filter((item) => item.kind === "heartbeat").length;
+  updateTimelineFilterLabels(items.length, filtered.length, heartbeatCount);
   renderItems("cabinet-run-timeline", filtered, "No cabinet run events captured yet", (item) =>
     "<div class=\"item timeline-entry\">" +
       "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.title) + "</strong><span class=\"timeline-kind timeline-kind-" + escapeHTML(item.kind) + "\">" + escapeHTML(item.kind) + "</span></div>" +
@@ -3031,12 +3198,25 @@ function renderStatus(snapshot) {
   renderEGMTable(status);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
+  renderHeartbeatSummary(snapshot);
   renderCabinetRunTimeline(snapshot);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
   );
-  renderItems("egm-history", snapshot?.egmHistory, "No EGM history yet", (item) =>
-    "<div class=\"item\"><strong>" + escapeHTML(item.egm_id) + " " + statusPill(item.status) + "</strong><span>" + escapeHTML(item.event_type) + " at " + escapeHTML(fmtTime(item.created_at)) + "</span></div>"
+  const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
+  const heartbeat = heartbeatSummary(egmHistory, Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
+  const egmDisplay = egmHistory.filter((item) => !isHeartbeatEventType(item.event_type));
+  if (heartbeat.total > 0) {
+    egmDisplay.unshift({
+      egm_id: "Heartbeat",
+      status: "",
+      event_type: heartbeat.label,
+      created_at: heartbeat.last_keepalive_at || heartbeat.first_comms_online_at || "",
+      detail: heartbeat.message
+    });
+  }
+  renderItems("egm-history", egmDisplay, "No EGM history yet", (item) =>
+    "<div class=\"item\"><strong>" + escapeHTML(item.egm_id) + (item.status ? (" " + statusPill(item.status)) : "") + "</strong><span>" + escapeHTML(item.event_type) + " at " + escapeHTML(fmtTime(item.created_at)) + (item.detail ? " | " + escapeHTML(item.detail) : "") + "</span></div>"
   );
   renderItems("state-history", snapshot?.stateHistory, "No state history yet", (item) =>
     "<div class=\"item\"><strong>" + escapeHTML(item.old_state) + " -> " + escapeHTML(item.new_state) + "</strong><span>" + escapeHTML(item.reason) + " at " + escapeHTML(fmtTime(item.created_at)) + "</span></div>"
@@ -3440,6 +3620,7 @@ renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
 renderRunMarkerControls(emptySnapshot());
 renderRunReportControls(emptySnapshot());
+renderHeartbeatSummary(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`

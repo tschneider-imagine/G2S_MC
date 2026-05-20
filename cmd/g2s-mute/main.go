@@ -246,6 +246,7 @@ type runtimeStatus struct {
 	APIMutationAuthRequired     bool      `json:"api_mutation_auth_required"`
 	TrustedMutationBypassActive bool      `json:"trusted_mutation_bypass_active"`
 	AllowPrivateKeyExport       bool      `json:"allow_private_key_export"`
+	EGMHeartbeatIntervalMS      int       `json:"egm_heartbeat_interval_ms"`
 	InputMode                   string    `json:"input_mode"`
 	SimulatedTrigger            bool      `json:"simulated_trigger"`
 }
@@ -382,6 +383,7 @@ func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo, request *http.Re
 		APIMutationAuthRequired:     authRequired,
 		TrustedMutationBypassActive: trustedBypass,
 		AllowPrivateKeyExport:       cfg.WebUI.AllowPrivateKeyExport,
+		EGMHeartbeatIntervalMS:      cfg.Timeouts.EGMHeartbeatIntervalMS,
 		InputMode:                   "SIMULATED_SOFTWARE_ONLY",
 		SimulatedTrigger:            runtime.SimulatedTrigger,
 	}
