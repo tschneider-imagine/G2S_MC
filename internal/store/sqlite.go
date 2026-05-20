@@ -464,9 +464,66 @@ func (s *SQLiteStore) ClearCabinetProfileOverride(ctx context.Context) error {
 	return err
 }
 
+func (s *SQLiteStore) RecordSessionEvidence(ctx context.Context, record model.SessionEvidenceRecord) (int64, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO session_evidence_records (
+			created_at, overall_state, readyz_state, preflight_state, host_id, wire_host_url, operator_notes, payload_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.CreatedAt,
+		record.OverallState,
+		record.ReadyzState,
+		record.PreflightState,
+		record.HostID,
+		record.WireHostURL,
+		record.OperatorNotes,
+		record.PayloadJSON,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (s *SQLiteStore) ListSessionEvidence(ctx context.Context, limit int) ([]model.SessionEvidenceRecord, error) {
+	limit = normalizeLimit(limit)
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, created_at, overall_state, readyz_state, preflight_state, host_id, wire_host_url, COALESCE(operator_notes, ''), payload_json
+		 FROM session_evidence_records
+		 ORDER BY id DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []model.SessionEvidenceRecord{}
+	for rows.Next() {
+		var record model.SessionEvidenceRecord
+		if err := rows.Scan(
+			&record.ID,
+			&record.CreatedAt,
+			&record.OverallState,
+			&record.ReadyzState,
+			&record.PreflightState,
+			&record.HostID,
+			&record.WireHostURL,
+			&record.OperatorNotes,
+			&record.PayloadJSON,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}

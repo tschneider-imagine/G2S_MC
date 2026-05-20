@@ -153,8 +153,13 @@ const dashboardHTML = `<!doctype html>
           <textarea id="session-evidence-notes" rows="5" placeholder="Optional test notes, cabinet observations, or follow-up context."></textarea>
         </label>
         <div class="setup-actions evidence-actions">
+          <button id="session-evidence-save-button" type="button">Save to Appliance History</button>
           <button id="session-evidence-json-button" type="button">Download JSON Evidence</button>
           <button id="session-evidence-markdown-button" type="button" class="secondary-button">Download Markdown Evidence</button>
+        </div>
+        <div class="first-cabinet-session-blockers-wrap">
+          <p class="label">Recent Captures</p>
+          <div id="session-evidence-history" class="timeline"></div>
         </div>
       </div>
     </section>
@@ -1081,6 +1086,7 @@ const dashboardJS = `const endpoints = {
   egmHistory: "/api/egms/history?limit=8",
   stateHistory: "/api/state-history?limit=8",
   certificates: "/api/certificates",
+  sessionEvidence: "/api/session-evidence?limit=8",
   cabinetProfile: "/api/cabinet-profile",
   cabinetPreflight: "/api/cabinet-preflight",
   certificateImport: "/api/certificates/import",
@@ -1126,6 +1132,7 @@ function emptySnapshot() {
     egmHistory: [],
     stateHistory: [],
     certificates: [],
+    sessionEvidence: [],
     cabinetProfile: null,
     cabinetPreflight: null
   };
@@ -1145,6 +1152,7 @@ function copySnapshot(snapshot) {
     egmHistory: Array.isArray(snapshot.egmHistory) ? snapshot.egmHistory.slice() : [],
     stateHistory: Array.isArray(snapshot.stateHistory) ? snapshot.stateHistory.slice() : [],
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
+    sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
     cabinetProfile: snapshot.cabinetProfile || null,
     cabinetPreflight: snapshot.cabinetPreflight || null
   };
@@ -1506,6 +1514,7 @@ function renderSessionEvidence(snapshot) {
   $("session-evidence-incident-count").textContent = String((evidence.incidents || []).length);
   $("session-evidence-state-count").textContent = String((evidence.state_history || []).length);
   const ready = !!snapshot?.status;
+  $("session-evidence-save-button").disabled = !ready || (setupActionsRequireToken() && !getSetupToken() && !getCertToken());
   $("session-evidence-json-button").disabled = !ready;
   $("session-evidence-markdown-button").disabled = !ready;
   const badge = $("session-evidence-state");
@@ -1514,6 +1523,11 @@ function renderSessionEvidence(snapshot) {
   $("session-evidence-message").textContent = ready
     ? "Capture the current cabinet session state as JSON or Markdown."
     : "Waiting for appliance status before capture is available.";
+  renderItems("session-evidence-history", snapshot?.sessionEvidence, "No saved captures yet", (item) =>
+    "<div class=\"item\"><strong>" + escapeHTML(item.overall_state || "-") + "</strong><span>" +
+    escapeHTML(item.host_id || "-") + " at " + escapeHTML(fmtTime(item.created_at)) +
+    (item.operator_notes ? " - " + escapeHTML(item.operator_notes) : "") + "</span></div>"
+  );
 }
 
 function exportSessionEvidenceJSON() {
@@ -1530,6 +1544,46 @@ function exportSessionEvidenceMarkdown() {
   $("session-evidence-state").textContent = "saved";
   $("session-evidence-state").className = "source-pill source-file";
   $("session-evidence-message").textContent = "Markdown evidence downloaded.";
+}
+
+async function saveSessionEvidenceToHistory() {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = "Enter an API token before saving evidence history.";
+    return;
+  }
+  const evidence = buildSessionEvidence(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  try {
+    $("session-evidence-state").textContent = "working";
+    $("session-evidence-state").className = "source-pill source-override";
+    $("session-evidence-message").textContent = "Saving evidence to appliance history.";
+    const token = getSetupToken() || getCertToken();
+    const headers = { "Content-Type": "application/json" };
+    if (token) {
+      headers.Authorization = "Bearer " + token;
+    }
+    const response = await fetch(endpoints.sessionEvidence.replace("?limit=8", ""), {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(evidence)
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      $("session-evidence-state").textContent = "blocked";
+      $("session-evidence-state").className = "source-pill source-mixed";
+      $("session-evidence-message").textContent = "Save failed: HTTP " + response.status + (detail ? " " + detail : "");
+      return;
+    }
+    $("session-evidence-state").textContent = "saved";
+    $("session-evidence-state").className = "source-pill source-file";
+    $("session-evidence-message").textContent = "Evidence saved to appliance history.";
+    schedulePoll(0);
+  } catch (err) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = err && err.message ? err.message : "Save failed.";
+  }
 }
 
 function renderItems(id, items, emptyText, mapItem) {
@@ -2277,11 +2331,12 @@ async function pollOnce() {
       fetchJSON(endpoints.egmHistory),
       fetchJSON(endpoints.stateHistory),
       fetchJSON(endpoints.certificates),
+      fetchJSON(endpoints.sessionEvidence),
       fetchJSON(endpoints.cabinetProfile),
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, certificatesResult, cabinetProfileResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -2308,6 +2363,7 @@ async function pollOnce() {
     if (egmHistoryResult.status === "fulfilled") snapshot.egmHistory = egmHistoryResult.value;
     if (stateHistoryResult.status === "fulfilled") snapshot.stateHistory = stateHistoryResult.value;
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
+    if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
     if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
 
@@ -2315,6 +2371,7 @@ async function pollOnce() {
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
     if (stateHistoryResult.status !== "fulfilled") failures.push("state history unavailable");
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
+    if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
     if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
 
@@ -2389,6 +2446,7 @@ function bindControls() {
     schedulePoll(0);
   });
 
+  $("session-evidence-save-button").addEventListener("click", saveSessionEvidenceToHistory);
   $("session-evidence-json-button").addEventListener("click", exportSessionEvidenceJSON);
   $("session-evidence-markdown-button").addEventListener("click", exportSessionEvidenceMarkdown);
 
@@ -2429,6 +2487,7 @@ function bindControls() {
     input.addEventListener("input", () => {
       renderCabinetSetupValidation();
       renderFirstCabinetSession(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+      renderSessionEvidence(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
     });
   });
 

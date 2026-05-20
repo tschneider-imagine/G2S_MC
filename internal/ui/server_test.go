@@ -55,6 +55,9 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"session-evidence-json-button\"") {
 		t.Fatalf("expected session evidence export button")
 	}
+	if !strings.Contains(rr.Body.String(), "id=\"session-evidence-save-button\"") {
+		t.Fatalf("expected session evidence save button")
+	}
 	if !strings.Contains(rr.Body.String(), "id=\"operator-alert\"") {
 		t.Fatalf("expected operator alert strip")
 	}
@@ -110,7 +113,7 @@ func TestDashboardAssets(t *testing.T) {
 		}
 		body := rr.Body.String()
 		if path == "/static/dashboard.js" {
-			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "session-evidence-state", "exportSessionEvidenceJSON"} {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "session-evidence-state", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "sessionEvidence"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}

@@ -225,6 +225,48 @@ func TestCabinetProfileOverrideCRUD(t *testing.T) {
 	}
 }
 
+func TestSessionEvidenceCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	record := model.SessionEvidenceRecord{
+		CreatedAt:      time.Now().UTC().Truncate(time.Second),
+		OverallState:   "LAB_READY",
+		ReadyzState:    "READY_LAB",
+		PreflightState: "PASS",
+		HostID:         "HOST-TSPI4-001",
+		WireHostURL:    "https://tspi4.local:8444/g2s",
+		OperatorNotes:  "first pass looked clean",
+		PayloadJSON:    `{"session":{"overall_state":"LAB_READY"}}`,
+	}
+	id, err := store.RecordSessionEvidence(ctx, record)
+	if err != nil {
+		t.Fatalf("record session evidence: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("expected session evidence id")
+	}
+	assertCount(t, store, "session_evidence_records", 1)
+
+	records, err := store.ListSessionEvidence(ctx, 10)
+	if err != nil {
+		t.Fatalf("list session evidence: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 evidence record, got %d", len(records))
+	}
+	if records[0].HostID != record.HostID {
+		t.Fatalf("host_id = %q, want %q", records[0].HostID, record.HostID)
+	}
+	if records[0].PayloadJSON != record.PayloadJSON {
+		t.Fatalf("payload_json = %q, want %q", records[0].PayloadJSON, record.PayloadJSON)
+	}
+}
+
 func assertCount(t *testing.T, store *SQLiteStore, table string, want int) {
 	t.Helper()
 	got, err := store.Count(context.Background(), table)

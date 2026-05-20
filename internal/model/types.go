@@ -90,3 +90,15 @@ type HistoryLimits struct {
 	Limit int
 	EGMID string
 }
+
+type SessionEvidenceRecord struct {
+	ID             int64     `json:"id"`
+	CreatedAt      time.Time `json:"created_at"`
+	OverallState   string    `json:"overall_state"`
+	ReadyzState    string    `json:"readyz_state"`
+	PreflightState string    `json:"preflight_state"`
+	HostID         string    `json:"host_id"`
+	WireHostURL    string    `json:"wire_host_url"`
+	OperatorNotes  string    `json:"operator_notes,omitempty"`
+	PayloadJSON    string    `json:"payload_json"`
+}

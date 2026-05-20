@@ -78,4 +78,16 @@ CREATE TABLE IF NOT EXISTS cabinet_profile_overrides (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by TEXT
 );
+
+CREATE TABLE IF NOT EXISTS session_evidence_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    overall_state TEXT NOT NULL,
+    readyz_state TEXT NOT NULL,
+    preflight_state TEXT NOT NULL,
+    host_id TEXT NOT NULL,
+    wire_host_url TEXT NOT NULL,
+    operator_notes TEXT,
+    payload_json TEXT NOT NULL
+);
 `

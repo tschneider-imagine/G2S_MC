@@ -126,6 +126,7 @@ func main() {
 	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
+	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
 	mux.HandleFunc(
@@ -523,6 +524,79 @@ func certificatesHandler(store *store.SQLiteStore) http.HandlerFunc {
 		}
 		records, err := store.ListCertificateInventory(r.Context())
 		writeJSON(w, records, err)
+	}
+}
+
+type sessionEvidencePayload struct {
+	CapturedAt    time.Time `json:"captured_at"`
+	OperatorNotes string    `json:"operator_notes"`
+	Session       struct {
+		OverallState   string `json:"overall_state"`
+		ReadyzState    string `json:"readyz_state"`
+		PreflightState string `json:"preflight_state"`
+	} `json:"session"`
+	CabinetProfile struct {
+		HostID      string `json:"host_id"`
+		WireHostURL string `json:"wire_host_url"`
+	} `json:"cabinet_profile"`
+}
+
+func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			records, err := store.ListSessionEvidence(r.Context(), queryLimit(r, 20))
+			writeJSON(w, records, err)
+		case http.MethodPost:
+			if !requireMutationAuth(w, r, cfg) {
+				return
+			}
+			var raw json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			var payload sessionEvidencePayload
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				http.Error(w, "invalid session evidence payload", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(payload.Session.OverallState) == "" {
+				http.Error(w, "session.overall_state is required", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(payload.CabinetProfile.HostID) == "" {
+				http.Error(w, "cabinet_profile.host_id is required", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(payload.CabinetProfile.WireHostURL) == "" {
+				http.Error(w, "cabinet_profile.wire_host_url is required", http.StatusBadRequest)
+				return
+			}
+			capturedAt := payload.CapturedAt
+			if capturedAt.IsZero() {
+				capturedAt = time.Now().UTC()
+			}
+			record := model.SessionEvidenceRecord{
+				CreatedAt:      capturedAt,
+				OverallState:   payload.Session.OverallState,
+				ReadyzState:    payload.Session.ReadyzState,
+				PreflightState: payload.Session.PreflightState,
+				HostID:         payload.CabinetProfile.HostID,
+				WireHostURL:    payload.CabinetProfile.WireHostURL,
+				OperatorNotes:  payload.OperatorNotes,
+				PayloadJSON:    string(raw),
+			}
+			id, err := store.RecordSessionEvidence(r.Context(), record)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			record.ID = id
+			writeJSON(w, record, nil)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 

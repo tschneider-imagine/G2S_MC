@@ -659,3 +659,60 @@ func TestCabinetProfileRouteAllowsTrustedPrivateNetworkWithoutToken(t *testing.T
 		t.Fatalf("PUT from public network without token status = %d, want 401/403", publicRec.Code)
 	}
 }
+
+func TestSessionEvidenceHandlerCRUDAndAuth(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		WebUI: config.WebUI{
+			RequireLogin:                        false,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+	}
+	handler := sessionEvidenceHandler(auditStore, cfg)
+
+	payload := `{"captured_at":"2026-05-20T21:00:00Z","operator_notes":"clean run","session":{"overall_state":"LAB_READY","readyz_state":"READY_LAB","preflight_state":"PASS"},"cabinet_profile":{"host_id":"HOST-TSPI4-001","wire_host_url":"https://tspi4.local:8444/g2s"}}`
+
+	postReq := httptest.NewRequest(http.MethodPost, "/api/session-evidence", bytes.NewBufferString(payload))
+	postReq.RemoteAddr = "192.168.10.70:4555"
+	postRec := httptest.NewRecorder()
+	handler(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("POST trusted private network status = %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/session-evidence?limit=10", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var records []model.SessionEvidenceRecord
+	if err := json.Unmarshal(getRec.Body.Bytes(), &records); err != nil {
+		t.Fatalf("decode GET: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 session evidence record, got %d", len(records))
+	}
+	if records[0].OverallState != "LAB_READY" {
+		t.Fatalf("overall_state = %q", records[0].OverallState)
+	}
+
+	strictCfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+	}
+	strictHandler := sessionEvidenceHandler(auditStore, strictCfg)
+	unauthorizedReq := httptest.NewRequest(http.MethodPost, "/api/session-evidence", bytes.NewBufferString(payload))
+	unauthorizedReq.RemoteAddr = "198.51.100.40:4555"
+	unauthorizedRec := httptest.NewRecorder()
+	strictHandler(unauthorizedRec, unauthorizedReq)
+	if !deniedByAuth(unauthorizedRec.Code) {
+		t.Fatalf("POST public network without token status = %d, want 401/403", unauthorizedRec.Code)
+	}
+}
