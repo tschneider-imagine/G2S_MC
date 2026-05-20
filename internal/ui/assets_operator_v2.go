@@ -148,6 +148,7 @@ const dashboardHTML = `<!doctype html>
           <div><dt>Snapshot Timestamp</dt><dd id="session-evidence-timestamp">-</dd></div>
           <div><dt>Incidents in Snapshot</dt><dd id="session-evidence-incident-count">0</dd></div>
           <div><dt>State History Rows</dt><dd id="session-evidence-state-count">0</dd></div>
+          <div><dt>Run Markers in Snapshot</dt><dd id="session-evidence-run-marker-count">0</dd></div>
         </dl>
         <label class="cert-textarea-label evidence-notes-label">Operator Notes
           <textarea id="session-evidence-notes" rows="5" placeholder="Optional test notes, cabinet observations, or follow-up context."></textarea>
@@ -274,7 +275,7 @@ const dashboardHTML = `<!doctype html>
             <label>Marker Title<input id="run-marker-title" name="title" autocomplete="off"></label>
             <label>Operator<input id="run-marker-operator" name="operator" autocomplete="off" placeholder="lab-ui"></label>
           </div>
-          <label class="cert-textarea-label evidence-notes-label">Run Marker Notes
+          <label class="cert-textarea-label run-marker-notes-label">Run Marker Notes
             <textarea id="run-marker-notes" rows="4" placeholder="Optional cabinet notes, attach/detach notes, or operator observations."></textarea>
           </label>
           <div class="setup-actions evidence-actions">
@@ -924,6 +925,10 @@ th {
 
 .run-marker-grid {
   grid-template-columns: minmax(240px, 0.6fr) minmax(180px, 0.4fr);
+}
+
+.run-marker-notes-label {
+  padding: 0 0 8px;
 }
 
 .cert-textarea-label {
@@ -1585,6 +1590,7 @@ function buildSessionEvidence(snapshot) {
   const incidents = Array.isArray(snapshot?.incidents) ? snapshot.incidents : [];
   const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
   const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
+  const runMarkers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
@@ -1625,6 +1631,7 @@ function buildSessionEvidence(snapshot) {
     incidents: incidents,
     egm_history: egmHistory,
     state_history: stateHistory,
+    run_markers: runMarkers,
     certificates: certificates,
     operator_notes: notes
   };
@@ -1649,6 +1656,7 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- EGM snapshot count: " + String(evidence.egm_snapshot_count || 0),
     "- Incident rows captured: " + String((evidence.incidents || []).length),
     "- State history rows captured: " + String((evidence.state_history || []).length),
+    "- Run markers captured: " + String((evidence.run_markers || []).length),
     ""
   ];
   lines.push("## Blockers", "");
@@ -1665,6 +1673,12 @@ function buildSessionEvidenceMarkdown(evidence) {
   }
   lines.push("", "## Operator Notes", "");
   lines.push(evidence.operator_notes || "None");
+  lines.push("", "## Run Markers", "");
+  if (Array.isArray(evidence.run_markers) && evidence.run_markers.length) {
+    evidence.run_markers.forEach((item) => lines.push("- " + [item.marker_type || "marker", item.title || "-", item.created_at || "-", item.notes || ""].filter(Boolean).join(" | ")));
+  } else {
+    lines.push("- None");
+  }
   lines.push("", "## JSON Payload", "", "~~~json", JSON.stringify(evidence, null, 2), "~~~");
   return lines.join("\n");
 }
@@ -1722,12 +1736,13 @@ function renderSelectedSavedSessionEvidence(record) {
   }
   const blockers = Array.isArray(evidence?.session?.blockers) ? evidence.session.blockers : [];
   const warnings = Array.isArray(evidence?.readiness?.warnings) ? evidence.readiness.warnings : [];
+  const runMarkers = Array.isArray(evidence?.run_markers) ? evidence.run_markers : [];
   renderItems("session-evidence-selected", [record], "", () =>
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
       "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + "</span></div>" +
-      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
   );
@@ -1864,6 +1879,7 @@ function renderSessionEvidence(snapshot) {
   $("session-evidence-timestamp").textContent = fmtTime(evidence.session.last_checked || evidence.captured_at);
   $("session-evidence-incident-count").textContent = String((evidence.incidents || []).length);
   $("session-evidence-state-count").textContent = String((evidence.state_history || []).length);
+  $("session-evidence-run-marker-count").textContent = String((evidence.run_markers || []).length);
   const ready = !!snapshot?.status;
   $("session-evidence-save-button").disabled = !ready || (setupActionsRequireToken() && !getSetupToken() && !getCertToken());
   $("session-evidence-json-button").disabled = !ready;
