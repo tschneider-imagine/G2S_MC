@@ -90,4 +90,15 @@ CREATE TABLE IF NOT EXISTS session_evidence_records (
     operator_notes TEXT,
     payload_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS run_markers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    marker_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT,
+    host_id TEXT,
+    wire_host_url TEXT,
+    operator_name TEXT
+);
 `

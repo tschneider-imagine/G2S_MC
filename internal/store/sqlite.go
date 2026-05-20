@@ -526,9 +526,64 @@ func (s *SQLiteStore) DeleteSessionEvidence(ctx context.Context, id int64) error
 	return err
 }
 
+func (s *SQLiteStore) RecordRunMarker(ctx context.Context, marker model.RunMarker) (int64, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO run_markers (
+			created_at, marker_type, title, notes, host_id, wire_host_url, operator_name
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		marker.CreatedAt,
+		marker.MarkerType,
+		marker.Title,
+		marker.Notes,
+		marker.HostID,
+		marker.WireHostURL,
+		marker.Operator,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.RunMarker, error) {
+	limit = normalizeLimit(limit)
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, created_at, marker_type, title, COALESCE(notes, ''), COALESCE(host_id, ''), COALESCE(wire_host_url, ''), COALESCE(operator_name, '')
+		 FROM run_markers
+		 ORDER BY id DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []model.RunMarker{}
+	for rows.Next() {
+		var record model.RunMarker
+		if err := rows.Scan(
+			&record.ID,
+			&record.CreatedAt,
+			&record.MarkerType,
+			&record.Title,
+			&record.Notes,
+			&record.HostID,
+			&record.WireHostURL,
+			&record.Operator,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}

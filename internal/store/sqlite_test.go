@@ -272,6 +272,47 @@ func TestSessionEvidenceCRUD(t *testing.T) {
 	assertCount(t, store, "session_evidence_records", 0)
 }
 
+func TestRunMarkerCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	record := model.RunMarker{
+		CreatedAt:   time.Now().UTC().Truncate(time.Second),
+		MarkerType:  "start",
+		Title:       "Cabinet session started",
+		Notes:       "first live cabinet attempt",
+		HostID:      "HOST-TSPI4-001",
+		WireHostURL: "https://tspi4.local:8444/g2s",
+		Operator:    "lab-ui",
+	}
+	id, err := store.RecordRunMarker(ctx, record)
+	if err != nil {
+		t.Fatalf("record run marker: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("expected run marker id")
+	}
+	assertCount(t, store, "run_markers", 1)
+
+	records, err := store.ListRunMarkers(ctx, 10)
+	if err != nil {
+		t.Fatalf("list run markers: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 run marker, got %d", len(records))
+	}
+	if records[0].Title != record.Title {
+		t.Fatalf("title = %q, want %q", records[0].Title, record.Title)
+	}
+	if records[0].MarkerType != record.MarkerType {
+		t.Fatalf("marker_type = %q, want %q", records[0].MarkerType, record.MarkerType)
+	}
+}
+
 func assertCount(t *testing.T, store *SQLiteStore, table string, want int) {
 	t.Helper()
 	got, err := store.Count(context.Background(), table)

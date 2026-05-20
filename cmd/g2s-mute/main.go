@@ -127,6 +127,7 @@ func main() {
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
 	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
+	mux.HandleFunc("/api/run-markers", runMarkersHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
 	mux.HandleFunc(
@@ -543,6 +544,16 @@ type sessionEvidencePayload struct {
 	} `json:"cabinet_profile"`
 }
 
+type runMarkerPayload struct {
+	CreatedAt   time.Time `json:"created_at"`
+	MarkerType  string    `json:"marker_type"`
+	Title       string    `json:"title"`
+	Notes       string    `json:"notes"`
+	HostID      string    `json:"host_id"`
+	WireHostURL string    `json:"wire_host_url"`
+	Operator    string    `json:"operator"`
+}
+
 func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -604,6 +615,60 @@ func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 				PayloadJSON:    string(raw),
 			}
 			id, err := store.RecordSessionEvidence(r.Context(), record)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			record.ID = id
+			writeJSON(w, record, nil)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func runMarkersHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			records, err := store.ListRunMarkers(r.Context(), queryLimit(r, 20))
+			writeJSON(w, records, err)
+		case http.MethodPost:
+			if !requireMutationAuth(w, r, cfg) {
+				return
+			}
+			var payload runMarkerPayload
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&payload); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			markerType := strings.ToLower(strings.TrimSpace(payload.MarkerType))
+			switch markerType {
+			case "start", "note", "end":
+			default:
+				http.Error(w, "marker_type must be start, note, or end", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(payload.Title) == "" {
+				http.Error(w, "title is required", http.StatusBadRequest)
+				return
+			}
+			createdAt := payload.CreatedAt
+			if createdAt.IsZero() {
+				createdAt = time.Now().UTC()
+			}
+			record := model.RunMarker{
+				CreatedAt:   createdAt,
+				MarkerType:  markerType,
+				Title:       strings.TrimSpace(payload.Title),
+				Notes:       strings.TrimSpace(payload.Notes),
+				HostID:      strings.TrimSpace(payload.HostID),
+				WireHostURL: strings.TrimSpace(payload.WireHostURL),
+				Operator:    strings.TrimSpace(payload.Operator),
+			}
+			id, err := store.RecordRunMarker(r.Context(), record)
 			if err != nil {
 				writeJSON(w, nil, err)
 				return

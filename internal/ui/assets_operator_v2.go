@@ -259,10 +259,30 @@ const dashboardHTML = `<!doctype html>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="incident">Incidents</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="egm">EGM</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="state">State</button>
+              <button type="button" class="timeline-filter-tab" data-timeline-filter="marker">Markers</button>
             </div>
             <span id="timeline-filter-label" class="muted-text">Showing all timeline events</span>
           </div>
         </div>
+        <form id="run-marker-form" class="setup-form run-marker-form">
+          <div class="panel-title-row">
+            <strong>Run Markers</strong>
+            <span id="run-marker-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="run-marker-message" class="muted-text">Mark session start, operator notes, and session end directly into the appliance timeline.</span>
+          <div class="form-grid run-marker-grid">
+            <label>Marker Title<input id="run-marker-title" name="title" autocomplete="off"></label>
+            <label>Operator<input id="run-marker-operator" name="operator" autocomplete="off" placeholder="lab-ui"></label>
+          </div>
+          <label class="cert-textarea-label evidence-notes-label">Run Marker Notes
+            <textarea id="run-marker-notes" rows="4" placeholder="Optional cabinet notes, attach/detach notes, or operator observations."></textarea>
+          </label>
+          <div class="setup-actions evidence-actions">
+            <button id="run-marker-start-button" type="button">Mark Start</button>
+            <button id="run-marker-note-button" type="button" class="secondary-button">Add Note</button>
+            <button id="run-marker-end-button" type="button" class="secondary-button">Mark End</button>
+          </div>
+        </form>
         <div id="cabinet-run-timeline" class="timeline"></div>
       </div>
 
@@ -781,6 +801,11 @@ th {
   color: #1e6c47;
 }
 
+.timeline-kind-marker {
+  background: #f3ebff;
+  color: #5b3f91;
+}
+
 .kv-list {
   display: grid;
   gap: 1px;
@@ -889,6 +914,16 @@ th {
 .cert-manager-detail {
   padding: 0 18px 18px;
   overflow-wrap: anywhere;
+}
+
+.run-marker-form {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.run-marker-grid {
+  grid-template-columns: minmax(240px, 0.6fr) minmax(180px, 0.4fr);
 }
 
 .cert-textarea-label {
@@ -1209,6 +1244,7 @@ const dashboardJS = `const endpoints = {
   incidents: "/api/incidents?limit=6",
   egmHistory: "/api/egms/history?limit=8",
   stateHistory: "/api/state-history?limit=8",
+  runMarkers: "/api/run-markers?limit=12",
   certificates: "/api/certificates",
   sessionEvidence: "/api/session-evidence?limit=8",
   cabinetProfile: "/api/cabinet-profile",
@@ -1261,6 +1297,7 @@ function emptySnapshot() {
     incidents: [],
     egmHistory: [],
     stateHistory: [],
+    runMarkers: [],
     certificates: [],
     sessionEvidence: [],
     cabinetProfile: null,
@@ -1281,6 +1318,7 @@ function copySnapshot(snapshot) {
     incidents: Array.isArray(snapshot.incidents) ? snapshot.incidents.slice() : [],
     egmHistory: Array.isArray(snapshot.egmHistory) ? snapshot.egmHistory.slice() : [],
     stateHistory: Array.isArray(snapshot.stateHistory) ? snapshot.stateHistory.slice() : [],
+    runMarkers: Array.isArray(snapshot.runMarkers) ? snapshot.runMarkers.slice() : [],
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
     cabinetProfile: snapshot.cabinetProfile || null,
@@ -1916,10 +1954,92 @@ function renderItems(id, items, emptyText, mapItem) {
   el.innerHTML = items.map(mapItem).join("");
 }
 
+function currentCabinetProfileSnapshot() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  return snapshot?.cabinetProfile?.effective || snapshot?.status?.cabinet_profile || {};
+}
+
+function defaultRunMarkerTitle(markerType) {
+  const profile = currentCabinetProfileSnapshot();
+  const hostID = profile.host_id || "cabinet";
+  if (markerType === "start") return "Session start - " + hostID;
+  if (markerType === "end") return "Session end - " + hostID;
+  return "Operator note - " + hostID;
+}
+
+function setRunMarkerState(level, message) {
+  const badge = $("run-marker-state");
+  badge.textContent = level;
+  badge.className = "source-pill " + (level === "ready" || level === "saved" ? "source-file" : level === "working" ? "source-override" : "source-mixed");
+  $("run-marker-message").textContent = message;
+}
+
+function runMarkerPayload(markerType) {
+  const profile = currentCabinetProfileSnapshot();
+  const title = $("run-marker-title").value.trim() || defaultRunMarkerTitle(markerType);
+  const operator = $("run-marker-operator").value.trim() || "lab-ui";
+  return {
+    created_at: new Date().toISOString(),
+    marker_type: markerType,
+    title: title,
+    notes: $("run-marker-notes").value.trim(),
+    host_id: profile.host_id || "",
+    wire_host_url: profile.wire_host_url || "",
+    operator: operator
+  };
+}
+
+function renderRunMarkerControls(snapshot) {
+  const runtime = snapshot?.status?.runtime || currentRuntime();
+  const tokenRequired = runtime.api_mutation_auth_required === true;
+  const tokenPresent = !!getSetupToken() || !!getCertToken();
+  $("run-marker-start-button").disabled = tokenRequired && !tokenPresent;
+  $("run-marker-note-button").disabled = tokenRequired && !tokenPresent;
+  $("run-marker-end-button").disabled = tokenRequired && !tokenPresent;
+  if (tokenRequired) {
+    setRunMarkerState("ready", "Run markers require an API token in this browser session.");
+  } else {
+    setRunMarkerState("ready", "Run markers are ready for trusted lab mode.");
+  }
+}
+
+async function submitRunMarker(markerType) {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    setRunMarkerState("blocked", "Enter an API token before writing run markers.");
+    return;
+  }
+  const payload = runMarkerPayload(markerType);
+  try {
+    setRunMarkerState("working", "Saving run marker.");
+    const token = getSetupToken() || getCertToken();
+    const headers = { "Content-Type": "application/json" };
+    if (token) {
+      headers.Authorization = "Bearer " + token;
+    }
+    const response = await fetch(endpoints.runMarkers.replace("?limit=12", ""), {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setRunMarkerState("blocked", "Run marker failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    $("run-marker-title").value = "";
+    $("run-marker-notes").value = "";
+    setRunMarkerState("saved", "Run marker saved to cabinet timeline.");
+    schedulePoll(0);
+  } catch (err) {
+    setRunMarkerState("blocked", err && err.message ? err.message : "Run marker failed.");
+  }
+}
+
 function buildCabinetRunTimeline(snapshot) {
   const incidents = Array.isArray(snapshot?.incidents) ? snapshot.incidents : [];
   const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
   const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
+  const runMarkers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
   const timeline = [];
 
   incidents.forEach((item) => {
@@ -1955,6 +2075,17 @@ function buildCabinetRunTimeline(snapshot) {
     });
   });
 
+  runMarkers.forEach((item) => {
+    timeline.push({
+      kind: "marker",
+      createdAt: item.created_at || "",
+      sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
+      title: String(item.title || item.marker_type || "marker"),
+      detail: (item.notes ? String(item.notes) + " | " : "") + (item.host_id || "-") + " | " + (item.wire_host_url || "-"),
+      meta: (item.operator || "operator") + " | " + String(item.marker_type || "marker")
+    });
+  });
+
   timeline.sort((a, b) => b.sortTime - a.sortTime);
   return timeline;
 }
@@ -1971,7 +2102,8 @@ function updateTimelineFilterLabels(total, filtered) {
     all: "Showing all timeline events",
     incident: "Showing incident timeline events",
     egm: "Showing EGM timeline events",
-    state: "Showing controller state timeline events"
+    state: "Showing controller state timeline events",
+    marker: "Showing operator run markers"
   };
   $("timeline-count").textContent = filtered + " / " + total + " events";
   $("timeline-filter-label").textContent = map[clientState.timelineFilter] || map.all;
@@ -2638,6 +2770,7 @@ function renderStatus(snapshot) {
   renderSessionEvidence(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
   renderEGMTable(status);
+  renderRunMarkerControls(snapshot);
   renderCabinetRunTimeline(snapshot);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
@@ -2808,13 +2941,14 @@ async function pollOnce() {
       fetchJSON(endpoints.incidents),
       fetchJSON(endpoints.egmHistory),
       fetchJSON(endpoints.stateHistory),
+      fetchJSON(endpoints.runMarkers),
       fetchJSON(endpoints.certificates),
       fetchJSON(endpoints.sessionEvidence),
       fetchJSON(endpoints.cabinetProfile),
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -2840,6 +2974,7 @@ async function pollOnce() {
     if (incidentsResult.status === "fulfilled") snapshot.incidents = incidentsResult.value;
     if (egmHistoryResult.status === "fulfilled") snapshot.egmHistory = egmHistoryResult.value;
     if (stateHistoryResult.status === "fulfilled") snapshot.stateHistory = stateHistoryResult.value;
+    if (runMarkersResult.status === "fulfilled") snapshot.runMarkers = runMarkersResult.value;
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
     if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
@@ -2848,6 +2983,7 @@ async function pollOnce() {
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
     if (stateHistoryResult.status !== "fulfilled") failures.push("state history unavailable");
+    if (runMarkersResult.status !== "fulfilled") failures.push("run markers unavailable");
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
     if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
@@ -2949,6 +3085,15 @@ function bindControls() {
       exportSavedSessionEvidenceMarkdown(id);
     }
   });
+  $("run-marker-start-button").addEventListener("click", () => {
+    submitRunMarker("start");
+  });
+  $("run-marker-note-button").addEventListener("click", () => {
+    submitRunMarker("note");
+  });
+  $("run-marker-end-button").addEventListener("click", () => {
+    submitRunMarker("end");
+  });
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-role-select").addEventListener("change", () => {
@@ -3023,6 +3168,7 @@ updateStaleBadge();
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
+renderRunMarkerControls(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`

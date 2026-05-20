@@ -102,3 +102,14 @@ type SessionEvidenceRecord struct {
 	OperatorNotes  string    `json:"operator_notes,omitempty"`
 	PayloadJSON    string    `json:"payload_json"`
 }
+
+type RunMarker struct {
+	ID          int64     `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	MarkerType  string    `json:"marker_type"`
+	Title       string    `json:"title"`
+	Notes       string    `json:"notes,omitempty"`
+	HostID      string    `json:"host_id,omitempty"`
+	WireHostURL string    `json:"wire_host_url,omitempty"`
+	Operator    string    `json:"operator,omitempty"`
+}
