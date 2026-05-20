@@ -188,6 +188,32 @@ curl -fsS "http://127.0.0.1:8444/api/certificates/export?role=g2s_client_cert&in
   -H "Authorization: Bearer ${TOKEN}"
 ```
 
+For the Pi appliance, prefer the runtime configuration helper instead of hand-editing the active config:
+
+```bash
+bash ./scripts/pi-configure-runtime.sh
+```
+
+The helper:
+
+- creates or reuses `~/.g2s_api_token`
+- updates `/etc/g2s-mute/config.json` with `api.auth_token`
+- writes non-placeholder `cabinet_profile` defaults using the Pi hostname/IP
+- restarts `g2s-mute.service`
+- clears stale cabinet profile overrides through the API
+- runs `scripts/release-gate.sh` against `http://127.0.0.1:8444`
+
+Useful overrides:
+
+```bash
+WIRE_HOST_URL=https://tspi4.local:8444/g2s \
+LISTENER_DNS_NAME=tspi4.local \
+LISTENER_IP=192.168.10.25 \
+HOST_ID=HOST-TSPI4-001 \
+FIRST_TEST_EGM_IDS=EGM-001 \
+bash ./scripts/pi-configure-runtime.sh
+```
+
 Write and backup behavior on import:
 
 - writes to configured runtime paths in `crypto.*_path`

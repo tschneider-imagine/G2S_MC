@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -181,20 +182,22 @@ func TestCertificateImportHandlerPersistsMaterialsAndRefreshesInventory(t *testi
 		t.Fatalf("unexpected key content: %q", string(keyBytes))
 	}
 
-	certInfo, err := os.Stat(clientCertPath)
-	if err != nil {
-		t.Fatalf("stat cert: %v", err)
-	}
-	if certInfo.Mode().Perm() != 0o644 {
-		t.Fatalf("cert mode = %o, want 644", certInfo.Mode().Perm())
-	}
+	if runtime.GOOS != "windows" {
+		certInfo, err := os.Stat(clientCertPath)
+		if err != nil {
+			t.Fatalf("stat cert: %v", err)
+		}
+		if certInfo.Mode().Perm() != 0o644 {
+			t.Fatalf("cert mode = %o, want 644", certInfo.Mode().Perm())
+		}
 
-	keyInfo, err := os.Stat(clientKeyPath)
-	if err != nil {
-		t.Fatalf("stat key: %v", err)
-	}
-	if keyInfo.Mode().Perm() != 0o600 {
-		t.Fatalf("key mode = %o, want 600", keyInfo.Mode().Perm())
+		keyInfo, err := os.Stat(clientKeyPath)
+		if err != nil {
+			t.Fatalf("stat key: %v", err)
+		}
+		if keyInfo.Mode().Perm() != 0o600 {
+			t.Fatalf("key mode = %o, want 600", keyInfo.Mode().Perm())
+		}
 	}
 
 	certBackups, err := filepath.Glob(clientCertPath + ".bak-*")
