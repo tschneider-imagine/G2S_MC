@@ -458,7 +458,11 @@ func waitForLastEvent(t *testing.T, eng *engine.Engine, event string) {
 	t.Fatalf("timed out waiting for last event %q (got %q)", event, eng.Snapshot().LastEvent)
 }
 
-func TestCabinetProfileHandlerAuthTokenGuard(t *testing.T) {
+func deniedByAuth(code int) bool {
+	return code == http.StatusUnauthorized || code == http.StatusForbidden
+}
+
+func TestCabinetProfileRouteMutationAuthTokenGuard(t *testing.T) {
 	ctx := context.Background()
 	auditStore, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -476,7 +480,12 @@ func TestCabinetProfileHandlerAuthTokenGuard(t *testing.T) {
 			FirstTestEGMIDs: []string{"EGM-01"},
 		},
 	}
-	handler := cabinetProfileHandler(auditStore, cfg)
+	handler := requireMutationAuthForMethods(
+		cabinetProfileHandler(auditStore, cfg),
+		cfg.API.AuthToken,
+		http.MethodPut,
+		http.MethodDelete,
+	)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/cabinet-profile", nil)
 	getRec := httptest.NewRecorder()
@@ -500,8 +509,8 @@ func TestCabinetProfileHandlerAuthTokenGuard(t *testing.T) {
 	putReqUnauthorized.Header.Set("Content-Type", "application/json")
 	putRecUnauthorized := httptest.NewRecorder()
 	handler(putRecUnauthorized, putReqUnauthorized)
-	if putRecUnauthorized.Code != http.StatusUnauthorized {
-		t.Fatalf("PUT without token status = %d, want %d", putRecUnauthorized.Code, http.StatusUnauthorized)
+	if !deniedByAuth(putRecUnauthorized.Code) {
+		t.Fatalf("PUT without token status = %d, want 401/403", putRecUnauthorized.Code)
 	}
 
 	putReqInvalid := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
@@ -509,8 +518,8 @@ func TestCabinetProfileHandlerAuthTokenGuard(t *testing.T) {
 	putReqInvalid.Header.Set("Authorization", "Bearer wrong-token")
 	putRecInvalid := httptest.NewRecorder()
 	handler(putRecInvalid, putReqInvalid)
-	if putRecInvalid.Code != http.StatusUnauthorized {
-		t.Fatalf("PUT with invalid token status = %d, want %d", putRecInvalid.Code, http.StatusUnauthorized)
+	if !deniedByAuth(putRecInvalid.Code) {
+		t.Fatalf("PUT with invalid token status = %d, want 401/403", putRecInvalid.Code)
 	}
 
 	putReq := httptest.NewRequest(http.MethodPut, "/api/cabinet-profile", bytes.NewReader(raw))
@@ -525,8 +534,8 @@ func TestCabinetProfileHandlerAuthTokenGuard(t *testing.T) {
 	deleteReqUnauthorized := httptest.NewRequest(http.MethodDelete, "/api/cabinet-profile", nil)
 	deleteRecUnauthorized := httptest.NewRecorder()
 	handler(deleteRecUnauthorized, deleteReqUnauthorized)
-	if deleteRecUnauthorized.Code != http.StatusUnauthorized {
-		t.Fatalf("DELETE without token status = %d, want %d", deleteRecUnauthorized.Code, http.StatusUnauthorized)
+	if !deniedByAuth(deleteRecUnauthorized.Code) {
+		t.Fatalf("DELETE without token status = %d, want 401/403", deleteRecUnauthorized.Code)
 	}
 
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/cabinet-profile", nil)

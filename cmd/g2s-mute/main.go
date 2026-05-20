@@ -128,7 +128,15 @@ func main() {
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
 	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
-	mux.HandleFunc("/api/cabinet-profile", cabinetProfileHandler(auditStore, cfg))
+	mux.HandleFunc(
+		"/api/cabinet-profile",
+		requireMutationAuthForMethods(
+			cabinetProfileHandler(auditStore, cfg),
+			cfg.API.AuthToken,
+			http.MethodPut,
+			http.MethodDelete,
+		),
+	)
 	mux.HandleFunc("/api/cabinet-preflight", cabinetPreflightHandler(eng, auditStore, cfg, runtimeInfo{
 		ConfigPath:       *configPath,
 		StartedAt:        startedAt,
@@ -520,9 +528,6 @@ func cabinetProfileHandler(store *store.SQLiteStore, cfg config.Config) http.Han
 			}
 			writeJSON(w, buildCabinetProfileResponse(profile), nil)
 		case http.MethodPut:
-			if !requireMutationAuth(w, r, cfg.API.AuthToken) {
-				return
-			}
 			var profile config.CabinetProfile
 			if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -547,9 +552,6 @@ func cabinetProfileHandler(store *store.SQLiteStore, cfg config.Config) http.Han
 			}
 			writeJSON(w, buildCabinetProfileResponse(resolved), nil)
 		case http.MethodDelete:
-			if !requireMutationAuth(w, r, cfg.API.AuthToken) {
-				return
-			}
 			if err := store.ClearCabinetProfileOverride(r.Context()); err != nil {
 				writeJSON(w, nil, err)
 				return

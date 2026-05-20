@@ -6,6 +6,21 @@ import (
 	"strings"
 )
 
+func requireMutationAuthForMethods(next http.HandlerFunc, expectedToken string, methods ...string) http.HandlerFunc {
+	methodSet := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
+		methodSet[method] = struct{}{}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, guarded := methodSet[r.Method]; guarded {
+			if !requireMutationAuth(w, r, expectedToken) {
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
 func requireMutationAuth(w http.ResponseWriter, r *http.Request, expectedToken string) bool {
 	token := strings.TrimSpace(expectedToken)
 	if token == "" {
