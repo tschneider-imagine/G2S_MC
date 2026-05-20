@@ -122,6 +122,7 @@ printf '%s\n' "${TOKEN}" >"${API_TOKEN_FILE}"
 chmod 600 "${API_TOKEN_FILE}"
 
 TMP_CONFIG="$(mktemp)"
+rm -f "${TMP_CONFIG}"
 cleanup() {
   rm -f "${TMP_CONFIG}"
 }
