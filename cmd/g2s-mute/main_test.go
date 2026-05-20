@@ -714,6 +714,14 @@ func TestSessionEvidenceHandlerCRUDAndAuth(t *testing.T) {
 		t.Fatalf("overall_state = %q", records[0].OverallState)
 	}
 
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/session-evidence?id=1", nil)
+	deleteReq.RemoteAddr = "192.168.10.70:4555"
+	deleteRec := httptest.NewRecorder()
+	handler(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE trusted private network status = %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+
 	strictCfg := config.Config{
 		API: config.API{AuthToken: "lab-secret"},
 	}
@@ -724,5 +732,13 @@ func TestSessionEvidenceHandlerCRUDAndAuth(t *testing.T) {
 	strictHandler(unauthorizedRec, unauthorizedReq)
 	if !deniedByAuth(unauthorizedRec.Code) {
 		t.Fatalf("POST public network without token status = %d, want 401/403", unauthorizedRec.Code)
+	}
+
+	unauthorizedDeleteReq := httptest.NewRequest(http.MethodDelete, "/api/session-evidence?id=1", nil)
+	unauthorizedDeleteReq.RemoteAddr = "198.51.100.40:4555"
+	unauthorizedDeleteRec := httptest.NewRecorder()
+	strictHandler(unauthorizedDeleteRec, unauthorizedDeleteReq)
+	if !deniedByAuth(unauthorizedDeleteRec.Code) {
+		t.Fatalf("DELETE public network without token status = %d, want 401/403", unauthorizedDeleteRec.Code)
 	}
 }

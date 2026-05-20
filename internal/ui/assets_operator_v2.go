@@ -156,6 +156,7 @@ const dashboardHTML = `<!doctype html>
           <button id="session-evidence-save-button" type="button">Save to Appliance History</button>
           <button id="session-evidence-json-button" type="button">Download JSON Evidence</button>
           <button id="session-evidence-markdown-button" type="button" class="secondary-button">Download Markdown Evidence</button>
+          <button id="session-evidence-export-all-button" type="button" class="secondary-button">Download All Saved Evidence</button>
         </div>
         <div class="first-cabinet-session-blockers-wrap">
           <p class="label">Recent Captures</p>
@@ -1682,6 +1683,82 @@ function exportSavedSessionEvidenceMarkdown(id) {
   $("session-evidence-message").textContent = "Saved Markdown evidence downloaded.";
 }
 
+function exportAllSavedSessionEvidence() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const records = Array.isArray(snapshot?.sessionEvidence) ? snapshot.sessionEvidence : [];
+  if (records.length === 0) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = "No saved evidence captures are available to export.";
+    return;
+  }
+  const payload = records.map((record) => ({
+    record: {
+      id: record.id,
+      created_at: record.created_at,
+      overall_state: record.overall_state,
+      readyz_state: record.readyz_state,
+      preflight_state: record.preflight_state,
+      host_id: record.host_id,
+      wire_host_url: record.wire_host_url,
+      operator_notes: record.operator_notes || ""
+    },
+    evidence: parseSavedSessionEvidencePayload(record)
+  }));
+  downloadTextMaterial("saved-session-evidence-history.json", JSON.stringify(payload, null, 2));
+  $("session-evidence-state").textContent = "saved";
+  $("session-evidence-state").className = "source-pill source-file";
+  $("session-evidence-message").textContent = "Saved evidence history downloaded.";
+}
+
+async function deleteSavedSessionEvidence(id) {
+  const numericID = Number(id) || 0;
+  if (!numericID) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = "Saved evidence record id is invalid.";
+    return;
+  }
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = "Enter an API token before deleting saved evidence.";
+    return;
+  }
+  try {
+    $("session-evidence-state").textContent = "working";
+    $("session-evidence-state").className = "source-pill source-override";
+    $("session-evidence-message").textContent = "Deleting saved evidence #" + numericID + ".";
+    const token = getSetupToken() || getCertToken();
+    const headers = {};
+    if (token) {
+      headers.Authorization = "Bearer " + token;
+    }
+    const response = await fetch(endpoints.sessionEvidence.replace("?limit=8", "") + "?id=" + encodeURIComponent(String(numericID)), {
+      method: "DELETE",
+      headers: headers
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      $("session-evidence-state").textContent = "blocked";
+      $("session-evidence-state").className = "source-pill source-mixed";
+      $("session-evidence-message").textContent = "Delete failed: HTTP " + response.status + (detail ? " " + detail : "");
+      return;
+    }
+    if (String(clientState.selectedSessionEvidenceID) === String(numericID)) {
+      clientState.selectedSessionEvidenceID = 0;
+    }
+    $("session-evidence-state").textContent = "saved";
+    $("session-evidence-state").className = "source-pill source-file";
+    $("session-evidence-message").textContent = "Saved evidence deleted.";
+    schedulePoll(0);
+  } catch (err) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = err && err.message ? err.message : "Delete failed.";
+  }
+}
+
 function renderSessionEvidence(snapshot) {
   const evidence = buildSessionEvidence(snapshot);
   const selectedRecord = selectedSavedSessionEvidence(snapshot);
@@ -1693,6 +1770,7 @@ function renderSessionEvidence(snapshot) {
   $("session-evidence-save-button").disabled = !ready || (setupActionsRequireToken() && !getSetupToken() && !getCertToken());
   $("session-evidence-json-button").disabled = !ready;
   $("session-evidence-markdown-button").disabled = !ready;
+  $("session-evidence-export-all-button").disabled = !snapshot?.sessionEvidence || snapshot.sessionEvidence.length === 0;
   const badge = $("session-evidence-state");
   badge.textContent = ready ? "ready" : "waiting";
   badge.className = "source-pill " + (ready ? "source-file" : "source-mixed");
@@ -1704,7 +1782,8 @@ function renderSessionEvidence(snapshot) {
     escapeHTML(item.host_id || "-") + " at " + escapeHTML(fmtTime(item.created_at)) +
     (item.operator_notes ? " - " + escapeHTML(item.operator_notes) : "") + "</span></div>" +
     "<div class=\"session-evidence-history-actions\">" +
-      "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"view\" data-evidence-id=\"" + escapeHTML(item.id) + "\">View</button>" +
+      "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"select\" data-evidence-id=\"" + escapeHTML(item.id) + "\">Select</button>" +
+      "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"delete\" data-evidence-id=\"" + escapeHTML(item.id) + "\">Delete</button>" +
       "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"json\" data-evidence-id=\"" + escapeHTML(item.id) + "\">Download JSON</button>" +
       "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"markdown\" data-evidence-id=\"" + escapeHTML(item.id) + "\">Download Markdown</button>" +
     "</div></div>"
@@ -2710,13 +2789,18 @@ function bindControls() {
   $("session-evidence-save-button").addEventListener("click", saveSessionEvidenceToHistory);
   $("session-evidence-json-button").addEventListener("click", exportSessionEvidenceJSON);
   $("session-evidence-markdown-button").addEventListener("click", exportSessionEvidenceMarkdown);
+  $("session-evidence-export-all-button").addEventListener("click", exportAllSavedSessionEvidence);
   $("session-evidence-history").addEventListener("click", (event) => {
     const button = event.target.closest(".session-evidence-history-button");
     if (!button) return;
     const id = button.getAttribute("data-evidence-id") || "";
     const action = button.getAttribute("data-evidence-action") || "";
-    if (action === "view") {
+    if (action === "select") {
       viewSavedSessionEvidence(id);
+      return;
+    }
+    if (action === "delete") {
+      deleteSavedSessionEvidence(id);
       return;
     }
     if (action === "json") {

@@ -265,6 +265,11 @@ func TestSessionEvidenceCRUD(t *testing.T) {
 	if records[0].PayloadJSON != record.PayloadJSON {
 		t.Fatalf("payload_json = %q, want %q", records[0].PayloadJSON, record.PayloadJSON)
 	}
+
+	if err := store.DeleteSessionEvidence(ctx, id); err != nil {
+		t.Fatalf("delete session evidence: %v", err)
+	}
+	assertCount(t, store, "session_evidence_records", 0)
 }
 
 func assertCount(t *testing.T, store *SQLiteStore, table string, want int) {

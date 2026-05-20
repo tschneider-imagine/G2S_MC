@@ -549,6 +549,20 @@ func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 		case http.MethodGet:
 			records, err := store.ListSessionEvidence(r.Context(), queryLimit(r, 20))
 			writeJSON(w, records, err)
+		case http.MethodDelete:
+			if !requireMutationAuth(w, r, cfg) {
+				return
+			}
+			id, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("id")), 10, 64)
+			if err != nil || id <= 0 {
+				http.Error(w, "valid id query parameter is required", http.StatusBadRequest)
+				return
+			}
+			if err := store.DeleteSessionEvidence(r.Context(), id); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, map[string]any{"deleted_id": id}, nil)
 		case http.MethodPost:
 			if !requireMutationAuth(w, r, cfg) {
 				return

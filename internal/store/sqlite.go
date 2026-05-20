@@ -521,6 +521,11 @@ func (s *SQLiteStore) ListSessionEvidence(ctx context.Context, limit int) ([]mod
 	return records, rows.Err()
 }
 
+func (s *SQLiteStore) DeleteSessionEvidence(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM session_evidence_records WHERE id = ?`, id)
+	return err
+}
+
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
 	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records":
