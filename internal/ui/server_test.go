@@ -94,6 +94,21 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"run-marker-message\"") {
 		t.Fatalf("expected run marker status message")
 	}
+	if !strings.Contains(rr.Body.String(), "id=\"run-report-form\"") {
+		t.Fatalf("expected run report form")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"run-report-start-marker\"") {
+		t.Fatalf("expected run report start marker selector")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"run-report-end-marker\"") {
+		t.Fatalf("expected run report end marker selector")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"run-report-json-button\"") {
+		t.Fatalf("expected run report json export button")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"run-report-markdown-button\"") {
+		t.Fatalf("expected run report markdown export button")
+	}
 	if !strings.Contains(rr.Body.String(), "data-sort-key=\"last_seen\"") {
 		t.Fatalf("expected sortable last seen header")
 	}
@@ -143,14 +158,14 @@ func TestDashboardAssets(t *testing.T) {
 		}
 		body := rr.Body.String()
 			if path == "/static/dashboard.js" {
-			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "validateCertificateManagerForm", "certificateRoleRulesText", "cert-role-export-policy", "allow_private_key_export", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "mutationTokenRequired", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "run_markers", "session-evidence-state", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "viewSavedSessionEvidence", "exportSavedSessionEvidenceJSON", "exportSavedSessionEvidenceMarkdown", "exportAllSavedSessionEvidence", "deleteSavedSessionEvidence", "session-evidence-export-all-button", "session-evidence-selected", "buildCabinetRunTimeline", "renderCabinetRunTimeline", "timeline-filter-tab", "timeline-count", "timeline-filter-label", "runMarkers", "run-marker-start-button", "submitRunMarker", "renderRunMarkerControls", "sessionEvidence"} {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "validateCertificateManagerForm", "certificateRoleRulesText", "cert-role-export-policy", "allow_private_key_export", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "mutationTokenRequired", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "run_markers", "session-evidence-state", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "viewSavedSessionEvidence", "exportSavedSessionEvidenceJSON", "exportSavedSessionEvidenceMarkdown", "exportAllSavedSessionEvidence", "deleteSavedSessionEvidence", "session-evidence-export-all-button", "session-evidence-selected", "buildCabinetRunTimeline", "renderCabinetRunTimeline", "timeline-filter-tab", "timeline-count", "timeline-filter-label", "runMarkers", "run-marker-start-button", "submitRunMarker", "renderRunMarkerControls", "boundedRunReport", "buildRunReportMarkdown", "run-report-start-marker", "run-report-end-marker", "renderRunReportControls", "exportRunReportJSON", "exportRunReportMarkdown", "sessionEvidence"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}
 			}
 		}
 		if path == "/static/dashboard.css" {
-			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "trusted-bypass-hidden", "validation-list", "secondary-button", "cert-manager-form", "cert-role-summary", "cert-manager-details", "cert-manager-detail", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers", "evidence-capture-panel", "evidence-actions", "session-evidence-history-item", "session-evidence-history-actions", "session-evidence-selected-detail", "timeline-entry", "timeline-entry-head", "timeline-kind", "timeline-kind-marker", "cabinet-run-panel", "timeline-toolbar", "timeline-filter-tabs", "run-marker-form", "run-marker-grid", "run-marker-notes-label"} {
+			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "trusted-bypass-hidden", "validation-list", "secondary-button", "cert-manager-form", "cert-role-summary", "cert-manager-details", "cert-manager-detail", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers", "evidence-capture-panel", "evidence-actions", "session-evidence-history-item", "session-evidence-history-actions", "session-evidence-selected-detail", "timeline-entry", "timeline-entry-head", "timeline-kind", "timeline-kind-marker", "cabinet-run-panel", "timeline-toolbar", "timeline-filter-tabs", "run-marker-form", "run-marker-grid", "run-marker-notes-label", "run-report-form", "run-report-grid", "run-report-details"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}

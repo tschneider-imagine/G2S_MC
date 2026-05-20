@@ -284,6 +284,35 @@ const dashboardHTML = `<!doctype html>
             <button id="run-marker-end-button" type="button" class="secondary-button">Mark End</button>
           </div>
         </form>
+        <form id="run-report-form" class="setup-form run-report-form">
+          <div class="panel-title-row">
+            <strong>Run Window Report</strong>
+            <span id="run-report-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="run-report-message" class="muted-text">Pick a start and end marker to export a bounded run report.</span>
+          <div class="form-grid run-report-grid">
+            <label>Start Marker
+              <select id="run-report-start-marker"></select>
+            </label>
+            <label>End Marker
+              <select id="run-report-end-marker"></select>
+            </label>
+          </div>
+          <div class="setup-details run-report-details">
+            <div>
+              <p class="label">Window</p>
+              <strong id="run-report-window-summary">-</strong>
+            </div>
+            <div>
+              <p class="label">Counts</p>
+              <strong id="run-report-count-summary">-</strong>
+            </div>
+          </div>
+          <div class="setup-actions evidence-actions">
+            <button id="run-report-json-button" type="button">Download Run JSON</button>
+            <button id="run-report-markdown-button" type="button" class="secondary-button">Download Run Markdown</button>
+          </div>
+        </form>
         <div id="cabinet-run-timeline" class="timeline"></div>
       </div>
 
@@ -958,6 +987,20 @@ th {
   padding: 0 0 8px;
 }
 
+.run-report-form {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.run-report-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.run-report-details {
+  margin-top: 0;
+}
+
 .cert-textarea-label {
   display: grid;
   gap: 6px;
@@ -1273,12 +1316,12 @@ button:disabled {
 const dashboardJS = `const endpoints = {
   status: "/api/status",
   readyz: "/readyz",
-  incidents: "/api/incidents?limit=6",
-  egmHistory: "/api/egms/history?limit=8",
-  stateHistory: "/api/state-history?limit=8",
-  runMarkers: "/api/run-markers?limit=12",
+  incidents: "/api/incidents?limit=20",
+  egmHistory: "/api/egms/history?limit=30",
+  stateHistory: "/api/state-history?limit=30",
+  runMarkers: "/api/run-markers?limit=30",
   certificates: "/api/certificates",
-  sessionEvidence: "/api/session-evidence?limit=8",
+  sessionEvidence: "/api/session-evidence?limit=20",
   cabinetProfile: "/api/cabinet-profile",
   cabinetPreflight: "/api/cabinet-preflight",
   certificateImport: "/api/certificates/import",
@@ -1303,7 +1346,9 @@ const clientState = {
   egmFilter: "all",
   timelineFilter: "all",
   certSelectedRole: "g2s_ca_cert",
-  selectedSessionEvidenceID: 0
+  selectedSessionEvidenceID: 0,
+  selectedRunReportStartID: 0,
+  selectedRunReportEndID: 0
 };
 
 function currentRuntime() {
@@ -2155,6 +2200,177 @@ function updateTimelineFilterLabels(total, filtered) {
   });
 }
 
+function markerLabel(marker) {
+  if (!marker) return "-";
+  return (marker.marker_type || "marker").toUpperCase() + " | " + fmtTime(marker.created_at) + " | " + (marker.title || "-");
+}
+
+function findRunMarkerByID(id, snapshot) {
+  const records = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
+  for (let i = 0; i < records.length; i++) {
+    if (String(records[i]?.id) === String(id)) {
+      return records[i];
+    }
+  }
+  return null;
+}
+
+function normalizeRunReportSelections(snapshot) {
+  const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
+  if (markers.length === 0) {
+    clientState.selectedRunReportStartID = 0;
+    clientState.selectedRunReportEndID = 0;
+    return { start: null, end: null };
+  }
+  if (!findRunMarkerByID(clientState.selectedRunReportStartID, snapshot)) {
+    clientState.selectedRunReportStartID = markers[markers.length - 1].id || markers[0].id || 0;
+  }
+  if (!findRunMarkerByID(clientState.selectedRunReportEndID, snapshot)) {
+    clientState.selectedRunReportEndID = markers[0].id || 0;
+  }
+  return {
+    start: findRunMarkerByID(clientState.selectedRunReportStartID, snapshot),
+    end: findRunMarkerByID(clientState.selectedRunReportEndID, snapshot)
+  };
+}
+
+function recordInRange(createdAt, startTime, endTime) {
+  if (!createdAt) return false;
+  const ts = new Date(createdAt).getTime();
+  return ts >= startTime && ts <= endTime;
+}
+
+function boundedRunReport(snapshot) {
+  const selection = normalizeRunReportSelections(snapshot);
+  if (!selection.start || !selection.end) {
+    return null;
+  }
+  const firstTime = new Date(selection.start.created_at).getTime();
+  const secondTime = new Date(selection.end.created_at).getTime();
+  const startMarker = firstTime <= secondTime ? selection.start : selection.end;
+  const endMarker = firstTime <= secondTime ? selection.end : selection.start;
+  const startTime = new Date(startMarker.created_at).getTime();
+  const endTime = new Date(endMarker.created_at).getTime();
+  const profile = currentCabinetProfileSnapshot();
+  const incidents = (snapshot?.incidents || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const egmHistory = (snapshot?.egmHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const stateHistory = (snapshot?.stateHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const runMarkers = (snapshot?.runMarkers || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const sessionEvidence = (snapshot?.sessionEvidence || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  return {
+    generated_at: new Date().toISOString(),
+    window: {
+      start_marker: startMarker,
+      end_marker: endMarker,
+      started_at: startMarker.created_at,
+      ended_at: endMarker.created_at,
+      duration_seconds: Math.max(0, Math.floor((endTime - startTime) / 1000))
+    },
+    cabinet_profile: {
+      host_id: profile.host_id || "",
+      wire_host_url: profile.wire_host_url || ""
+    },
+    summary: {
+      incidents: incidents.length,
+      egm_events: egmHistory.length,
+      state_changes: stateHistory.length,
+      run_markers: runMarkers.length,
+      saved_evidence: sessionEvidence.length
+    },
+    incidents: incidents,
+    egm_history: egmHistory,
+    state_history: stateHistory,
+    run_markers: runMarkers,
+    saved_evidence: sessionEvidence
+  };
+}
+
+function buildRunReportMarkdown(report) {
+  const lines = [
+    "# Cabinet Run Report",
+    "",
+    "- Generated at: " + (report.generated_at || "-"),
+    "- Host ID: " + (report.cabinet_profile.host_id || "-"),
+    "- Wire host URL: " + (report.cabinet_profile.wire_host_url || "-"),
+    "- Start marker: " + (report.window.start_marker.title || "-"),
+    "- Start time: " + (report.window.started_at || "-"),
+    "- End marker: " + (report.window.end_marker.title || "-"),
+    "- End time: " + (report.window.ended_at || "-"),
+    "- Duration (s): " + String(report.window.duration_seconds || 0),
+    "- Incidents: " + String(report.summary.incidents || 0),
+    "- EGM events: " + String(report.summary.egm_events || 0),
+    "- State changes: " + String(report.summary.state_changes || 0),
+    "- Run markers: " + String(report.summary.run_markers || 0),
+    "- Saved evidence captures: " + String(report.summary.saved_evidence || 0),
+    "",
+    "## JSON Payload",
+    "",
+    "~~~json",
+    JSON.stringify(report, null, 2),
+    "~~~"
+  ];
+  return lines.join("\n");
+}
+
+function runReportFilenameBase(report) {
+  const hostID = String(report?.cabinet_profile?.host_id || "cabinet-run").replace(/[^A-Za-z0-9._-]+/g, "-");
+  const startID = report?.window?.start_marker?.id || "start";
+  const endID = report?.window?.end_marker?.id || "end";
+  return hostID + "-run-report-" + startID + "-to-" + endID;
+}
+
+function renderRunReportControls(snapshot) {
+  const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
+  const startSelect = $("run-report-start-marker");
+  const endSelect = $("run-report-end-marker");
+  const selection = normalizeRunReportSelections(snapshot);
+  startSelect.innerHTML = markers.map((marker) => "<option value=\"" + escapeHTML(marker.id) + "\">" + escapeHTML(markerLabel(marker)) + "</option>").join("");
+  endSelect.innerHTML = markers.map((marker) => "<option value=\"" + escapeHTML(marker.id) + "\">" + escapeHTML(markerLabel(marker)) + "</option>").join("");
+  if (selection.start) startSelect.value = String(selection.start.id);
+  if (selection.end) endSelect.value = String(selection.end.id);
+  const report = boundedRunReport(snapshot);
+  const enabled = !!report;
+  $("run-report-json-button").disabled = !enabled;
+  $("run-report-markdown-button").disabled = !enabled;
+  if (!report) {
+    $("run-report-window-summary").textContent = "Need at least one saved run marker.";
+    $("run-report-count-summary").textContent = "-";
+    $("run-report-state").textContent = "waiting";
+    $("run-report-state").className = "source-pill source-mixed";
+    $("run-report-message").textContent = "Mark a run start/end before exporting a bounded report.";
+    return;
+  }
+  $("run-report-window-summary").textContent = fmtTime(report.window.started_at) + " -> " + fmtTime(report.window.ended_at) + " (" + report.window.duration_seconds + "s)";
+  $("run-report-count-summary").textContent = "incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + ", state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
+  $("run-report-state").textContent = "ready";
+  $("run-report-state").className = "source-pill source-file";
+  $("run-report-message").textContent = "Run report window is ready to export.";
+}
+
+function exportRunReportJSON() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const report = boundedRunReport(snapshot);
+  if (!report) {
+    return;
+  }
+  downloadTextMaterial(runReportFilenameBase(report) + ".json", JSON.stringify(report, null, 2));
+  $("run-report-state").textContent = "saved";
+  $("run-report-state").className = "source-pill source-file";
+  $("run-report-message").textContent = "Run JSON report downloaded.";
+}
+
+function exportRunReportMarkdown() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const report = boundedRunReport(snapshot);
+  if (!report) {
+    return;
+  }
+  downloadTextMaterial(runReportFilenameBase(report) + ".md", buildRunReportMarkdown(report));
+  $("run-report-state").textContent = "saved";
+  $("run-report-state").className = "source-pill source-file";
+  $("run-report-message").textContent = "Run Markdown report downloaded.";
+}
+
 function renderCabinetRunTimeline(snapshot) {
   const items = buildCabinetRunTimeline(snapshot);
   const filtered = applyTimelineFilter(items);
@@ -2814,6 +3030,7 @@ function renderStatus(snapshot) {
   syncCabinetSetupFromSnapshot(snapshot);
   renderEGMTable(status);
   renderRunMarkerControls(snapshot);
+  renderRunReportControls(snapshot);
   renderCabinetRunTimeline(snapshot);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
@@ -3137,6 +3354,16 @@ function bindControls() {
   $("run-marker-end-button").addEventListener("click", () => {
     submitRunMarker("end");
   });
+  $("run-report-start-marker").addEventListener("change", (event) => {
+    clientState.selectedRunReportStartID = Number(event.target.value) || 0;
+    renderRunReportControls(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("run-report-end-marker").addEventListener("change", (event) => {
+    clientState.selectedRunReportEndID = Number(event.target.value) || 0;
+    renderRunReportControls(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("run-report-json-button").addEventListener("click", exportRunReportJSON);
+  $("run-report-markdown-button").addEventListener("click", exportRunReportMarkdown);
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-role-select").addEventListener("change", () => {
@@ -3212,6 +3439,7 @@ renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
 renderRunMarkerControls(emptySnapshot());
+renderRunReportControls(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`
