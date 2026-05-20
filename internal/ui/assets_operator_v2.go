@@ -182,9 +182,9 @@ const dashboardHTML = `<!doctype html>
             <label>Required SAN DNS<input id="setup-required-san-dns" name="required_san_dns" autocomplete="off"></label>
             <label>Required SAN IPs<input id="setup-required-san-ips" name="required_san_ips" autocomplete="off"></label>
             <label>First Test EGM IDs<input id="setup-first-test-egm-ids" name="first_test_egm_ids" autocomplete="off"></label>
-            <label><span id="setup-api-token-label">API Token Required for Save/Clear</span><input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
+            <label id="setup-api-token-wrapper"><span id="setup-api-token-label">API Token Required for Save/Clear</span><input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
           </div>
-          <div class="token-help">
+          <div id="setup-token-controls" class="token-help">
             <span id="setup-token-help-text">Enter the appliance API token to save or clear cabinet setup overrides.</span>
             <button id="setup-copy-token-button" type="button" class="secondary-button" disabled>Copy Entered Token</button>
           </div>
@@ -284,9 +284,9 @@ const dashboardHTML = `<!doctype html>
                 <option value="web_server_cert">Web Server Certificate + Key</option>
               </select>
             </label>
-            <label><span id="cert-api-token-label">API Token (required for import/export key)</span><input id="cert-api-token" name="api_token" type="password" autocomplete="off"></label>
+            <label id="cert-api-token-wrapper"><span id="cert-api-token-label">API Token (required for import/export key)</span><input id="cert-api-token" name="api_token" type="password" autocomplete="off"></label>
           </div>
-          <div class="token-help">
+          <div id="cert-token-controls" class="token-help">
             <span id="cert-token-help-text">Use API token for import and private-key export actions.</span>
             <button id="cert-copy-token-button" type="button" class="secondary-button" disabled>Copy Entered Token</button>
           </div>
@@ -866,6 +866,10 @@ th {
   font-weight: 800;
 }
 
+.trusted-bypass-hidden {
+  display: none !important;
+}
+
 .setup-details {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.45fr);
@@ -1122,6 +1126,10 @@ function setupActionsRequireToken() {
 
 function trustedMutationBypassActive() {
   return currentRuntime().trusted_mutation_bypass_active === true;
+}
+
+function mutationTokenRequired() {
+  return currentRuntime().api_mutation_auth_required === true;
 }
 
 function emptySnapshot() {
@@ -1769,11 +1777,13 @@ function renderCabinetSetupValidation() {
   const result = validateCabinetSetupProfile(profile);
   const host = result.parsedURL ? result.parsedURL.hostname : "-";
   const tokenPresent = !!getSetupToken();
-  const tokenRequired = setupActionsRequireToken();
+  const tokenRequired = mutationTokenRequired();
   const sanValues = []
     .concat(profile.required_san_dns.map((item) => "DNS:" + item))
     .concat(profile.required_san_ips.map((item) => "IP:" + item));
   $("setup-san-summary").textContent = "wire host " + host + "; " + (sanValues.length ? sanValues.join(", ") : "no SAN values");
+  $("setup-api-token-wrapper").classList.toggle("trusted-bypass-hidden", !tokenRequired);
+  $("setup-token-controls").classList.toggle("trusted-bypass-hidden", !tokenRequired);
   $("setup-api-token-label").textContent = tokenRequired ? "API Token Required for Save/Clear" : "API Token Optional for Save/Clear";
   $("setup-token-help-text").textContent = tokenRequired
     ? "Enter the appliance API token to save or clear cabinet setup overrides."
@@ -1972,6 +1982,8 @@ function renderCertificateManager(snapshot) {
   const stateDetail = record ? status + " (" + impact + ")" : "no inventory record available";
   const privateKeyText = details.requiresKey ? "Role supports private key import/export." : "Role is certificate-only.";
   $("cert-role-summary").textContent = roleDisplayName(role) + ": " + support + "; state " + stateDetail + "; " + privateKeyText;
+  $("cert-api-token-wrapper").classList.toggle("trusted-bypass-hidden", !tokenRequired);
+  $("cert-token-controls").classList.toggle("trusted-bypass-hidden", !tokenRequired);
   $("cert-api-token-label").textContent = tokenRequired ? "API Token (required for import/export key)" : "API Token (optional on trusted private network)";
   $("cert-token-help-text").textContent = tokenRequired
     ? "Use API token for import and private-key export actions."
