@@ -161,6 +161,10 @@ const dashboardHTML = `<!doctype html>
           <p class="label">Recent Captures</p>
           <div id="session-evidence-history" class="timeline"></div>
         </div>
+        <div class="first-cabinet-session-blockers-wrap">
+          <p class="label">Selected Saved Capture</p>
+          <div id="session-evidence-selected" class="timeline"></div>
+        </div>
       </div>
     </section>
 
@@ -1068,6 +1072,33 @@ button:disabled {
   padding: 0 16px 16px;
 }
 
+.session-evidence-history-item {
+  display: grid;
+  gap: 10px;
+}
+
+.session-evidence-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.session-evidence-history-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.session-evidence-selected-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.session-evidence-selected-detail .kv-inline {
+  display: grid;
+  gap: 4px;
+}
+
 .empty {
   padding: 18px;
   color: var(--muted);
@@ -1142,7 +1173,8 @@ const clientState = {
   egmSortKey: "egm_id",
   egmSortDir: "asc",
   egmFilter: "all",
-  certSelectedRole: "g2s_ca_cert"
+  certSelectedRole: "g2s_ca_cert",
+  selectedSessionEvidenceID: 0
 };
 
 function currentRuntime() {
@@ -1544,8 +1576,115 @@ function evidenceFilenameBase(evidence) {
   return hostID + "-session-evidence-" + stamp;
 }
 
+function parseSavedSessionEvidencePayload(record) {
+  if (!record || !record.payload_json) return null;
+  try {
+    return JSON.parse(record.payload_json);
+  } catch (_) {
+    return null;
+  }
+}
+
+function findSavedSessionEvidenceRecord(id, snapshot) {
+  const records = Array.isArray(snapshot?.sessionEvidence) ? snapshot.sessionEvidence : [];
+  for (let i = 0; i < records.length; i++) {
+    if (String(records[i]?.id) === String(id)) {
+      return records[i];
+    }
+  }
+  return null;
+}
+
+function selectedSavedSessionEvidence(snapshot) {
+  const records = Array.isArray(snapshot?.sessionEvidence) ? snapshot.sessionEvidence : [];
+  if (records.length === 0) {
+    clientState.selectedSessionEvidenceID = 0;
+    return null;
+  }
+  const selected = findSavedSessionEvidenceRecord(clientState.selectedSessionEvidenceID, snapshot);
+  if (selected) {
+    return selected;
+  }
+  clientState.selectedSessionEvidenceID = records[0].id || 0;
+  return records[0];
+}
+
+function renderSelectedSavedSessionEvidence(record) {
+  if (!record) {
+    renderItems("session-evidence-selected", [], "Select a saved capture to inspect it here.", () => "");
+    return;
+  }
+  const evidence = parseSavedSessionEvidencePayload(record);
+  if (!evidence) {
+    renderItems("session-evidence-selected", [record], "", () =>
+      "<div class=\"item session-evidence-selected-detail\"><strong>Saved capture #" + escapeHTML(record.id) + "</strong><span>Payload could not be parsed.</span></div>"
+    );
+    return;
+  }
+  const blockers = Array.isArray(evidence?.session?.blockers) ? evidence.session.blockers : [];
+  const warnings = Array.isArray(evidence?.readiness?.warnings) ? evidence.readiness.warnings : [];
+  renderItems("session-evidence-selected", [record], "", () =>
+    "<div class=\"item session-evidence-selected-detail\">" +
+      "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
+      "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
+      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
+    "</div>"
+  );
+}
+
+function viewSavedSessionEvidence(id) {
+  clientState.selectedSessionEvidenceID = Number(id) || 0;
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const record = selectedSavedSessionEvidence(snapshot);
+  renderSelectedSavedSessionEvidence(record);
+  if (record) {
+    $("session-evidence-state").textContent = "saved";
+    $("session-evidence-state").className = "source-pill source-file";
+    $("session-evidence-message").textContent = "Viewing saved capture #" + record.id + ".";
+  }
+}
+
+function exportSavedSessionEvidenceJSON(id) {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const record = findSavedSessionEvidenceRecord(id, snapshot);
+  const evidence = parseSavedSessionEvidencePayload(record);
+  if (!record || !evidence) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = "Saved evidence payload is unavailable.";
+    return;
+  }
+  clientState.selectedSessionEvidenceID = record.id || 0;
+  downloadTextMaterial(evidenceFilenameBase(evidence) + ".json", JSON.stringify(evidence, null, 2));
+  renderSelectedSavedSessionEvidence(record);
+  $("session-evidence-state").textContent = "saved";
+  $("session-evidence-state").className = "source-pill source-file";
+  $("session-evidence-message").textContent = "Saved JSON evidence downloaded.";
+}
+
+function exportSavedSessionEvidenceMarkdown(id) {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const record = findSavedSessionEvidenceRecord(id, snapshot);
+  const evidence = parseSavedSessionEvidencePayload(record);
+  if (!record || !evidence) {
+    $("session-evidence-state").textContent = "blocked";
+    $("session-evidence-state").className = "source-pill source-mixed";
+    $("session-evidence-message").textContent = "Saved evidence payload is unavailable.";
+    return;
+  }
+  clientState.selectedSessionEvidenceID = record.id || 0;
+  downloadTextMaterial(evidenceFilenameBase(evidence) + ".md", buildSessionEvidenceMarkdown(evidence));
+  renderSelectedSavedSessionEvidence(record);
+  $("session-evidence-state").textContent = "saved";
+  $("session-evidence-state").className = "source-pill source-file";
+  $("session-evidence-message").textContent = "Saved Markdown evidence downloaded.";
+}
+
 function renderSessionEvidence(snapshot) {
   const evidence = buildSessionEvidence(snapshot);
+  const selectedRecord = selectedSavedSessionEvidence(snapshot);
   $("session-evidence-overall").textContent = evidence.session.overall_state || "-";
   $("session-evidence-timestamp").textContent = fmtTime(evidence.session.last_checked || evidence.captured_at);
   $("session-evidence-incident-count").textContent = String((evidence.incidents || []).length);
@@ -1561,10 +1700,16 @@ function renderSessionEvidence(snapshot) {
     ? "Capture the current cabinet session state as JSON or Markdown."
     : "Waiting for appliance status before capture is available.";
   renderItems("session-evidence-history", snapshot?.sessionEvidence, "No saved captures yet", (item) =>
-    "<div class=\"item\"><strong>" + escapeHTML(item.overall_state || "-") + "</strong><span>" +
+    "<div class=\"item session-evidence-history-item\"><div><strong>" + escapeHTML(item.overall_state || "-") + "</strong><span>" +
     escapeHTML(item.host_id || "-") + " at " + escapeHTML(fmtTime(item.created_at)) +
-    (item.operator_notes ? " - " + escapeHTML(item.operator_notes) : "") + "</span></div>"
+    (item.operator_notes ? " - " + escapeHTML(item.operator_notes) : "") + "</span></div>" +
+    "<div class=\"session-evidence-history-actions\">" +
+      "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"view\" data-evidence-id=\"" + escapeHTML(item.id) + "\">View</button>" +
+      "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"json\" data-evidence-id=\"" + escapeHTML(item.id) + "\">Download JSON</button>" +
+      "<button type=\"button\" class=\"secondary-button session-evidence-history-button\" data-evidence-action=\"markdown\" data-evidence-id=\"" + escapeHTML(item.id) + "\">Download Markdown</button>" +
+    "</div></div>"
   );
+  renderSelectedSavedSessionEvidence(selectedRecord);
 }
 
 function exportSessionEvidenceJSON() {
@@ -2565,6 +2710,23 @@ function bindControls() {
   $("session-evidence-save-button").addEventListener("click", saveSessionEvidenceToHistory);
   $("session-evidence-json-button").addEventListener("click", exportSessionEvidenceJSON);
   $("session-evidence-markdown-button").addEventListener("click", exportSessionEvidenceMarkdown);
+  $("session-evidence-history").addEventListener("click", (event) => {
+    const button = event.target.closest(".session-evidence-history-button");
+    if (!button) return;
+    const id = button.getAttribute("data-evidence-id") || "";
+    const action = button.getAttribute("data-evidence-action") || "";
+    if (action === "view") {
+      viewSavedSessionEvidence(id);
+      return;
+    }
+    if (action === "json") {
+      exportSavedSessionEvidenceJSON(id);
+      return;
+    }
+    if (action === "markdown") {
+      exportSavedSessionEvidenceMarkdown(id);
+    }
+  });
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-role-select").addEventListener("change", () => {
