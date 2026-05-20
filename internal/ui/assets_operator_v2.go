@@ -63,7 +63,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel">
+      <div class="panel wide">
         <div class="panel-head">
           <h2>Appliance Readiness</h2>
           <span id="uptime">-</span>
@@ -245,6 +245,25 @@ const dashboardHTML = `<!doctype html>
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Cabinet Run Timeline</h2>
+            <span id="timeline-count">0 events</span>
+          </div>
+          <div class="toolbar-row">
+            <div class="filter-tabs" role="tablist" aria-label="Cabinet run timeline filter tabs">
+              <button type="button" class="timeline-filter-tab is-active" data-timeline-filter="all">All</button>
+              <button type="button" class="timeline-filter-tab" data-timeline-filter="incident">Incidents</button>
+              <button type="button" class="timeline-filter-tab" data-timeline-filter="egm">EGM</button>
+              <button type="button" class="timeline-filter-tab" data-timeline-filter="state">State</button>
+            </div>
+            <span id="timeline-filter-label" class="muted-text">Showing all timeline events</span>
+          </div>
+        </div>
+        <div id="cabinet-run-timeline" class="timeline"></div>
       </div>
 
       <div class="panel">
@@ -722,6 +741,46 @@ th {
   font-size: 12px;
 }
 
+.timeline-entry {
+  display: grid;
+  gap: 6px;
+}
+
+.timeline-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.timeline-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.timeline-kind-incident {
+  background: var(--red-bg);
+  color: #7b2d2a;
+}
+
+.timeline-kind-egm {
+  background: var(--info-bg);
+  color: #245f91;
+}
+
+.timeline-kind-state {
+  background: var(--green-bg);
+  color: #1e6c47;
+}
+
 .kv-list {
   display: grid;
   gap: 1px;
@@ -1174,6 +1233,7 @@ const clientState = {
   egmSortKey: "egm_id",
   egmSortDir: "asc",
   egmFilter: "all",
+  timelineFilter: "all",
   certSelectedRole: "g2s_ca_cert",
   selectedSessionEvidenceID: 0
 };
@@ -1856,6 +1916,83 @@ function renderItems(id, items, emptyText, mapItem) {
   el.innerHTML = items.map(mapItem).join("");
 }
 
+function buildCabinetRunTimeline(snapshot) {
+  const incidents = Array.isArray(snapshot?.incidents) ? snapshot.incidents : [];
+  const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
+  const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
+  const timeline = [];
+
+  incidents.forEach((item) => {
+    timeline.push({
+      kind: "incident",
+      createdAt: item.created_at || "",
+      sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
+      title: "#" + String(item.id || "-") + " " + String(item.trigger_type || "incident"),
+      detail: (item.trigger_source || "unknown source") + " | final state " + String(item.final_state || "-"),
+      meta: item.resolved_at ? ("resolved " + fmtTime(item.resolved_at)) : "active or unresolved"
+    });
+  });
+
+  egmHistory.forEach((item) => {
+    timeline.push({
+      kind: "egm",
+      createdAt: item.created_at || "",
+      sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
+      title: String(item.egm_id || "-") + " " + String(item.status || "-"),
+      detail: String(item.event_type || "-") + (item.detail ? " | " + String(item.detail) : ""),
+      meta: item.last_error ? ("last error: " + String(item.last_error)) : "egm history"
+    });
+  });
+
+  stateHistory.forEach((item) => {
+    timeline.push({
+      kind: "state",
+      createdAt: item.created_at || "",
+      sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
+      title: String(item.old_state || "-") + " -> " + String(item.new_state || "-"),
+      detail: String(item.reason || "state transition"),
+      meta: "controller state history"
+    });
+  });
+
+  timeline.sort((a, b) => b.sortTime - a.sortTime);
+  return timeline;
+}
+
+function applyTimelineFilter(items) {
+  if (clientState.timelineFilter === "all") {
+    return items;
+  }
+  return items.filter((item) => item.kind === clientState.timelineFilter);
+}
+
+function updateTimelineFilterLabels(total, filtered) {
+  const map = {
+    all: "Showing all timeline events",
+    incident: "Showing incident timeline events",
+    egm: "Showing EGM timeline events",
+    state: "Showing controller state timeline events"
+  };
+  $("timeline-count").textContent = filtered + " / " + total + " events";
+  $("timeline-filter-label").textContent = map[clientState.timelineFilter] || map.all;
+  document.querySelectorAll(".timeline-filter-tab").forEach((button) => {
+    button.classList.toggle("is-active", (button.dataset.timelineFilter || "all") === clientState.timelineFilter);
+  });
+}
+
+function renderCabinetRunTimeline(snapshot) {
+  const items = buildCabinetRunTimeline(snapshot);
+  const filtered = applyTimelineFilter(items);
+  updateTimelineFilterLabels(items.length, filtered.length);
+  renderItems("cabinet-run-timeline", filtered, "No cabinet run events captured yet", (item) =>
+    "<div class=\"item timeline-entry\">" +
+      "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.title) + "</strong><span class=\"timeline-kind timeline-kind-" + escapeHTML(item.kind) + "\">" + escapeHTML(item.kind) + "</span></div>" +
+      "<span>" + escapeHTML(item.detail) + "</span>" +
+      "<span>" + escapeHTML(fmtTime(item.createdAt)) + " | " + escapeHTML(item.meta) + "</span>" +
+    "</div>"
+  );
+}
+
 function egmSortValue(egm, key) {
   if (key === "status") {
     const weight = { GREEN: 1, YELLOW: 2, GREY: 3, RED: 4 };
@@ -2501,6 +2638,7 @@ function renderStatus(snapshot) {
   renderSessionEvidence(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
   renderEGMTable(status);
+  renderCabinetRunTimeline(snapshot);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
   );
@@ -2865,6 +3003,13 @@ function bindControls() {
     });
   });
 
+  document.querySelectorAll(".timeline-filter-tab").forEach((button) => {
+    button.addEventListener("click", () => {
+      clientState.timelineFilter = button.dataset.timelineFilter || "all";
+      renderCabinetRunTimeline(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    });
+  });
+
   document.querySelectorAll(".sort-button").forEach((button) => {
     button.addEventListener("click", () => {
       setSort(button.dataset.sortKey || "egm_id");
@@ -2878,5 +3023,6 @@ updateStaleBadge();
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
+renderCabinetRunTimeline(emptySnapshot());
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`
