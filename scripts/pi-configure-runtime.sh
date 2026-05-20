@@ -124,7 +124,9 @@ chmod 600 "${API_TOKEN_FILE}"
 TMP_CONFIG="$(mktemp)"
 rm -f "${TMP_CONFIG}"
 cleanup() {
-  rm -f "${TMP_CONFIG}"
+  if [[ -e "${TMP_CONFIG}" ]]; then
+    sudo rm -f "${TMP_CONFIG}" 2>/dev/null || rm -f "${TMP_CONFIG}"
+  fi
 }
 trap cleanup EXIT
 
