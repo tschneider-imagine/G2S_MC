@@ -244,6 +244,7 @@ type runtimeStatus struct {
 	AdminClientCertRequired     bool      `json:"admin_client_cert_required"`
 	APIMutationAuthRequired     bool      `json:"api_mutation_auth_required"`
 	TrustedMutationBypassActive bool      `json:"trusted_mutation_bypass_active"`
+	AllowPrivateKeyExport       bool      `json:"allow_private_key_export"`
 	InputMode                   string    `json:"input_mode"`
 	SimulatedTrigger            bool      `json:"simulated_trigger"`
 }
@@ -379,6 +380,7 @@ func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo, request *http.Re
 		AdminClientCertRequired:     cfg.WebUI.RequireClientCertForAdmin,
 		APIMutationAuthRequired:     authRequired,
 		TrustedMutationBypassActive: trustedBypass,
+		AllowPrivateKeyExport:       cfg.WebUI.AllowPrivateKeyExport,
 		InputMode:                   "SIMULATED_SOFTWARE_ONLY",
 		SimulatedTrigger:            runtime.SimulatedTrigger,
 	}

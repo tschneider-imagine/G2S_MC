@@ -291,6 +291,25 @@ const dashboardHTML = `<!doctype html>
             <button id="cert-copy-token-button" type="button" class="secondary-button" disabled>Copy Entered Token</button>
           </div>
           <div id="cert-role-summary" class="cert-role-summary">Select a role to review support and status.</div>
+          <div class="setup-details cert-manager-details">
+            <div>
+              <p class="label">Role Rules</p>
+              <strong id="cert-role-rules">-</strong>
+            </div>
+            <div>
+              <p class="label">Current Role Status</p>
+              <strong id="cert-role-current-status">-</strong>
+            </div>
+            <div>
+              <p class="label">Export Key Access</p>
+              <strong id="cert-role-export-policy">-</strong>
+            </div>
+            <div>
+              <p class="label">Import Validation</p>
+              <strong id="cert-validation-summary">-</strong>
+            </div>
+          </div>
+          <div id="cert-validation-list" class="validation-list"></div>
           <label class="cert-textarea-label">Certificate PEM
             <textarea id="cert-certificate-pem" name="certificate_pem" rows="8" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
           </label>
@@ -312,6 +331,7 @@ const dashboardHTML = `<!doctype html>
             <button type="button" class="secondary-button cert-export-role-button" data-export-role="web_server_cert">Export Web Server Cert</button>
           </div>
         </div>
+        <div id="cert-manager-detail" class="cert-manager-detail muted-text"></div>
       </div>
 
       <div class="panel">
@@ -796,6 +816,15 @@ th {
   background: #f8fbf8;
   color: var(--muted);
   font-size: 13px;
+}
+
+.cert-manager-details {
+  margin-top: 2px;
+}
+
+.cert-manager-detail {
+  padding: 0 18px 18px;
+  overflow-wrap: anywhere;
 }
 
 .cert-textarea-label {
@@ -1937,6 +1966,10 @@ function certRoleConfigured(record) {
   return !!String(record?.path || "").trim();
 }
 
+function privateKeyExportAllowed() {
+  return currentRuntime().allow_private_key_export === true;
+}
+
 function getCertToken() {
   return $("cert-api-token").value.trim();
 }
@@ -1955,6 +1988,11 @@ function setCertManagerState(level, message) {
   badge.textContent = level;
   badge.className = "source-pill " + (level === "ready" || level === "saved" ? "source-file" : level === "working" ? "source-override" : "source-mixed");
   $("cert-manager-message").textContent = message;
+  $("cert-manager-detail").textContent = "";
+}
+
+function setCertManagerDetail(detail) {
+  $("cert-manager-detail").textContent = detail || "";
 }
 
 function roleDisplayName(role) {
@@ -1965,35 +2003,100 @@ function setCertKeyFieldVisible(visible) {
   $("cert-private-key-wrapper").classList.toggle("cert-key-hidden", !visible);
 }
 
-function renderCertificateManager(snapshot) {
+function certificateRoleRulesText(role) {
+  const details = certRoleDetails(role);
+  if (details.requiresKey) {
+    return "Paste a PEM certificate and its matching PEM private key.";
+  }
+  return "Paste a PEM certificate only. Private key input is not used for this role.";
+}
+
+function validateCertificateManagerForm(snapshot) {
+  const runtime = snapshot?.status?.runtime || currentRuntime();
   const role = selectedCertRole();
-  clientState.certSelectedRole = role;
-  const runtime = snapshot?.status?.runtime || {};
+  const details = certRoleDetails(role);
   const record = certificateRecordByRole(snapshot, role);
   const configured = certRoleConfigured(record);
-  const details = certRoleDetails(role);
+  const certPEM = $("cert-certificate-pem").value.trim();
+  const privateKeyPEM = $("cert-private-key-pem").value.trim();
   const tokenPresent = !!getCertToken();
   const tokenRequired = runtime.api_mutation_auth_required === true;
-  const required = certRequired(runtime, role);
-  const status = parseCertState(record?.status || "UNKNOWN");
-  const severity = record ? certSeverity(record, runtime) : (required ? "blocking" : "lab");
+  const exportKeyAllowed = runtime.allow_private_key_export === true;
+  const problems = [];
+
+  if (!configured) {
+    problems.push(roleDisplayName(role) + " is not configured in appliance runtime.");
+  }
+  if (!certPEM) {
+    problems.push("Certificate PEM is required.");
+  }
+  if (details.requiresKey && !privateKeyPEM) {
+    problems.push("Private key PEM is required for " + roleDisplayName(role) + ".");
+  }
+  if (!details.requiresKey && privateKeyPEM) {
+    problems.push("Private key PEM is not used for " + roleDisplayName(role) + ".");
+  }
+  if (tokenRequired && !tokenPresent) {
+    problems.push("API token is required for certificate import in this browser session.");
+  }
+
+  let exportKeyPolicy = "Private key export not applicable for this role.";
+  if (details.requiresKey) {
+    if (!configured) {
+      exportKeyPolicy = "Private key export unavailable until this role is configured.";
+    } else if (!exportKeyAllowed) {
+      exportKeyPolicy = "Private key export is disabled by appliance policy.";
+    } else if (tokenRequired && !tokenPresent) {
+      exportKeyPolicy = "Private key export is allowed, but this browser session still needs an API token.";
+    } else {
+      exportKeyPolicy = "Private key export is allowed for this role.";
+    }
+  }
+
+  return {
+    role: role,
+    details: details,
+    record: record,
+    configured: configured,
+    certPEM: certPEM,
+    privateKeyPEM: privateKeyPEM,
+    tokenRequired: tokenRequired,
+    tokenPresent: tokenPresent,
+    exportKeyAllowed: exportKeyAllowed,
+    exportKeyPolicy: exportKeyPolicy,
+    problems: problems
+  };
+}
+
+function renderCertificateManager(snapshot) {
+  const certState = validateCertificateManagerForm(snapshot);
+  clientState.certSelectedRole = certState.role;
+  const runtime = snapshot?.status?.runtime || {};
+  const required = certRequired(runtime, certState.role);
+  const status = parseCertState(certState.record?.status || "UNKNOWN");
+  const severity = certState.record ? certSeverity(certState.record, runtime) : (required ? "blocking" : "lab");
   const impact = certImpactLabel(severity);
-  const support = configured ? "configured at " + record.path : "not configured in current runtime";
-  const stateDetail = record ? status + " (" + impact + ")" : "no inventory record available";
-  const privateKeyText = details.requiresKey ? "Role supports private key import/export." : "Role is certificate-only.";
-  $("cert-role-summary").textContent = roleDisplayName(role) + ": " + support + "; state " + stateDetail + "; " + privateKeyText;
-  $("cert-api-token-wrapper").classList.toggle("trusted-bypass-hidden", !tokenRequired);
-  $("cert-token-controls").classList.toggle("trusted-bypass-hidden", !tokenRequired);
-  $("cert-api-token-label").textContent = tokenRequired ? "API Token (required for import/export key)" : "API Token (optional on trusted private network)";
-  $("cert-token-help-text").textContent = tokenRequired
+  const support = certState.configured ? "configured at " + certState.record.path : "not configured in current runtime";
+  const stateDetail = certState.record ? status + " (" + impact + ")" : "no inventory record available";
+  const privateKeyText = certState.details.requiresKey ? "Role supports private key import/export." : "Role is certificate-only.";
+  $("cert-role-summary").textContent = roleDisplayName(certState.role) + ": " + support + "; state " + stateDetail + "; " + privateKeyText;
+  $("cert-role-rules").textContent = certificateRoleRulesText(certState.role);
+  $("cert-role-current-status").textContent = certState.record ? stateDetail : support;
+  $("cert-role-export-policy").textContent = certState.exportKeyPolicy;
+  $("cert-validation-summary").textContent = certState.problems.length ? certState.problems.length + " issue(s)" : "Ready to import";
+  $("cert-validation-list").innerHTML = certState.problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
+  $("cert-api-token-wrapper").classList.toggle("trusted-bypass-hidden", !certState.tokenRequired);
+  $("cert-token-controls").classList.toggle("trusted-bypass-hidden", !certState.tokenRequired);
+  $("cert-api-token-label").textContent = certState.tokenRequired ? "API Token (required for import/export key)" : "API Token (optional on trusted private network)";
+  $("cert-token-help-text").textContent = certState.tokenRequired
     ? "Use API token for import and private-key export actions."
     : "Trusted private network bypass is active for this browser; token is optional for import and private-key export.";
 
-  setCertKeyFieldVisible(details.requiresKey);
-  $("cert-import-button").disabled = !configured || (tokenRequired && !tokenPresent);
-  $("cert-export-cert-button").disabled = !configured;
-  $("cert-export-key-button").disabled = !details.requiresKey || !configured || (tokenRequired && !tokenPresent);
-  $("cert-copy-token-button").disabled = !tokenPresent;
+  setCertKeyFieldVisible(certState.details.requiresKey);
+  $("cert-import-button").disabled = certState.problems.length > 0;
+  $("cert-export-cert-button").disabled = !certState.configured;
+  $("cert-export-key-button").disabled = !certState.details.requiresKey || !certState.configured || !certState.exportKeyAllowed || (certState.tokenRequired && !certState.tokenPresent);
+  $("cert-copy-token-button").disabled = !certState.tokenPresent;
 }
 
 async function copyCertTokenToClipboard() {
@@ -2041,6 +2144,10 @@ async function exportCertificateMaterial(role, includeKey) {
       setCertManagerState("blocked", roleDisplayName(role) + " does not support private key export.");
       return;
     }
+    if (!privateKeyExportAllowed()) {
+      setCertManagerState("blocked", "Private key export is disabled by appliance policy.");
+      return;
+    }
     if (setupActionsRequireToken() && !getCertToken()) {
       setCertManagerState("blocked", "Enter an API token before exporting private key material.");
       return;
@@ -2065,6 +2172,7 @@ async function exportCertificateMaterial(role, includeKey) {
       downloadTextMaterial(role + ".key.pem", payload.private_key_pem);
     }
     setCertManagerState("saved", "Exported " + roleDisplayName(role) + (includeKey ? " certificate + key." : " certificate."));
+    setCertManagerDetail("Role: " + payload.role + (includeKey ? " | Included private key: yes" : " | Included private key: no"));
   } catch (err) {
     setCertManagerState("blocked", err && err.message ? err.message : "Export failed.");
   }
@@ -2082,16 +2190,10 @@ async function importCertificateMaterial(event) {
   event.preventDefault();
   const payload = certImportPayload();
   const details = certRoleDetails(payload.role);
-  if (setupActionsRequireToken() && !getCertToken()) {
-    setCertManagerState("blocked", "Enter an API token before importing certificate material.");
-    return;
-  }
-  if (!payload.certificate_pem) {
-    setCertManagerState("blocked", "Certificate PEM is required.");
-    return;
-  }
-  if (details.requiresKey && !payload.private_key_pem) {
-    setCertManagerState("blocked", "Private key PEM is required for " + roleDisplayName(payload.role) + ".");
+  const certState = validateCertificateManagerForm(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  if (certState.problems.length > 0) {
+    setCertManagerState("blocked", "Resolve certificate import issues before importing.");
+    setCertManagerDetail(certState.problems.join(" "));
     return;
   }
   if (!details.requiresKey) {
@@ -2113,6 +2215,7 @@ async function importCertificateMaterial(event) {
     const result = await response.json();
     const certState = parseCertState(result.certificate_status || "UNKNOWN");
     setCertManagerState("saved", "Import complete for " + roleDisplayName(payload.role) + " (" + certState + ").");
+    setCertManagerDetail("Subject: " + (result.certificate_subject || "-") + " | Path: " + (result.certificate_path || "-") + (result.private_key_path ? " | Key path: " + result.private_key_path : ""));
     if (!details.requiresKey) {
       $("cert-private-key-pem").value = "";
     }
@@ -2126,6 +2229,7 @@ function clearCertificateManagerForm() {
   $("cert-certificate-pem").value = "";
   $("cert-private-key-pem").value = "";
   setCertManagerState("ready", "Certificate form cleared.");
+  setCertManagerDetail("");
   renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
 }
 
@@ -2465,6 +2569,12 @@ function bindControls() {
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-role-select").addEventListener("change", () => {
     clientState.certSelectedRole = selectedCertRole();
+    renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("cert-certificate-pem").addEventListener("input", () => {
+    renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("cert-private-key-pem").addEventListener("input", () => {
     renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   });
   $("cert-api-token").addEventListener("input", () => {

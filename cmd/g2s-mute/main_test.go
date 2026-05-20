@@ -82,6 +82,9 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 	if body.Runtime.APIMutationAuthRequired {
 		t.Fatalf("api_mutation_auth_required = %t, want false", body.Runtime.APIMutationAuthRequired)
 	}
+	if body.Runtime.AllowPrivateKeyExport {
+		t.Fatalf("allow_private_key_export = %t, want false", body.Runtime.AllowPrivateKeyExport)
+	}
 	if body.ProfileSource != "file" {
 		t.Fatalf("profile_source = %q, want file", body.ProfileSource)
 	}
@@ -110,6 +113,9 @@ func TestBuildRuntimeStatusIncludesAPIMutationAuthFlag(t *testing.T) {
 	if !status.APIMutationAuthRequired {
 		t.Fatalf("api_mutation_auth_required = %t, want true", status.APIMutationAuthRequired)
 	}
+	if status.AllowPrivateKeyExport {
+		t.Fatalf("allow_private_key_export = %t, want false", status.AllowPrivateKeyExport)
+	}
 }
 
 func TestBuildRuntimeStatusTrustedPrivateNetworkBypassForRequest(t *testing.T) {
@@ -119,6 +125,7 @@ func TestBuildRuntimeStatusTrustedPrivateNetworkBypassForRequest(t *testing.T) {
 			BindAddress:                         "0.0.0.0:8444",
 			RequireLogin:                        false,
 			AllowTrustedPrivateNetworkMutations: true,
+			AllowPrivateKeyExport:               true,
 		},
 		G2S: config.G2S{
 			HostURL:           "http://127.0.0.1:8444/g2s",
@@ -138,6 +145,9 @@ func TestBuildRuntimeStatusTrustedPrivateNetworkBypassForRequest(t *testing.T) {
 	}
 	if !status.TrustedMutationBypassActive {
 		t.Fatal("expected trusted_mutation_bypass_active to be true")
+	}
+	if !status.AllowPrivateKeyExport {
+		t.Fatal("expected allow_private_key_export to be true")
 	}
 }
 
