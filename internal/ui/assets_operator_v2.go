@@ -248,14 +248,14 @@ const dashboardHTML = `<!doctype html>
         </div>
       </div>
 
-      <div class="panel">
+      <div class="panel cabinet-run-panel">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Cabinet Run Timeline</h2>
             <span id="timeline-count">0 events</span>
           </div>
-          <div class="toolbar-row">
-            <div class="filter-tabs" role="tablist" aria-label="Cabinet run timeline filter tabs">
+          <div class="toolbar-row timeline-toolbar">
+            <div class="filter-tabs timeline-filter-tabs" role="tablist" aria-label="Cabinet run timeline filter tabs">
               <button type="button" class="timeline-filter-tab is-active" data-timeline-filter="all">All</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="incident">Incidents</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="egm">EGM</button>
@@ -807,6 +807,33 @@ th {
   color: #5b3f91;
 }
 
+.cabinet-run-panel {
+  grid-column: 1 / -1;
+}
+
+.cabinet-run-panel .panel-title-row,
+.cabinet-run-panel .toolbar-row,
+.cabinet-run-panel .setup-form,
+.cabinet-run-panel .form-grid,
+.cabinet-run-panel label,
+.cabinet-run-panel textarea,
+.cabinet-run-panel input {
+  min-width: 0;
+}
+
+.timeline-filter-tabs {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.timeline-filter-tabs .timeline-filter-tab {
+  flex: 0 0 auto;
+}
+
+.timeline-toolbar {
+  min-width: 0;
+}
+
 .kv-list {
   display: grid;
   gap: 1px;
@@ -924,7 +951,7 @@ th {
 }
 
 .run-marker-grid {
-  grid-template-columns: minmax(240px, 0.6fr) minmax(180px, 0.4fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .run-marker-notes-label {
