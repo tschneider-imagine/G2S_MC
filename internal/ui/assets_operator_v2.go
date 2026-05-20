@@ -125,7 +125,11 @@ const dashboardHTML = `<!doctype html>
             <label>Required SAN DNS<input id="setup-required-san-dns" name="required_san_dns" autocomplete="off"></label>
             <label>Required SAN IPs<input id="setup-required-san-ips" name="required_san_ips" autocomplete="off"></label>
             <label>First Test EGM IDs<input id="setup-first-test-egm-ids" name="first_test_egm_ids" autocomplete="off"></label>
-            <label>API Token<input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
+            <label>API Token Required for Save/Clear<input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
+          </div>
+          <div class="token-help">
+            <span>Paste the token from <code>cat ~/.g2s_api_token</code> to save or clear overrides.</span>
+            <button id="setup-copy-token-button" type="button" class="secondary-button" disabled>Copy Entered Token</button>
           </div>
           <div class="setup-details">
             <div>
@@ -139,8 +143,8 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="setup-validation-list" class="validation-list"></div>
           <div class="setup-actions">
-            <button id="setup-save-button" type="submit">Save Override</button>
-            <button id="setup-reset-button" type="button" class="secondary-button">Clear Override</button>
+            <button id="setup-save-button" type="submit" disabled>Save Override</button>
+            <button id="setup-reset-button" type="button" class="secondary-button" disabled>Clear Override</button>
             <button id="setup-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
         </form>
@@ -655,6 +659,25 @@ th {
   border-color: var(--blue);
 }
 
+.token-help {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: #f8fbf8;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.token-help code {
+  color: var(--ink);
+  font-weight: 800;
+}
+
 .setup-details {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.45fr);
@@ -704,6 +727,11 @@ th {
 .secondary-button {
   background: #fff;
   color: var(--ink);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .summary-grid {
@@ -1124,17 +1152,25 @@ function renderCabinetSetupValidation() {
   const profile = cabinetProfileFromForm();
   const result = validateCabinetSetupProfile(profile);
   const host = result.parsedURL ? result.parsedURL.hostname : "-";
+  const tokenPresent = !!getSetupToken();
   const sanValues = []
     .concat(profile.required_san_dns.map((item) => "DNS:" + item))
     .concat(profile.required_san_ips.map((item) => "IP:" + item));
   $("setup-san-summary").textContent = "wire host " + host + "; " + (sanValues.length ? sanValues.join(", ") : "no SAN values");
-  $("setup-validation-summary").textContent = result.problems.length ? result.problems.length + " issue(s)" : "Ready to save";
+  $("setup-validation-summary").textContent = result.problems.length ? result.problems.length + " issue(s)" : tokenPresent ? "Ready to save" : "Token required to save";
   $("setup-validation-list").innerHTML = result.problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
+  $("setup-save-button").disabled = result.problems.length > 0 || !tokenPresent;
+  $("setup-reset-button").disabled = !tokenPresent;
+  $("setup-copy-token-button").disabled = !tokenPresent;
   return result;
 }
 
+function getSetupToken() {
+  return $("setup-api-token").value.trim();
+}
+
 function setupAuthHeaders() {
-  const token = $("setup-api-token").value.trim();
+  const token = getSetupToken();
   const headers = { "Content-Type": "application/json" };
   if (token) {
     headers.Authorization = "Bearer " + token;
@@ -1147,6 +1183,28 @@ function setSetupState(level, message) {
   badge.textContent = level;
   badge.className = "source-pill " + (level === "saved" || level === "ready" ? "source-file" : level === "working" ? "source-override" : "source-mixed");
   $("cabinet-setup-message").textContent = message;
+}
+
+async function copySetupTokenToClipboard() {
+  const token = getSetupToken();
+  if (!token) {
+    setSetupState("blocked", "Paste the token from ~/.g2s_api_token before copying.");
+    return;
+  }
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(token);
+    } else {
+      const input = $("setup-api-token");
+      input.focus();
+      input.select();
+      document.execCommand("copy");
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+    setSetupState("ready", "API token copied to clipboard.");
+  } catch (err) {
+    setSetupState("blocked", err && err.message ? "Copy failed: " + err.message : "Copy failed.");
+  }
 }
 
 async function reloadCabinetProfileForm() {
@@ -1162,6 +1220,10 @@ async function reloadCabinetProfileForm() {
 async function saveCabinetProfileOverride(event) {
   event.preventDefault();
   const validation = renderCabinetSetupValidation();
+  if (!getSetupToken()) {
+    setSetupState("blocked", "Paste the token from ~/.g2s_api_token before saving.");
+    return;
+  }
   if (validation.problems.length) {
     setSetupState("blocked", "Resolve validation issues before saving.");
     return;
@@ -1188,6 +1250,10 @@ async function saveCabinetProfileOverride(event) {
 }
 
 async function clearCabinetProfileOverride() {
+  if (!getSetupToken()) {
+    setSetupState("blocked", "Paste the token from ~/.g2s_api_token before clearing.");
+    return;
+  }
   try {
     setSetupState("working", "Clearing cabinet profile override.");
     const response = await fetch(endpoints.cabinetProfile, {
@@ -1529,6 +1595,7 @@ function bindControls() {
 
   $("cabinet-setup-form").addEventListener("submit", saveCabinetProfileOverride);
   $("setup-reset-button").addEventListener("click", clearCabinetProfileOverride);
+  $("setup-copy-token-button").addEventListener("click", copySetupTokenToClipboard);
   $("setup-reload-button").addEventListener("click", () => {
     reloadCabinetProfileForm().catch((err) => {
       setSetupState("blocked", err && err.message ? err.message : "Reload failed.");
