@@ -241,6 +241,7 @@ type runtimeStatus struct {
 	ClientCertRequired      bool      `json:"client_cert_required"`
 	WebLoginRequired        bool      `json:"web_login_required"`
 	AdminClientCertRequired bool      `json:"admin_client_cert_required"`
+	APIMutationAuthRequired bool      `json:"api_mutation_auth_required"`
 	InputMode               string    `json:"input_mode"`
 	SimulatedTrigger        bool      `json:"simulated_trigger"`
 }
@@ -372,6 +373,7 @@ func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo) runtimeStatus {
 		ClientCertRequired:      cfg.G2S.RequireClientCert,
 		WebLoginRequired:        cfg.WebUI.RequireLogin,
 		AdminClientCertRequired: cfg.WebUI.RequireClientCertForAdmin,
+		APIMutationAuthRequired: strings.TrimSpace(cfg.API.AuthToken) != "",
 		InputMode:               "SIMULATED_SOFTWARE_ONLY",
 		SimulatedTrigger:        runtime.SimulatedTrigger,
 	}

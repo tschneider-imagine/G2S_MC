@@ -108,6 +108,35 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid">
+      <div class="panel first-cabinet-session-panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>First Cabinet Session</h2>
+            <span id="first-cabinet-session-state" class="source-pill source-file">checking</span>
+          </div>
+          <span id="first-cabinet-session-message" class="muted-text">Waiting for first cabinet readiness telemetry.</span>
+        </div>
+        <dl class="kv-list">
+          <div><dt>Overall Session State</dt><dd id="first-cabinet-overall">-</dd></div>
+          <div><dt>Last Checked</dt><dd id="first-cabinet-last-checked">-</dd></div>
+          <div><dt>Readyz State</dt><dd id="first-cabinet-readyz">-</dd></div>
+          <div><dt>Cabinet Preflight State</dt><dd id="first-cabinet-preflight">-</dd></div>
+          <div><dt>Cabinet Profile Source</dt><dd id="first-cabinet-profile-source">-</dd></div>
+          <div><dt>Wire Host URL</dt><dd id="first-cabinet-wire-host-url">-</dd></div>
+          <div><dt>Host ID</dt><dd id="first-cabinet-host-id">-</dd></div>
+          <div><dt>First Test EGM IDs</dt><dd id="first-cabinet-egm-ids">-</dd></div>
+          <div><dt>Certificate Blocking Count</dt><dd id="first-cabinet-cert-blocking">-</dd></div>
+          <div><dt>Lab Optional Certificate Count</dt><dd id="first-cabinet-cert-lab-optional">-</dd></div>
+          <div><dt>API Auth State</dt><dd id="first-cabinet-auth-state">-</dd></div>
+        </dl>
+        <div class="first-cabinet-session-blockers-wrap">
+          <p class="label">Session Blockers</p>
+          <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
       <div class="panel">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
@@ -937,6 +966,35 @@ button:disabled {
   color: #1e6c47;
 }
 
+.first-cabinet-session-panel .kv-list {
+  margin-bottom: 0;
+}
+
+.first-cabinet-session-blockers-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+}
+
+.first-cabinet-session-blockers {
+  display: grid;
+  gap: 6px;
+}
+
+.first-cabinet-session-blocker {
+  border-left: 3px solid var(--red);
+  padding: 7px 9px;
+  background: var(--red-bg);
+  color: #7b2d2a;
+  font-size: 13px;
+}
+
+.first-cabinet-session-blockers-empty {
+  border-left-color: var(--green);
+  background: var(--green-bg);
+  color: #1e6c47;
+}
+
 .empty {
   padding: 18px;
   color: var(--muted);
@@ -989,6 +1047,7 @@ const dashboardJS = `const endpoints = {
   stateHistory: "/api/state-history?limit=8",
   certificates: "/api/certificates",
   cabinetProfile: "/api/cabinet-profile",
+  cabinetPreflight: "/api/cabinet-preflight",
   certificateImport: "/api/certificates/import",
   certificateExport: "/api/certificates/export"
 };
@@ -1020,7 +1079,8 @@ function emptySnapshot() {
     egmHistory: [],
     stateHistory: [],
     certificates: [],
-    cabinetProfile: null
+    cabinetProfile: null,
+    cabinetPreflight: null
   };
 }
 
@@ -1038,7 +1098,8 @@ function copySnapshot(snapshot) {
     egmHistory: Array.isArray(snapshot.egmHistory) ? snapshot.egmHistory.slice() : [],
     stateHistory: Array.isArray(snapshot.stateHistory) ? snapshot.stateHistory.slice() : [],
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
-    cabinetProfile: snapshot.cabinetProfile || null
+    cabinetProfile: snapshot.cabinetProfile || null,
+    cabinetPreflight: snapshot.cabinetPreflight || null
   };
 }
 
@@ -1153,6 +1214,122 @@ function certImpactLabel(severity) {
   if (severity === "lab") return "Lab optional";
   if (severity === "warning") return "Needs attention";
   return "Healthy";
+}
+
+function summarizeSessionCertCounts(certificates, runtime) {
+  const counts = { blocking: 0, labOptional: 0 };
+  const records = Array.isArray(certificates) ? certificates : [];
+  records.forEach((item) => {
+    const severity = certSeverity(item, runtime || {});
+    if (severity === "blocking") counts.blocking++;
+    if (severity === "lab") counts.labOptional++;
+  });
+  return counts;
+}
+
+function appendUniqueBlocker(blockers, message) {
+  if (!message) return;
+  if (blockers.indexOf(message) < 0) {
+    blockers.push(message);
+  }
+}
+
+function appendFriendlyPreflightBlockers(preflight, blockers) {
+  const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
+  let mappedAny = false;
+  checks.forEach((check) => {
+    if (!check || check.result !== "FAIL") return;
+    switch (check.id) {
+      case "cabinet_profile":
+        appendUniqueBlocker(blockers, "Cabinet profile is incomplete");
+        mappedAny = true;
+        break;
+      case "certificate_mode_requirements":
+        appendUniqueBlocker(blockers, "Required certificate is missing");
+        mappedAny = true;
+        break;
+      case "service_readiness":
+        appendUniqueBlocker(blockers, "Readiness is degraded");
+        mappedAny = true;
+        break;
+      case "profile_source":
+        appendUniqueBlocker(blockers, "Cabinet profile source should be explicit");
+        mappedAny = true;
+        break;
+      case "certificate_san_wire_identity":
+        appendUniqueBlocker(blockers, "Certificate SAN does not match wire identity");
+        mappedAny = true;
+        break;
+      default:
+        break;
+    }
+  });
+  if (mappedAny) return;
+  const raw = Array.isArray(preflight?.blockers) ? preflight.blockers : [];
+  raw.forEach((item) => appendUniqueBlocker(blockers, String(item || "").trim()));
+}
+
+function renderFirstCabinetSession(snapshot) {
+  const status = snapshot?.status || {};
+  const runtime = status.runtime || {};
+  const readyz = snapshot?.readyz || null;
+  const preflight = snapshot?.cabinetPreflight || null;
+  const profilePayload = snapshot?.cabinetProfile || null;
+  const profile = profilePayload?.effective || status.cabinet_profile || {};
+  const profileSource = profilePayload?.profile_source || status.profile_source || "-";
+  const certCounts = summarizeSessionCertCounts(snapshot?.certificates, runtime);
+  const firstEGMIDs = Array.isArray(profile.first_test_egm_ids) ? profile.first_test_egm_ids : [];
+  const authRequired = runtime.api_mutation_auth_required === true;
+  const authDisabled = runtime.api_mutation_auth_required === false;
+  const authState = authRequired ? "REQUIRED" : (authDisabled ? "DISABLED" : "UNKNOWN");
+  const readyzState = readyz ? (readyz.overall || (readyz.ok ? "READY" : "DEGRADED")) : "UNAVAILABLE";
+  const preflightState = preflight ? (preflight.overall || "UNKNOWN") : "UNAVAILABLE";
+  const lastCheckedValue = preflight?.timestamp || (clientState.lastGoodAt ? new Date(clientState.lastGoodAt).toISOString() : "");
+  const blockers = [];
+
+  if (!readyz || readyz.ok === false || readyzState === "DEGRADED") {
+    appendUniqueBlocker(blockers, "Readiness is degraded");
+  }
+  if (!preflight) {
+    appendUniqueBlocker(blockers, "Preflight API unavailable");
+  } else if (preflight.overall !== "PASS") {
+    appendFriendlyPreflightBlockers(preflight, blockers);
+  }
+  if (!profile.wire_host_url || !profile.host_id || firstEGMIDs.length === 0) {
+    appendUniqueBlocker(blockers, "Cabinet profile is incomplete");
+  }
+  if (certCounts.blocking > 0) {
+    appendUniqueBlocker(blockers, "Required certificate is missing");
+  }
+  if (authRequired && !getSetupToken() && !getCertToken()) {
+    appendUniqueBlocker(blockers, "API token is required for protected setup actions");
+  }
+
+  const readyForSession = blockers.length === 0 && readyzState !== "UNAVAILABLE" && preflightState === "PASS";
+  const overallState = readyForSession ? "LAB_READY" : "BLOCKED";
+  const stateBadge = $("first-cabinet-session-state");
+  stateBadge.textContent = overallState;
+  stateBadge.className = "source-pill " + (readyForSession ? "source-file" : "source-mixed");
+  $("first-cabinet-session-message").textContent = readyForSession ? "Ready for first cabinet lab session" : "Resolve blockers before first cabinet runbook session.";
+
+  $("first-cabinet-overall").textContent = overallState;
+  $("first-cabinet-last-checked").textContent = fmtTime(lastCheckedValue);
+  $("first-cabinet-readyz").textContent = readyzState;
+  $("first-cabinet-preflight").textContent = preflightState;
+  $("first-cabinet-profile-source").textContent = profileSource || "-";
+  $("first-cabinet-wire-host-url").textContent = profile.wire_host_url || "-";
+  $("first-cabinet-host-id").textContent = profile.host_id || "-";
+  $("first-cabinet-egm-ids").textContent = firstEGMIDs.length ? firstEGMIDs.join(", ") : "-";
+  $("first-cabinet-cert-blocking").textContent = String(certCounts.blocking);
+  $("first-cabinet-cert-lab-optional").textContent = String(certCounts.labOptional);
+  $("first-cabinet-auth-state").textContent = authState;
+
+  const blockerList = $("first-cabinet-session-blockers");
+  if (blockers.length === 0) {
+    blockerList.innerHTML = "<div class=\"first-cabinet-session-blocker first-cabinet-session-blockers-empty\">Ready for first cabinet lab session</div>";
+  } else {
+    blockerList.innerHTML = blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
+  }
 }
 
 function renderItems(id, items, emptyText, mapItem) {
@@ -1716,6 +1893,7 @@ function renderStatus(snapshot) {
   renderCertificateSummary(readiness.certificate_summary || {}, snapshot?.certificates, runtime);
   renderCertificateManager(snapshot);
   renderCabinetProfile(status);
+  renderFirstCabinetSession(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
   renderEGMTable(status);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
@@ -1888,10 +2066,11 @@ async function pollOnce() {
       fetchJSON(endpoints.egmHistory),
       fetchJSON(endpoints.stateHistory),
       fetchJSON(endpoints.certificates),
-      fetchJSON(endpoints.cabinetProfile)
+      fetchJSON(endpoints.cabinetProfile),
+      fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, certificatesResult, cabinetProfileResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, certificatesResult, cabinetProfileResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -1919,12 +2098,14 @@ async function pollOnce() {
     if (stateHistoryResult.status === "fulfilled") snapshot.stateHistory = stateHistoryResult.value;
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
+    if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
     if (stateHistoryResult.status !== "fulfilled") failures.push("state history unavailable");
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
+    if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
 
     clientState.displaySnapshot = snapshot;
     renderStatus(snapshot);
@@ -2003,7 +2184,9 @@ function bindControls() {
     renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   });
   $("cert-api-token").addEventListener("input", () => {
-    renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+    renderCertificateManager(snapshot);
+    renderFirstCabinetSession(snapshot);
   });
   $("cert-copy-token-button").addEventListener("click", copyCertTokenToClipboard);
   $("cert-export-cert-button").addEventListener("click", () => {
@@ -2029,7 +2212,10 @@ function bindControls() {
     });
   });
   document.querySelectorAll("#cabinet-setup-form input").forEach((input) => {
-    input.addEventListener("input", renderCabinetSetupValidation);
+    input.addEventListener("input", () => {
+      renderCabinetSetupValidation();
+      renderFirstCabinetSession(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    });
   });
 
   document.querySelectorAll(".filter-tab").forEach((button) => {
@@ -2049,5 +2235,6 @@ bindControls();
 updateSortLabels();
 updateStaleBadge();
 renderCertificateManager(emptySnapshot());
+renderFirstCabinetSession(emptySnapshot());
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`

@@ -79,11 +79,36 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 	if body.Readiness.CertificateSummary["MISSING"] != 1 {
 		t.Fatalf("missing certificate count = %d", body.Readiness.CertificateSummary["MISSING"])
 	}
+	if body.Runtime.APIMutationAuthRequired {
+		t.Fatalf("api_mutation_auth_required = %t, want false", body.Runtime.APIMutationAuthRequired)
+	}
 	if body.ProfileSource != "file" {
 		t.Fatalf("profile_source = %q, want file", body.ProfileSource)
 	}
 	if body.CabinetProfile.WireHostURL != "https://host-a.example/g2s" {
 		t.Fatalf("wire_host_url = %q", body.CabinetProfile.WireHostURL)
+	}
+}
+
+func TestBuildRuntimeStatusIncludesAPIMutationAuthFlag(t *testing.T) {
+	cfg := config.Config{
+		Database: config.Database{Path: "/tmp/controller.db"},
+		WebUI: config.WebUI{
+			BindAddress: "127.0.0.1:8444",
+		},
+		G2S: config.G2S{
+			HostURL:           "http://127.0.0.1:8444/g2s",
+			EndpointPath:      "/g2s",
+			RequireTLS:        false,
+			RequireClientCert: false,
+		},
+		API: config.API{
+			AuthToken: "lab-secret",
+		},
+	}
+	status := buildRuntimeStatus(cfg, runtimeInfo{ConfigPath: "configs/config.example.json", StartedAt: time.Now()})
+	if !status.APIMutationAuthRequired {
+		t.Fatalf("api_mutation_auth_required = %t, want true", status.APIMutationAuthRequired)
 	}
 }
 

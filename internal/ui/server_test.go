@@ -43,6 +43,12 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "data-export-role=\"g2s_client_cert\"") {
 		t.Fatalf("expected quick certificate export actions")
 	}
+	if !strings.Contains(rr.Body.String(), "First Cabinet Session") {
+		t.Fatalf("expected first cabinet session panel")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"first-cabinet-overall\"") {
+		t.Fatalf("expected first cabinet session state marker")
+	}
 	if !strings.Contains(rr.Body.String(), "id=\"operator-alert\"") {
 		t.Fatalf("expected operator alert strip")
 	}
@@ -98,14 +104,14 @@ func TestDashboardAssets(t *testing.T) {
 		}
 		body := rr.Body.String()
 		if path == "/static/dashboard.js" {
-			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state"} {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}
 			}
 		}
 		if path == "/static/dashboard.css" {
-			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "validation-list", "secondary-button", "cert-manager-form", "cert-role-summary", "cert-impact"} {
+			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "validation-list", "secondary-button", "cert-manager-form", "cert-role-summary", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}
