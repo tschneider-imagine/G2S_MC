@@ -49,6 +49,12 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"first-cabinet-overall\"") {
 		t.Fatalf("expected first cabinet session state marker")
 	}
+	if !strings.Contains(rr.Body.String(), "Session Evidence Capture") {
+		t.Fatalf("expected session evidence capture panel")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"session-evidence-json-button\"") {
+		t.Fatalf("expected session evidence export button")
+	}
 	if !strings.Contains(rr.Body.String(), "id=\"operator-alert\"") {
 		t.Fatalf("expected operator alert strip")
 	}
@@ -104,14 +110,14 @@ func TestDashboardAssets(t *testing.T) {
 		}
 		body := rr.Body.String()
 		if path == "/static/dashboard.js" {
-			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "setup-token-help-text", "cert-token-help-text"} {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "session-evidence-state", "exportSessionEvidenceJSON"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}
 			}
 		}
 		if path == "/static/dashboard.css" {
-			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "validation-list", "secondary-button", "cert-manager-form", "cert-role-summary", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers"} {
+			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "validation-list", "secondary-button", "cert-manager-form", "cert-role-summary", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers", "evidence-capture-panel", "evidence-actions"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}

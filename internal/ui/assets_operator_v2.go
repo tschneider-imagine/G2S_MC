@@ -107,7 +107,7 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
-    <section class="grid">
+    <section class="grid two">
       <div class="panel first-cabinet-session-panel">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
@@ -132,6 +132,29 @@ const dashboardHTML = `<!doctype html>
         <div class="first-cabinet-session-blockers-wrap">
           <p class="label">Session Blockers</p>
           <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
+        </div>
+      </div>
+
+      <div class="panel evidence-capture-panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Session Evidence Capture</h2>
+            <span id="session-evidence-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="session-evidence-message" class="muted-text">Capture the current cabinet session state as JSON or Markdown.</span>
+        </div>
+        <dl class="kv-list">
+          <div><dt>Current Session State</dt><dd id="session-evidence-overall">-</dd></div>
+          <div><dt>Snapshot Timestamp</dt><dd id="session-evidence-timestamp">-</dd></div>
+          <div><dt>Incidents in Snapshot</dt><dd id="session-evidence-incident-count">0</dd></div>
+          <div><dt>State History Rows</dt><dd id="session-evidence-state-count">0</dd></div>
+        </dl>
+        <label class="cert-textarea-label evidence-notes-label">Operator Notes
+          <textarea id="session-evidence-notes" rows="5" placeholder="Optional test notes, cabinet observations, or follow-up context."></textarea>
+        </label>
+        <div class="setup-actions evidence-actions">
+          <button id="session-evidence-json-button" type="button">Download JSON Evidence</button>
+          <button id="session-evidence-markdown-button" type="button" class="secondary-button">Download Markdown Evidence</button>
         </div>
       </div>
     </section>
@@ -995,6 +1018,18 @@ button:disabled {
   color: #1e6c47;
 }
 
+.evidence-capture-panel .kv-list {
+  margin-bottom: 0;
+}
+
+.evidence-notes-label {
+  padding: 0 16px 16px;
+}
+
+.evidence-actions {
+  padding: 0 16px 16px;
+}
+
 .empty {
   padding: 18px;
   color: var(--muted);
@@ -1281,7 +1316,7 @@ function appendFriendlyPreflightBlockers(preflight, blockers) {
   raw.forEach((item) => appendUniqueBlocker(blockers, String(item || "").trim()));
 }
 
-function renderFirstCabinetSession(snapshot) {
+function buildFirstCabinetSessionState(snapshot) {
   const status = snapshot?.status || {};
   const runtime = status.runtime || {};
   const readyz = snapshot?.readyz || null;
@@ -1320,29 +1355,181 @@ function renderFirstCabinetSession(snapshot) {
 
   const readyForSession = blockers.length === 0 && readyzState !== "UNAVAILABLE" && preflightState === "PASS";
   const overallState = readyForSession ? "LAB_READY" : "BLOCKED";
-  const stateBadge = $("first-cabinet-session-state");
-  stateBadge.textContent = overallState;
-  stateBadge.className = "source-pill " + (readyForSession ? "source-file" : "source-mixed");
-  $("first-cabinet-session-message").textContent = readyForSession ? "Ready for first cabinet lab session" : "Resolve blockers before first cabinet runbook session.";
+  return {
+    overallState: overallState,
+    readyForSession: readyForSession,
+    message: readyForSession ? "Ready for first cabinet lab session" : "Resolve blockers before first cabinet runbook session.",
+    lastCheckedValue: lastCheckedValue,
+    readyzState: readyzState,
+    preflightState: preflightState,
+    profileSource: profileSource || "-",
+    profile: profile,
+    firstEGMIDs: firstEGMIDs,
+    certCounts: certCounts,
+    authState: authState,
+    blockers: blockers
+  };
+}
 
-  $("first-cabinet-overall").textContent = overallState;
-  $("first-cabinet-last-checked").textContent = fmtTime(lastCheckedValue);
-  $("first-cabinet-readyz").textContent = readyzState;
-  $("first-cabinet-preflight").textContent = preflightState;
-  $("first-cabinet-profile-source").textContent = profileSource || "-";
-  $("first-cabinet-wire-host-url").textContent = profile.wire_host_url || "-";
-  $("first-cabinet-host-id").textContent = profile.host_id || "-";
-  $("first-cabinet-egm-ids").textContent = firstEGMIDs.length ? firstEGMIDs.join(", ") : "-";
-  $("first-cabinet-cert-blocking").textContent = String(certCounts.blocking);
-  $("first-cabinet-cert-lab-optional").textContent = String(certCounts.labOptional);
-  $("first-cabinet-auth-state").textContent = authState;
+function renderFirstCabinetSession(snapshot) {
+  const session = buildFirstCabinetSessionState(snapshot);
+  const stateBadge = $("first-cabinet-session-state");
+  stateBadge.textContent = session.overallState;
+  stateBadge.className = "source-pill " + (session.readyForSession ? "source-file" : "source-mixed");
+  $("first-cabinet-session-message").textContent = session.message;
+
+  $("first-cabinet-overall").textContent = session.overallState;
+  $("first-cabinet-last-checked").textContent = fmtTime(session.lastCheckedValue);
+  $("first-cabinet-readyz").textContent = session.readyzState;
+  $("first-cabinet-preflight").textContent = session.preflightState;
+  $("first-cabinet-profile-source").textContent = session.profileSource;
+  $("first-cabinet-wire-host-url").textContent = session.profile.wire_host_url || "-";
+  $("first-cabinet-host-id").textContent = session.profile.host_id || "-";
+  $("first-cabinet-egm-ids").textContent = session.firstEGMIDs.length ? session.firstEGMIDs.join(", ") : "-";
+  $("first-cabinet-cert-blocking").textContent = String(session.certCounts.blocking);
+  $("first-cabinet-cert-lab-optional").textContent = String(session.certCounts.labOptional);
+  $("first-cabinet-auth-state").textContent = session.authState;
 
   const blockerList = $("first-cabinet-session-blockers");
-  if (blockers.length === 0) {
+  if (session.blockers.length === 0) {
     blockerList.innerHTML = "<div class=\"first-cabinet-session-blocker first-cabinet-session-blockers-empty\">Ready for first cabinet lab session</div>";
   } else {
-    blockerList.innerHTML = blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
+    blockerList.innerHTML = session.blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
   }
+}
+
+function buildSessionEvidence(snapshot) {
+  const session = buildFirstCabinetSessionState(snapshot);
+  const status = snapshot?.status || {};
+  const runtime = status.runtime || {};
+  const readiness = status.readiness || {};
+  const profilePayload = snapshot?.cabinetProfile || null;
+  const profile = profilePayload?.effective || status.cabinet_profile || {};
+  const certificates = Array.isArray(snapshot?.certificates) ? snapshot.certificates : [];
+  const incidents = Array.isArray(snapshot?.incidents) ? snapshot.incidents : [];
+  const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
+  const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
+  const notes = $("session-evidence-notes").value.trim();
+  return {
+    captured_at: new Date().toISOString(),
+    session: {
+      overall_state: session.overallState,
+      ready_for_session: session.readyForSession,
+      message: session.message,
+      blockers: session.blockers,
+      last_checked: session.lastCheckedValue || null,
+      readyz_state: session.readyzState,
+      preflight_state: session.preflightState,
+      certificate_blocking_count: session.certCounts.blocking,
+      certificate_lab_optional_count: session.certCounts.labOptional,
+      api_auth_state: session.authState
+    },
+    cabinet_profile: {
+      source: session.profileSource,
+      profile_differs_from_file: status.profile_differs_from_file === true,
+      wire_host_url: profile.wire_host_url || "",
+      host_id: profile.host_id || "",
+      first_test_egm_ids: session.firstEGMIDs,
+      listener_dns_name: profile.listener_dns_name || "",
+      listener_ip: profile.listener_ip || ""
+    },
+    runtime: {
+      bind_address: runtime.bind_address || "",
+      g2s_host_url: runtime.g2s_host_url || "",
+      tls_required: runtime.tls_required === true,
+      client_cert_required: runtime.client_cert_required === true,
+      trusted_mutation_bypass_active: runtime.trusted_mutation_bypass_active === true
+    },
+    readiness: {
+      overall: readiness.overall || "",
+      issues: Array.isArray(readiness.issues) ? readiness.issues : [],
+      warnings: Array.isArray(readiness.warnings) ? readiness.warnings : []
+    },
+    egm_snapshot_count: Array.isArray(status.egms) ? status.egms.length : 0,
+    incidents: incidents,
+    egm_history: egmHistory,
+    state_history: stateHistory,
+    certificates: certificates,
+    operator_notes: notes
+  };
+}
+
+function buildSessionEvidenceMarkdown(evidence) {
+  const lines = [
+    "# Session Evidence Capture",
+    "",
+    "- Captured at: " + (evidence.captured_at || "-"),
+    "- Session state: " + (evidence.session.overall_state || "-"),
+    "- Ready for session: " + String(evidence.session.ready_for_session === true),
+    "- Readyz state: " + (evidence.session.readyz_state || "-"),
+    "- Preflight state: " + (evidence.session.preflight_state || "-"),
+    "- API auth state: " + (evidence.session.api_auth_state || "-"),
+    "- Cabinet profile source: " + (evidence.cabinet_profile.source || "-"),
+    "- Wire host URL: " + (evidence.cabinet_profile.wire_host_url || "-"),
+    "- Host ID: " + (evidence.cabinet_profile.host_id || "-"),
+    "- First test EGM IDs: " + ((evidence.cabinet_profile.first_test_egm_ids || []).join(", ") || "-"),
+    "- Certificate blocking count: " + String(evidence.session.certificate_blocking_count || 0),
+    "- Certificate lab optional count: " + String(evidence.session.certificate_lab_optional_count || 0),
+    "- EGM snapshot count: " + String(evidence.egm_snapshot_count || 0),
+    "- Incident rows captured: " + String((evidence.incidents || []).length),
+    "- State history rows captured: " + String((evidence.state_history || []).length),
+    ""
+  ];
+  lines.push("## Blockers", "");
+  if (Array.isArray(evidence.session.blockers) && evidence.session.blockers.length) {
+    evidence.session.blockers.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Readiness Warnings", "");
+  if (Array.isArray(evidence.readiness.warnings) && evidence.readiness.warnings.length) {
+    evidence.readiness.warnings.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Operator Notes", "");
+  lines.push(evidence.operator_notes || "None");
+  lines.push("", "## JSON Payload", "", "~~~json", JSON.stringify(evidence, null, 2), "~~~");
+  return lines.join("\n");
+}
+
+function evidenceFilenameBase(evidence) {
+  const hostID = String(evidence?.cabinet_profile?.host_id || "cabinet").replace(/[^A-Za-z0-9._-]+/g, "-");
+  const stamp = new Date(evidence?.captured_at || Date.now()).toISOString().replace(/[:]/g, "-");
+  return hostID + "-session-evidence-" + stamp;
+}
+
+function renderSessionEvidence(snapshot) {
+  const evidence = buildSessionEvidence(snapshot);
+  $("session-evidence-overall").textContent = evidence.session.overall_state || "-";
+  $("session-evidence-timestamp").textContent = fmtTime(evidence.session.last_checked || evidence.captured_at);
+  $("session-evidence-incident-count").textContent = String((evidence.incidents || []).length);
+  $("session-evidence-state-count").textContent = String((evidence.state_history || []).length);
+  const ready = !!snapshot?.status;
+  $("session-evidence-json-button").disabled = !ready;
+  $("session-evidence-markdown-button").disabled = !ready;
+  const badge = $("session-evidence-state");
+  badge.textContent = ready ? "ready" : "waiting";
+  badge.className = "source-pill " + (ready ? "source-file" : "source-mixed");
+  $("session-evidence-message").textContent = ready
+    ? "Capture the current cabinet session state as JSON or Markdown."
+    : "Waiting for appliance status before capture is available.";
+}
+
+function exportSessionEvidenceJSON() {
+  const evidence = buildSessionEvidence(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  downloadTextMaterial(evidenceFilenameBase(evidence) + ".json", JSON.stringify(evidence, null, 2));
+  $("session-evidence-state").textContent = "saved";
+  $("session-evidence-state").className = "source-pill source-file";
+  $("session-evidence-message").textContent = "JSON evidence downloaded.";
+}
+
+function exportSessionEvidenceMarkdown() {
+  const evidence = buildSessionEvidence(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  downloadTextMaterial(evidenceFilenameBase(evidence) + ".md", buildSessionEvidenceMarkdown(evidence));
+  $("session-evidence-state").textContent = "saved";
+  $("session-evidence-state").className = "source-pill source-file";
+  $("session-evidence-message").textContent = "Markdown evidence downloaded.";
 }
 
 function renderItems(id, items, emptyText, mapItem) {
@@ -1917,6 +2104,7 @@ function renderStatus(snapshot) {
   renderCertificateManager(snapshot);
   renderCabinetProfile(status);
   renderFirstCabinetSession(snapshot);
+  renderSessionEvidence(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
   renderEGMTable(status);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
@@ -2201,6 +2389,9 @@ function bindControls() {
     schedulePoll(0);
   });
 
+  $("session-evidence-json-button").addEventListener("click", exportSessionEvidenceJSON);
+  $("session-evidence-markdown-button").addEventListener("click", exportSessionEvidenceMarkdown);
+
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-role-select").addEventListener("change", () => {
     clientState.certSelectedRole = selectedCertRole();
@@ -2259,5 +2450,6 @@ updateSortLabels();
 updateStaleBadge();
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
+renderSessionEvidence(emptySnapshot());
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`
