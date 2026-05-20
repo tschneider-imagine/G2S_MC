@@ -52,6 +52,15 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"cabinet-wire-host-url\"") {
 		t.Fatalf("expected cabinet profile field markers")
 	}
+	if !strings.Contains(rr.Body.String(), "Cabinet Setup") {
+		t.Fatalf("expected cabinet setup panel")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"setup-api-token\"") {
+		t.Fatalf("expected cabinet setup auth token field")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"setup-save-button\"") {
+		t.Fatalf("expected cabinet setup save button")
+	}
 }
 
 func TestDashboardAssets(t *testing.T) {
@@ -71,14 +80,14 @@ func TestDashboardAssets(t *testing.T) {
 		}
 		body := rr.Body.String()
 		if path == "/static/dashboard.js" {
-			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source"} {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "Authorization", "cabinetProfile"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}
 			}
 		}
 		if path == "/static/dashboard.css" {
-			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning"} {
+			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "validation-list", "secondary-button"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}

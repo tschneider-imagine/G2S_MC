@@ -107,6 +107,46 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Cabinet Setup</h2>
+            <span id="cabinet-setup-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="cabinet-setup-message" class="muted-text">Current values loaded from the appliance.</span>
+        </div>
+        <form id="cabinet-setup-form" class="setup-form">
+          <div class="form-grid">
+            <label>Wire Host URL<input id="setup-wire-host-url" name="wire_host_url" autocomplete="off"></label>
+            <label>Listener DNS<input id="setup-listener-dns" name="listener_dns_name" autocomplete="off"></label>
+            <label>Listener IP<input id="setup-listener-ip" name="listener_ip" autocomplete="off"></label>
+            <label>Host ID<input id="setup-host-id" name="host_id" autocomplete="off"></label>
+            <label>Required SAN DNS<input id="setup-required-san-dns" name="required_san_dns" autocomplete="off"></label>
+            <label>Required SAN IPs<input id="setup-required-san-ips" name="required_san_ips" autocomplete="off"></label>
+            <label>First Test EGM IDs<input id="setup-first-test-egm-ids" name="first_test_egm_ids" autocomplete="off"></label>
+            <label>API Token<input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
+          </div>
+          <div class="setup-details">
+            <div>
+              <p class="label">SAN Expectation</p>
+              <strong id="setup-san-summary">-</strong>
+            </div>
+            <div>
+              <p class="label">Validation</p>
+              <strong id="setup-validation-summary">-</strong>
+            </div>
+          </div>
+          <div id="setup-validation-list" class="validation-list"></div>
+          <div class="setup-actions">
+            <button id="setup-save-button" type="submit">Save Override</button>
+            <button id="setup-reset-button" type="button" class="secondary-button">Clear Override</button>
+            <button id="setup-reload-button" type="button" class="secondary-button">Reload</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
     <section class="grid two">
       <div class="panel wide">
         <div class="panel-head panel-head-stack">
@@ -577,6 +617,95 @@ th {
   font-size: 14px;
 }
 
+.setup-form {
+  padding: 18px;
+  background: var(--panel);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.form-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.form-grid input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: #fbfdfb;
+  font: inherit;
+  font-size: 14px;
+  text-transform: none;
+}
+
+.form-grid input:focus {
+  outline: 2px solid rgba(36, 95, 145, 0.24);
+  border-color: var(--blue);
+}
+
+.setup-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.45fr);
+  gap: 1px;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.setup-details > div {
+  min-width: 0;
+  padding: 13px 14px;
+  background: #f8fbf8;
+}
+
+.setup-details strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.validation-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: #7b2d2a;
+  font-size: 13px;
+}
+
+.validation-list:empty {
+  display: none;
+}
+
+.validation-item {
+  border-left: 3px solid var(--red);
+  padding: 6px 8px;
+  background: var(--red-bg);
+}
+
+.setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.secondary-button {
+  background: #fff;
+  color: var(--ink);
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -655,6 +784,11 @@ th {
     align-items: flex-start;
     flex-direction: column;
   }
+
+  .form-grid,
+  .setup-details {
+    grid-template-columns: 1fr;
+  }
 }`
 
 const dashboardJS = `const endpoints = {
@@ -663,7 +797,8 @@ const dashboardJS = `const endpoints = {
   incidents: "/api/incidents?limit=6",
   egmHistory: "/api/egms/history?limit=8",
   stateHistory: "/api/state-history?limit=8",
-  certificates: "/api/certificates"
+  certificates: "/api/certificates",
+  cabinetProfile: "/api/cabinet-profile"
 };
 
 const $ = (id) => document.getElementById(id);
@@ -691,7 +826,8 @@ function emptySnapshot() {
     incidents: [],
     egmHistory: [],
     stateHistory: [],
-    certificates: []
+    certificates: [],
+    cabinetProfile: null
   };
 }
 
@@ -708,7 +844,8 @@ function copySnapshot(snapshot) {
     incidents: Array.isArray(snapshot.incidents) ? snapshot.incidents.slice() : [],
     egmHistory: Array.isArray(snapshot.egmHistory) ? snapshot.egmHistory.slice() : [],
     stateHistory: Array.isArray(snapshot.stateHistory) ? snapshot.stateHistory.slice() : [],
-    certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : []
+    certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
+    cabinetProfile: snapshot.cabinetProfile || null
   };
 }
 
@@ -907,6 +1044,185 @@ function renderCabinetProfile(status) {
   }
 }
 
+function splitList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinList(value) {
+  return Array.isArray(value) ? value.join(", ") : "";
+}
+
+function cabinetProfileFromForm() {
+  return {
+    wire_host_url: $("setup-wire-host-url").value.trim(),
+    listener_dns_name: $("setup-listener-dns").value.trim(),
+    listener_ip: $("setup-listener-ip").value.trim(),
+    required_san_dns: splitList($("setup-required-san-dns").value),
+    required_san_ips: splitList($("setup-required-san-ips").value),
+    host_id: $("setup-host-id").value.trim(),
+    first_test_egm_ids: splitList($("setup-first-test-egm-ids").value)
+  };
+}
+
+function fillCabinetSetupForm(profile) {
+  $("setup-wire-host-url").value = profile.wire_host_url || "";
+  $("setup-listener-dns").value = profile.listener_dns_name || "";
+  $("setup-listener-ip").value = profile.listener_ip || "";
+  $("setup-required-san-dns").value = joinList(profile.required_san_dns);
+  $("setup-required-san-ips").value = joinList(profile.required_san_ips);
+  $("setup-host-id").value = profile.host_id || "";
+  $("setup-first-test-egm-ids").value = joinList(profile.first_test_egm_ids);
+  renderCabinetSetupValidation();
+}
+
+function validateCabinetSetupProfile(profile) {
+  const problems = [];
+  let parsedURL = null;
+  if (!profile.wire_host_url) {
+    problems.push("Wire Host URL is required.");
+  } else {
+    try {
+      parsedURL = new URL(profile.wire_host_url);
+      if (parsedURL.protocol !== "http:" && parsedURL.protocol !== "https:") {
+        problems.push("Wire Host URL must use http or https.");
+      }
+    } catch (_) {
+      problems.push("Wire Host URL must be a valid URL.");
+    }
+  }
+  if (!profile.listener_dns_name && !profile.listener_ip) {
+    problems.push("Listener DNS or Listener IP is required.");
+  }
+  if (profile.required_san_dns.length === 0 && profile.required_san_ips.length === 0) {
+    problems.push("At least one required SAN DNS or SAN IP value is required.");
+  }
+  if (!profile.host_id) {
+    problems.push("Host ID is required.");
+  }
+  if (profile.first_test_egm_ids.length === 0) {
+    problems.push("At least one first test EGM ID is required.");
+  }
+  const placeholderText = [
+    profile.wire_host_url,
+    profile.listener_dns_name,
+    profile.listener_ip,
+    profile.host_id,
+    profile.required_san_dns.join(" "),
+    profile.required_san_ips.join(" "),
+    profile.first_test_egm_ids.join(" ")
+  ].join(" ").toLowerCase();
+  if (placeholderText.includes("example") || placeholderText.includes("placeholder")) {
+    problems.push("Replace placeholder/example identity values before cabinet use.");
+  }
+  return { problems, parsedURL };
+}
+
+function renderCabinetSetupValidation() {
+  const profile = cabinetProfileFromForm();
+  const result = validateCabinetSetupProfile(profile);
+  const host = result.parsedURL ? result.parsedURL.hostname : "-";
+  const sanValues = []
+    .concat(profile.required_san_dns.map((item) => "DNS:" + item))
+    .concat(profile.required_san_ips.map((item) => "IP:" + item));
+  $("setup-san-summary").textContent = "wire host " + host + "; " + (sanValues.length ? sanValues.join(", ") : "no SAN values");
+  $("setup-validation-summary").textContent = result.problems.length ? result.problems.length + " issue(s)" : "Ready to save";
+  $("setup-validation-list").innerHTML = result.problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
+  return result;
+}
+
+function setupAuthHeaders() {
+  const token = $("setup-api-token").value.trim();
+  const headers = { "Content-Type": "application/json" };
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  return headers;
+}
+
+function setSetupState(level, message) {
+  const badge = $("cabinet-setup-state");
+  badge.textContent = level;
+  badge.className = "source-pill " + (level === "saved" || level === "ready" ? "source-file" : level === "working" ? "source-override" : "source-mixed");
+  $("cabinet-setup-message").textContent = message;
+}
+
+async function reloadCabinetProfileForm() {
+  setSetupState("working", "Reloading cabinet profile.");
+  const profile = await fetchJSON(endpoints.cabinetProfile);
+  clientState.displaySnapshot = clientState.displaySnapshot || emptySnapshot();
+  clientState.displaySnapshot.cabinetProfile = profile;
+  fillCabinetSetupForm(profile.effective || {});
+  setSetupState("ready", "Current values loaded from the appliance.");
+  return profile;
+}
+
+async function saveCabinetProfileOverride(event) {
+  event.preventDefault();
+  const validation = renderCabinetSetupValidation();
+  if (validation.problems.length) {
+    setSetupState("blocked", "Resolve validation issues before saving.");
+    return;
+  }
+  try {
+    setSetupState("working", "Saving cabinet profile override.");
+    const response = await fetch(endpoints.cabinetProfile, {
+      method: "PUT",
+      headers: setupAuthHeaders(),
+      body: JSON.stringify(cabinetProfileFromForm())
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      setSetupState("blocked", "Save failed: HTTP " + response.status + " " + detail.trim());
+      return;
+    }
+    const profile = await response.json();
+    fillCabinetSetupForm(profile.effective || {});
+    setSetupState("saved", "Override saved. Refreshing appliance status.");
+    schedulePoll(0);
+  } catch (err) {
+    setSetupState("blocked", err && err.message ? err.message : "Save failed.");
+  }
+}
+
+async function clearCabinetProfileOverride() {
+  try {
+    setSetupState("working", "Clearing cabinet profile override.");
+    const response = await fetch(endpoints.cabinetProfile, {
+      method: "DELETE",
+      headers: setupAuthHeaders()
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      setSetupState("blocked", "Clear failed: HTTP " + response.status + " " + detail.trim());
+      return;
+    }
+    const profile = await response.json();
+    fillCabinetSetupForm(profile.effective || {});
+    setSetupState("saved", "Override cleared. File defaults are active.");
+    schedulePoll(0);
+  } catch (err) {
+    setSetupState("blocked", err && err.message ? err.message : "Clear failed.");
+  }
+}
+
+function cabinetSetupHasFocus() {
+  const form = $("cabinet-setup-form");
+  return !!(form && form.contains(document.activeElement));
+}
+
+function syncCabinetSetupFromSnapshot(snapshot) {
+  const profileResponse = snapshot?.cabinetProfile;
+  const profile = profileResponse?.effective || snapshot?.status?.cabinet_profile || {};
+  if (!profile || cabinetSetupHasFocus()) {
+    renderCabinetSetupValidation();
+    return;
+  }
+  fillCabinetSetupForm(profile);
+}
+
 function renderStatus(snapshot) {
   const status = snapshot?.status || {};
   const readyz = snapshot?.readyz || {};
@@ -931,6 +1247,7 @@ function renderStatus(snapshot) {
 
   renderCertificateSummary(readiness.certificate_summary || {});
   renderCabinetProfile(status);
+  syncCabinetSetupFromSnapshot(snapshot);
   renderEGMTable(status);
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
@@ -1100,10 +1417,11 @@ async function pollOnce() {
       fetchJSON(endpoints.incidents),
       fetchJSON(endpoints.egmHistory),
       fetchJSON(endpoints.stateHistory),
-      fetchJSON(endpoints.certificates)
+      fetchJSON(endpoints.certificates),
+      fetchJSON(endpoints.cabinetProfile)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, certificatesResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, certificatesResult, cabinetProfileResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -1130,11 +1448,13 @@ async function pollOnce() {
     if (egmHistoryResult.status === "fulfilled") snapshot.egmHistory = egmHistoryResult.value;
     if (stateHistoryResult.status === "fulfilled") snapshot.stateHistory = stateHistoryResult.value;
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
+    if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
     if (stateHistoryResult.status !== "fulfilled") failures.push("state history unavailable");
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
+    if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
 
     clientState.displaySnapshot = snapshot;
     renderStatus(snapshot);
@@ -1205,6 +1525,17 @@ function setSort(key) {
 function bindControls() {
   $("refresh-button").addEventListener("click", () => {
     schedulePoll(0);
+  });
+
+  $("cabinet-setup-form").addEventListener("submit", saveCabinetProfileOverride);
+  $("setup-reset-button").addEventListener("click", clearCabinetProfileOverride);
+  $("setup-reload-button").addEventListener("click", () => {
+    reloadCabinetProfileForm().catch((err) => {
+      setSetupState("blocked", err && err.message ? err.message : "Reload failed.");
+    });
+  });
+  document.querySelectorAll("#cabinet-setup-form input").forEach((input) => {
+    input.addEventListener("input", renderCabinetSetupValidation);
   });
 
   document.querySelectorAll(".filter-tab").forEach((button) => {
