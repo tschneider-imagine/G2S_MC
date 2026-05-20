@@ -128,7 +128,7 @@ const dashboardHTML = `<!doctype html>
             <label>API Token Required for Save/Clear<input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
           </div>
           <div class="token-help">
-            <span>Paste the token from <code>cat ~/.g2s_api_token</code> to save or clear overrides.</span>
+            <span>Enter the appliance API token to save or clear cabinet setup overrides.</span>
             <button id="setup-copy-token-button" type="button" class="secondary-button" disabled>Copy Entered Token</button>
           </div>
           <div class="setup-details">
@@ -1188,7 +1188,7 @@ function setSetupState(level, message) {
 async function copySetupTokenToClipboard() {
   const token = getSetupToken();
   if (!token) {
-    setSetupState("blocked", "Paste the token from ~/.g2s_api_token before copying.");
+    setSetupState("blocked", "Enter an API token before copying.");
     return;
   }
   try {
@@ -1221,7 +1221,7 @@ async function saveCabinetProfileOverride(event) {
   event.preventDefault();
   const validation = renderCabinetSetupValidation();
   if (!getSetupToken()) {
-    setSetupState("blocked", "Paste the token from ~/.g2s_api_token before saving.");
+    setSetupState("blocked", "Enter an API token before saving.");
     return;
   }
   if (validation.problems.length) {
@@ -1251,7 +1251,7 @@ async function saveCabinetProfileOverride(event) {
 
 async function clearCabinetProfileOverride() {
   if (!getSetupToken()) {
-    setSetupState("blocked", "Paste the token from ~/.g2s_api_token before clearing.");
+    setSetupState("blocked", "Enter an API token before clearing.");
     return;
   }
   try {

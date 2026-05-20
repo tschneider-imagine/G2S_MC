@@ -64,6 +64,9 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"setup-copy-token-button\"") {
 		t.Fatalf("expected cabinet setup copy token button")
 	}
+	if strings.Contains(rr.Body.String(), "~/.g2s_api_token") || strings.Contains(rr.Body.String(), "cat ~/.g2s_api_token") {
+		t.Fatalf("dashboard should not expose local token file instructions")
+	}
 }
 
 func TestDashboardAssets(t *testing.T) {
