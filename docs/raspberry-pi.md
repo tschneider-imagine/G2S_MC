@@ -43,6 +43,29 @@ keepAlive 1 -> HTTP 200
 Pi smoke test passed
 ```
 
+## Multi-Fake-EGM Lab Run
+
+To drive several fake EGMs from the configured roster at once:
+
+```bash
+CONFIG_PATH=./configs/config.pi.multi-fake.example.json KEEPALIVE_COUNT=-1 bash ./scripts/multi-fake-egm.sh
+```
+
+Useful overrides:
+
+```bash
+HOST_URL=http://127.0.0.1:8444/g2s \
+EGM_IDS=EGM-01,EGM-03 \
+KEEPALIVE_INTERVAL=3s \
+bash ./scripts/multi-fake-egm.sh
+```
+
+Notes:
+
+- `KEEPALIVE_COUNT=-1` keeps each fake EGM sending keepAlive traffic until `Ctrl+C`
+- `EGM_IDS` limits the run to a subset of the configured roster
+- `CA_PATH`, `CERT_PATH`, and `KEY_PATH` can be set for TLS/mTLS lab runs
+
 ## Service Commands
 
 ```bash

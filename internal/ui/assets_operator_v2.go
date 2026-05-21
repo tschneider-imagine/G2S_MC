@@ -151,6 +151,7 @@ const dashboardHTML = `<!doctype html>
           <div><dt>Run Markers in Snapshot</dt><dd id="session-evidence-run-marker-count">0</dd></div>
           <div><dt>Heartbeat Events in Snapshot</dt><dd id="session-evidence-heartbeat-count">0</dd></div>
           <div><dt>Heartbeat Health</dt><dd id="session-evidence-heartbeat-health">-</dd></div>
+          <div><dt>Heartbeat Source</dt><dd id="session-evidence-heartbeat-source">-</dd></div>
         </dl>
         <label class="cert-textarea-label evidence-notes-label">Operator Notes
           <textarea id="session-evidence-notes" rows="5" placeholder="Optional test notes, cabinet observations, or follow-up context."></textarea>
@@ -1655,6 +1656,34 @@ function heartbeatSummary(records, policy, referenceTime) {
   };
 }
 
+function isOperatorDrillEvent(record) {
+  const detail = String(record?.detail || "").toLowerCase();
+  return detail.indexOf("operator drill") >= 0;
+}
+
+function operatorDrillEvidence(records, drillState) {
+  const heartbeatRecords = heartbeatEventsFromHistory(records);
+  const drillRecords = heartbeatRecords.filter((item) => isOperatorDrillEvent(item));
+  const liveRecords = heartbeatRecords.filter((item) => !isOperatorDrillEvent(item));
+  let source = "NONE";
+  if (drillRecords.length > 0 && liveRecords.length > 0) {
+    source = "MIXED";
+  } else if (drillRecords.length > 0) {
+    source = "DRILL_ONLY";
+  } else if (liveRecords.length > 0) {
+    source = "LIVE_ONLY";
+  }
+  return {
+    source: source,
+    total_events: heartbeatRecords.length,
+    drill_events: drillRecords.length,
+    live_events: liveRecords.length,
+    egm_ids: Array.from(new Set(drillRecords.map((item) => String(item?.egm_id || "").trim()).filter(Boolean))),
+    last_drill_event_at: drillRecords.length ? drillRecords[drillRecords.length - 1].created_at : "",
+    state: drillState || null
+  };
+}
+
 function runWindowIsActive(snapshot) {
   const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers.slice() : [];
   markers.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
@@ -1928,7 +1957,9 @@ function buildSessionEvidence(snapshot) {
   const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
   const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
   const runMarkers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
+  const drillState = currentOperatorDrill(snapshot);
   const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+  const drillEvidence = operatorDrillEvidence(egmHistory, drillState);
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
@@ -1967,6 +1998,7 @@ function buildSessionEvidence(snapshot) {
     },
     egm_snapshot_count: Array.isArray(status.egms) ? status.egms.length : 0,
     heartbeat_summary: heartbeat,
+    operator_drill: drillEvidence,
     incidents: incidents,
     egm_history: egmHistory,
     state_history: stateHistory,
@@ -1998,6 +2030,8 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- Run markers captured: " + String((evidence.run_markers || []).length),
     "- Heartbeat events captured: " + String(evidence?.heartbeat_summary?.total || 0),
     "- Heartbeat health: " + (evidence?.heartbeat_summary?.label || "-"),
+    "- Heartbeat source: " + (evidence?.operator_drill?.source || "-"),
+    "- Drill heartbeat events: " + String(evidence?.operator_drill?.drill_events || 0),
     ""
   ];
   lines.push("## Blockers", "");
@@ -2027,6 +2061,13 @@ function buildSessionEvidenceMarkdown(evidence) {
   lines.push("- Last keepAlive: " + (evidence?.heartbeat_summary?.last_keepalive_at || "-"));
   lines.push("- Max gap: " + fmtDurationMs(evidence?.heartbeat_summary?.max_gap_ms || 0));
   lines.push("- Notes: " + (evidence?.heartbeat_summary?.message || "-"));
+  lines.push("", "## Operator Drill", "");
+  lines.push("- Source: " + (evidence?.operator_drill?.source || "-"));
+  lines.push("- Drill events: " + String(evidence?.operator_drill?.drill_events || 0));
+  lines.push("- Live events: " + String(evidence?.operator_drill?.live_events || 0));
+  lines.push("- Drill EGM IDs: " + (((evidence?.operator_drill?.egm_ids || []).join(", ")) || "-"));
+  lines.push("- Auto heartbeat running: " + String(evidence?.operator_drill?.state?.auto_heartbeat_running === true));
+  lines.push("- Auto heartbeat paused: " + String(evidence?.operator_drill?.state?.auto_heartbeat_paused === true));
   lines.push("", "## JSON Payload", "", "~~~json", JSON.stringify(evidence, null, 2), "~~~");
   return lines.join("\n");
 }
@@ -2086,12 +2127,13 @@ function renderSelectedSavedSessionEvidence(record) {
   const warnings = Array.isArray(evidence?.readiness?.warnings) ? evidence.readiness.warnings : [];
   const runMarkers = Array.isArray(evidence?.run_markers) ? evidence.run_markers : [];
   const heartbeat = evidence?.heartbeat_summary || {};
+  const drill = evidence?.operator_drill || {};
   renderItems("session-evidence-selected", [record], "", () =>
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
       "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + "</span></div>" +
-      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ")</span></div>" +
+      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
   );
@@ -2231,6 +2273,7 @@ function renderSessionEvidence(snapshot) {
   $("session-evidence-run-marker-count").textContent = String((evidence.run_markers || []).length);
   $("session-evidence-heartbeat-count").textContent = String(evidence?.heartbeat_summary?.total || 0);
   $("session-evidence-heartbeat-health").textContent = evidence?.heartbeat_summary?.label || "-";
+  $("session-evidence-heartbeat-source").textContent = evidence?.operator_drill?.source || "-";
   const ready = !!snapshot?.status;
   $("session-evidence-save-button").disabled = !ready || (setupActionsRequireToken() && !getSetupToken() && !getCertToken());
   $("session-evidence-json-button").disabled = !ready;
@@ -2679,7 +2722,9 @@ function boundedRunReport(snapshot) {
   const stateHistory = (snapshot?.stateHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const runMarkers = (snapshot?.runMarkers || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const sessionEvidence = (snapshot?.sessionEvidence || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const drillState = currentOperatorDrill(snapshot);
   const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), endMarker.created_at || "");
+  const drillEvidence = operatorDrillEvidence(egmHistory, drillState);
   return {
     generated_at: new Date().toISOString(),
     window: {
@@ -2702,6 +2747,7 @@ function boundedRunReport(snapshot) {
       saved_evidence: sessionEvidence.length
     },
     heartbeat_summary: heartbeat,
+    operator_drill: drillEvidence,
     incidents: incidents,
     egm_history: egmHistory,
     state_history: stateHistory,
@@ -2729,6 +2775,7 @@ function buildRunReportMarkdown(report) {
     "- Run markers: " + String(report.summary.run_markers || 0),
     "- Saved evidence captures: " + String(report.summary.saved_evidence || 0),
     "- Heartbeat health: " + (report?.heartbeat_summary?.label || "-"),
+    "- Heartbeat source: " + (report?.operator_drill?.source || "-"),
     "",
     "## Heartbeat Summary",
     "",
@@ -2737,6 +2784,15 @@ function buildRunReportMarkdown(report) {
     "- Last keepAlive: " + (report?.heartbeat_summary?.last_keepalive_at || "-"),
     "- Max gap: " + fmtDurationMs(report?.heartbeat_summary?.max_gap_ms || 0),
     "- Notes: " + (report?.heartbeat_summary?.message || "-"),
+    "",
+    "## Operator Drill",
+    "",
+    "- Source: " + (report?.operator_drill?.source || "-"),
+    "- Drill events: " + String(report?.operator_drill?.drill_events || 0),
+    "- Live events: " + String(report?.operator_drill?.live_events || 0),
+    "- Drill EGM IDs: " + (((report?.operator_drill?.egm_ids || []).join(", ")) || "-"),
+    "- Auto heartbeat running: " + String(report?.operator_drill?.state?.auto_heartbeat_running === true),
+    "- Auto heartbeat paused: " + String(report?.operator_drill?.state?.auto_heartbeat_paused === true),
     "",
     "## JSON Payload",
     "",
@@ -2776,7 +2832,7 @@ function renderRunReportControls(snapshot) {
     return;
   }
   $("run-report-window-summary").textContent = fmtTime(report.window.started_at) + " -> " + fmtTime(report.window.ended_at) + " (" + report.window.duration_seconds + "s)";
-  $("run-report-count-summary").textContent = "incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + ", heartbeat " + report.summary.heartbeat_events + ", state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
+  $("run-report-count-summary").textContent = "incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + ", heartbeat " + report.summary.heartbeat_events + " (" + (report?.operator_drill?.source || "-") + "), state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
   $("run-report-state").textContent = "ready";
   $("run-report-state").className = "source-pill source-file";
   $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ".";

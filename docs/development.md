@@ -19,6 +19,20 @@ In a second terminal:
 go run ./cmd/g2s-fake-egm -host-url http://127.0.0.1:8444/g2s -egm-id EGM-01 -keepalive-count 3
 ```
 
+For a sustained multi-EGM lab run from the roster:
+
+```bash
+bash ./scripts/multi-fake-egm.sh
+```
+
+The launcher reads `egm_roster` from `configs/config.pi.example.json` by default. For the 3-EGM lab example:
+
+```bash
+CONFIG_PATH=./configs/config.pi.multi-fake.example.json KEEPALIVE_COUNT=-1 bash ./scripts/multi-fake-egm.sh
+```
+
+Use `Ctrl+C` to stop the continuous keepAlive clients. Set `EGM_IDS=EGM-01,EGM-03` to limit the run to a subset of the roster.
+
 The default development listener binds to `127.0.0.1:8444`.
 
 Useful endpoints:
