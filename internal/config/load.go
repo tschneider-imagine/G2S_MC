@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+const (
+	DefaultHeartbeatWarningAfterMissed = 3
+	DefaultHeartbeatBlockAfterMissed   = 6
+)
+
 func LoadFile(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -61,6 +66,16 @@ func (c Config) Validate() error {
 	if c.HardwareIO.VoltageDropThresholdMS <= 0 {
 		problems = append(problems, "hardware_io.voltage_drop_threshold_ms must be greater than zero")
 	}
+	if c.Timeouts.EGMHeartbeatWarningAfterMissed < 0 {
+		problems = append(problems, "timeouts.egm_heartbeat_warning_after_missed must not be negative")
+	}
+	if c.Timeouts.EGMHeartbeatBlockAfterMissed < 0 {
+		problems = append(problems, "timeouts.egm_heartbeat_block_after_missed must not be negative")
+	}
+	if c.Timeouts.EGMHeartbeatWarningAfterMissed > 0 && c.Timeouts.EGMHeartbeatBlockAfterMissed > 0 &&
+		c.Timeouts.EGMHeartbeatBlockAfterMissed < c.Timeouts.EGMHeartbeatWarningAfterMissed {
+		problems = append(problems, "timeouts.egm_heartbeat_block_after_missed must be greater than or equal to timeouts.egm_heartbeat_warning_after_missed")
+	}
 	if c.Alerts.GreyThresholdCountToBuzz < 0 {
 		problems = append(problems, "alerts.grey_threshold_count_to_buzz must not be negative")
 	}
@@ -86,6 +101,27 @@ func (c Config) Validate() error {
 		return fmt.Errorf("invalid config: %s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func EffectiveHeartbeatWarningAfterMissed(timeouts Timeouts) int {
+	if timeouts.EGMHeartbeatWarningAfterMissed > 0 {
+		return timeouts.EGMHeartbeatWarningAfterMissed
+	}
+	return DefaultHeartbeatWarningAfterMissed
+}
+
+func EffectiveHeartbeatBlockAfterMissed(timeouts Timeouts) int {
+	if timeouts.EGMHeartbeatBlockAfterMissed > 0 {
+		if timeouts.EGMHeartbeatWarningAfterMissed > 0 && timeouts.EGMHeartbeatBlockAfterMissed < timeouts.EGMHeartbeatWarningAfterMissed {
+			return timeouts.EGMHeartbeatWarningAfterMissed
+		}
+		return timeouts.EGMHeartbeatBlockAfterMissed
+	}
+	warningAfter := EffectiveHeartbeatWarningAfterMissed(timeouts)
+	if DefaultHeartbeatBlockAfterMissed < warningAfter {
+		return warningAfter
+	}
+	return DefaultHeartbeatBlockAfterMissed
 }
 
 func requireText(problems *[]string, field string, value string) {

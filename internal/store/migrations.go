@@ -101,4 +101,12 @@ CREATE TABLE IF NOT EXISTS run_markers (
     wire_host_url TEXT,
     operator_name TEXT
 );
+
+CREATE TABLE IF NOT EXISTS heartbeat_policy_overrides (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    warning_after_missed INTEGER NOT NULL,
+    block_after_missed INTEGER NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
+);
 `

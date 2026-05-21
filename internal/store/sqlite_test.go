@@ -225,6 +225,68 @@ func TestCabinetProfileOverrideCRUD(t *testing.T) {
 	}
 }
 
+func TestHeartbeatPolicyOverrideCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	override, err := store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get empty heartbeat policy override: %v", err)
+	}
+	if override != nil {
+		t.Fatalf("expected no heartbeat policy override row")
+	}
+
+	if err := store.UpsertHeartbeatPolicyOverride(ctx, 4, 8, "tester"); err != nil {
+		t.Fatalf("upsert heartbeat policy override: %v", err)
+	}
+	assertCount(t, store, "heartbeat_policy_overrides", 1)
+
+	override, err = store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get heartbeat policy override: %v", err)
+	}
+	if override == nil {
+		t.Fatalf("expected heartbeat policy override row")
+	}
+	if override.WarningAfterMissed != 4 || override.BlockAfterMissed != 8 {
+		t.Fatalf("unexpected heartbeat policy override: %+v", override)
+	}
+	if override.UpdatedBy != "tester" {
+		t.Fatalf("updated_by = %q, want tester", override.UpdatedBy)
+	}
+
+	if err := store.UpsertHeartbeatPolicyOverride(ctx, 5, 9, "tester2"); err != nil {
+		t.Fatalf("update heartbeat policy override: %v", err)
+	}
+	override, err = store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get updated heartbeat policy override: %v", err)
+	}
+	if override.WarningAfterMissed != 5 || override.BlockAfterMissed != 9 {
+		t.Fatalf("unexpected updated heartbeat policy override: %+v", override)
+	}
+	if override.UpdatedBy != "tester2" {
+		t.Fatalf("updated_by = %q, want tester2", override.UpdatedBy)
+	}
+
+	if err := store.ClearHeartbeatPolicyOverride(ctx); err != nil {
+		t.Fatalf("clear heartbeat policy override: %v", err)
+	}
+	assertCount(t, store, "heartbeat_policy_overrides", 0)
+	override, err = store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get cleared heartbeat policy override: %v", err)
+	}
+	if override != nil {
+		t.Fatalf("expected cleared heartbeat policy override to be nil")
+	}
+}
+
 func TestSessionEvidenceCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")

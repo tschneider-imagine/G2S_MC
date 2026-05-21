@@ -112,6 +112,15 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"run-report-markdown-button\"") {
 		t.Fatalf("expected run report markdown export button")
 	}
+	if !strings.Contains(rr.Body.String(), "id=\"heartbeat-policy-form\"") {
+		t.Fatalf("expected heartbeat policy form")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"heartbeat-policy-warning-after-missed\"") {
+		t.Fatalf("expected heartbeat policy warning threshold input")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"heartbeat-policy-block-after-missed\"") {
+		t.Fatalf("expected heartbeat policy blocker threshold input")
+	}
 	if !strings.Contains(rr.Body.String(), "data-timeline-filter=\"heartbeat\"") {
 		t.Fatalf("expected heartbeat timeline filter")
 	}
@@ -167,7 +176,7 @@ func TestDashboardAssets(t *testing.T) {
 		}
 		body := rr.Body.String()
 			if path == "/static/dashboard.js" {
-			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "validateCertificateManagerForm", "certificateRoleRulesText", "cert-role-export-policy", "allow_private_key_export", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "mutationTokenRequired", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "heartbeat_summary", "heartbeatEventTypes", "isHeartbeatEventType", "heartbeatSummary", "renderHeartbeatSummary", "run_markers", "session-evidence-state", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "viewSavedSessionEvidence", "exportSavedSessionEvidenceJSON", "exportSavedSessionEvidenceMarkdown", "exportAllSavedSessionEvidence", "deleteSavedSessionEvidence", "session-evidence-export-all-button", "session-evidence-selected", "buildCabinetRunTimeline", "renderCabinetRunTimeline", "timeline-filter-tab", "timeline-count", "timeline-filter-label", "runMarkers", "run-marker-start-button", "submitRunMarker", "renderRunMarkerControls", "boundedRunReport", "buildRunReportMarkdown", "run-report-start-marker", "run-report-end-marker", "renderRunReportControls", "exportRunReportJSON", "exportRunReportMarkdown", "sessionEvidence"} {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "heartbeatPolicy", "saveHeartbeatPolicyOverride", "clearHeartbeatPolicyOverride", "reloadHeartbeatPolicyForm", "currentHeartbeatPolicy", "runWindowIsActive", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "validateCertificateManagerForm", "certificateRoleRulesText", "cert-role-export-policy", "allow_private_key_export", "cabinetPreflight", "renderFirstCabinetSession", "first-cabinet-session-state", "trusted_mutation_bypass_active", "mutationTokenRequired", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "heartbeat_summary", "heartbeatEventTypes", "isHeartbeatEventType", "heartbeatSummary", "renderHeartbeatSummary", "run_markers", "session-evidence-state", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "viewSavedSessionEvidence", "exportSavedSessionEvidenceJSON", "exportSavedSessionEvidenceMarkdown", "exportAllSavedSessionEvidence", "deleteSavedSessionEvidence", "session-evidence-export-all-button", "session-evidence-selected", "buildCabinetRunTimeline", "renderCabinetRunTimeline", "timeline-filter-tab", "timeline-count", "timeline-filter-label", "runMarkers", "run-marker-start-button", "submitRunMarker", "renderRunMarkerControls", "boundedRunReport", "buildRunReportMarkdown", "run-report-start-marker", "run-report-end-marker", "renderRunReportControls", "exportRunReportJSON", "exportRunReportMarkdown", "sessionEvidence"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}

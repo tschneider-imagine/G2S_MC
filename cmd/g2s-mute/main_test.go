@@ -526,6 +526,78 @@ func TestCabinetProfileHandlerCRUD(t *testing.T) {
 	}
 }
 
+func TestHeartbeatPolicyHandlerCRUD(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		Timeouts: config.Timeouts{
+			EGMHeartbeatIntervalMS:          5000,
+			EGMHeartbeatWarningAfterMissed:  3,
+			EGMHeartbeatBlockAfterMissed:    6,
+		},
+	}
+	handler := heartbeatPolicyHandler(auditStore, cfg)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/heartbeat-policy", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var getBody heartbeatPolicyResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("decode GET: %v", err)
+	}
+	if getBody.PolicySource != "file" {
+		t.Fatalf("GET policy_source = %q", getBody.PolicySource)
+	}
+	if getBody.Effective.WarningAfterMissed != 3 || getBody.Effective.BlockAfterMissed != 6 {
+		t.Fatalf("unexpected GET effective policy: %+v", getBody.Effective)
+	}
+
+	raw := []byte(`{"warning_after_missed":4,"block_after_missed":9}`)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/heartbeat-policy", bytes.NewReader(raw))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("X-Operator", "tester")
+	putRec := httptest.NewRecorder()
+	handler(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d: %s", putRec.Code, putRec.Body.String())
+	}
+	var putBody heartbeatPolicyResponse
+	if err := json.Unmarshal(putRec.Body.Bytes(), &putBody); err != nil {
+		t.Fatalf("decode PUT: %v", err)
+	}
+	if putBody.PolicySource != "override" {
+		t.Fatalf("PUT policy_source = %q", putBody.PolicySource)
+	}
+	if putBody.Effective.WarningAfterMissed != 4 || putBody.Effective.BlockAfterMissed != 9 {
+		t.Fatalf("unexpected PUT effective policy: %+v", putBody.Effective)
+	}
+	if !putBody.OverridePresent {
+		t.Fatal("expected override_present on PUT")
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/heartbeat-policy", nil)
+	deleteRec := httptest.NewRecorder()
+	handler(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+	var deleteBody heartbeatPolicyResponse
+	if err := json.Unmarshal(deleteRec.Body.Bytes(), &deleteBody); err != nil {
+		t.Fatalf("decode DELETE: %v", err)
+	}
+	if deleteBody.PolicySource != "file" || deleteBody.OverridePresent {
+		t.Fatalf("unexpected DELETE response: %+v", deleteBody)
+	}
+}
+
 func waitForLastEvent(t *testing.T, eng *engine.Engine, event string) {
 	t.Helper()
 	deadline := time.Now().Add(500 * time.Millisecond)

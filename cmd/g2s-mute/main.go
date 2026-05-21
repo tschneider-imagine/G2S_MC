@@ -128,6 +128,15 @@ func main() {
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
 	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
 	mux.HandleFunc("/api/run-markers", runMarkersHandler(auditStore, cfg))
+	mux.HandleFunc(
+		"/api/heartbeat-policy",
+		requireMutationAuthForMethods(
+			heartbeatPolicyHandler(auditStore, cfg),
+			cfg,
+			http.MethodPut,
+			http.MethodDelete,
+		),
+	)
 	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
 	mux.HandleFunc(
@@ -219,6 +228,9 @@ type applianceStatus struct {
 	Runtime                runtimeStatus         `json:"runtime"`
 	Readiness              readinessStatus       `json:"readiness"`
 	CabinetProfile         config.CabinetProfile `json:"cabinet_profile"`
+	HeartbeatPolicy        heartbeatPolicy       `json:"heartbeat_policy"`
+	HeartbeatPolicySource  string                `json:"heartbeat_policy_source"`
+	HeartbeatPolicyLastUpdatedAt *time.Time      `json:"heartbeat_policy_last_updated_at,omitempty"`
 	ProfileSource          string                `json:"profile_source"`
 	ProfileLastUpdatedAt   *time.Time            `json:"profile_last_updated_at,omitempty"`
 	ProfileDiffersFromFile bool                  `json:"profile_differs_from_file"`
@@ -267,6 +279,35 @@ type resolvedCabinetProfile struct {
 	ProfileLastUpdatedAt   *time.Time
 	ProfileDiffersFromFile bool
 	Warning                string
+}
+
+type heartbeatPolicy struct {
+	IntervalMS          int `json:"interval_ms"`
+	WarningAfterMissed  int `json:"warning_after_missed"`
+	BlockAfterMissed    int `json:"block_after_missed"`
+}
+
+type resolvedHeartbeatPolicy struct {
+	Effective          heartbeatPolicy
+	File               heartbeatPolicy
+	Override           *store.HeartbeatPolicyOverride
+	PolicySource       string
+	PolicyLastUpdatedAt *time.Time
+}
+
+type heartbeatPolicyResponse struct {
+	Effective          heartbeatPolicy                `json:"effective"`
+	PolicySource       string                         `json:"policy_source"`
+	PolicyLastUpdatedAt *time.Time                    `json:"policy_last_updated_at,omitempty"`
+	OverridePresent    bool                           `json:"override_present"`
+	Override           *heartbeatPolicyOverrideView   `json:"override,omitempty"`
+}
+
+type heartbeatPolicyOverrideView struct {
+	WarningAfterMissed int       `json:"warning_after_missed"`
+	BlockAfterMissed   int       `json:"block_after_missed"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	UpdatedBy          string    `json:"updated_by,omitempty"`
 }
 
 type cabinetProfileResponse struct {
@@ -352,11 +393,18 @@ func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *stor
 	if err != nil {
 		return applianceStatus{}, err
 	}
+	heartbeat, err := resolveHeartbeatPolicy(ctx, store, cfg.Timeouts)
+	if err != nil {
+		return applianceStatus{}, err
+	}
 	return applianceStatus{
 		Snapshot:               snapshot,
 		Runtime:                buildRuntimeStatus(cfg, runtime, request),
 		Readiness:              buildReadinessStatus(snapshot, cfg, certificates, profile.Warning),
 		CabinetProfile:         profile.Effective,
+		HeartbeatPolicy:        heartbeat.Effective,
+		HeartbeatPolicySource:  heartbeat.PolicySource,
+		HeartbeatPolicyLastUpdatedAt: heartbeat.PolicyLastUpdatedAt,
 		ProfileSource:          profile.ProfileSource,
 		ProfileLastUpdatedAt:   profile.ProfileLastUpdatedAt,
 		ProfileDiffersFromFile: profile.ProfileDiffersFromFile,
@@ -734,6 +782,64 @@ func cabinetProfileHandler(store *store.SQLiteStore, cfg config.Config) http.Han
 	}
 }
 
+func heartbeatPolicyHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			policy, err := resolveHeartbeatPolicy(r.Context(), store, cfg.Timeouts)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildHeartbeatPolicyResponse(policy), nil)
+		case http.MethodPut:
+			var payload struct {
+				WarningAfterMissed int `json:"warning_after_missed"`
+				BlockAfterMissed   int `json:"block_after_missed"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			if payload.WarningAfterMissed <= 0 {
+				http.Error(w, "warning_after_missed must be greater than zero", http.StatusBadRequest)
+				return
+			}
+			if payload.BlockAfterMissed < payload.WarningAfterMissed {
+				http.Error(w, "block_after_missed must be greater than or equal to warning_after_missed", http.StatusBadRequest)
+				return
+			}
+			updatedBy := strings.TrimSpace(r.Header.Get("X-Operator"))
+			if updatedBy == "" {
+				updatedBy = "lab-api"
+			}
+			if err := store.UpsertHeartbeatPolicyOverride(r.Context(), payload.WarningAfterMissed, payload.BlockAfterMissed, updatedBy); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			resolved, err := resolveHeartbeatPolicy(r.Context(), store, cfg.Timeouts)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildHeartbeatPolicyResponse(resolved), nil)
+		case http.MethodDelete:
+			if err := store.ClearHeartbeatPolicyOverride(r.Context()); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			resolved, err := resolveHeartbeatPolicy(r.Context(), store, cfg.Timeouts)
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildHeartbeatPolicyResponse(resolved), nil)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 func buildCabinetProfileResponse(profile resolvedCabinetProfile) cabinetProfileResponse {
 	response := cabinetProfileResponse{
 		Effective:              profile.Effective,
@@ -748,6 +854,24 @@ func buildCabinetProfileResponse(profile resolvedCabinetProfile) cabinetProfileR
 			Profile:   profile.Override.Profile,
 			UpdatedAt: profile.Override.UpdatedAt,
 			UpdatedBy: profile.Override.UpdatedBy,
+		}
+	}
+	return response
+}
+
+func buildHeartbeatPolicyResponse(policy resolvedHeartbeatPolicy) heartbeatPolicyResponse {
+	response := heartbeatPolicyResponse{
+		Effective:          policy.Effective,
+		PolicySource:       policy.PolicySource,
+		PolicyLastUpdatedAt: policy.PolicyLastUpdatedAt,
+		OverridePresent:    policy.Override != nil,
+	}
+	if policy.Override != nil {
+		response.Override = &heartbeatPolicyOverrideView{
+			WarningAfterMissed: policy.Override.WarningAfterMissed,
+			BlockAfterMissed:   policy.Override.BlockAfterMissed,
+			UpdatedAt:          policy.Override.UpdatedAt,
+			UpdatedBy:          policy.Override.UpdatedBy,
 		}
 	}
 	return response
@@ -787,6 +911,34 @@ func resolveCabinetProfile(ctx context.Context, store *store.SQLiteStore, filePr
 		resolved.ProfileSource = "mixed"
 	}
 
+	return resolved, nil
+}
+
+func resolveHeartbeatPolicy(ctx context.Context, store *store.SQLiteStore, fileTimeouts config.Timeouts) (resolvedHeartbeatPolicy, error) {
+	filePolicy := heartbeatPolicy{
+		IntervalMS:         fileTimeouts.EGMHeartbeatIntervalMS,
+		WarningAfterMissed: config.EffectiveHeartbeatWarningAfterMissed(fileTimeouts),
+		BlockAfterMissed:   config.EffectiveHeartbeatBlockAfterMissed(fileTimeouts),
+	}
+	resolved := resolvedHeartbeatPolicy{
+		Effective:    filePolicy,
+		File:         filePolicy,
+		PolicySource: "file",
+	}
+
+	override, err := store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		return resolved, err
+	}
+	if override == nil {
+		return resolved, nil
+	}
+
+	resolved.Override = override
+	resolved.Effective.WarningAfterMissed = override.WarningAfterMissed
+	resolved.Effective.BlockAfterMissed = override.BlockAfterMissed
+	resolved.PolicySource = "override"
+	resolved.PolicyLastUpdatedAt = &override.UpdatedAt
 	return resolved, nil
 }
 

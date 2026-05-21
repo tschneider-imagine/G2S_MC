@@ -316,6 +316,35 @@ const dashboardHTML = `<!doctype html>
             <button id="run-report-markdown-button" type="button" class="secondary-button">Download Run Markdown</button>
           </div>
         </form>
+        <form id="heartbeat-policy-form" class="setup-form run-report-form">
+          <div class="panel-title-row">
+            <strong>Heartbeat Policy</strong>
+            <span id="heartbeat-policy-source" class="source-pill source-file">file</span>
+          </div>
+          <span id="heartbeat-policy-message" class="muted-text">Tune warning and blocking thresholds for heartbeat gap handling.</span>
+          <div class="form-grid run-report-grid">
+            <label>Interval (ms)<input id="heartbeat-policy-interval" type="number" disabled></label>
+            <label>Updated<input id="heartbeat-policy-updated" type="text" disabled></label>
+            <label>Warning After Missed Beats<input id="heartbeat-policy-warning-after-missed" type="number" min="1"></label>
+            <label>Block Active Run After Missed Beats<input id="heartbeat-policy-block-after-missed" type="number" min="1"></label>
+          </div>
+          <div class="setup-details run-report-details">
+            <div>
+              <p class="label">Warning Gap</p>
+              <strong id="heartbeat-policy-warning-gap">-</strong>
+            </div>
+            <div>
+              <p class="label">Blocker Gap</p>
+              <strong id="heartbeat-policy-block-gap">-</strong>
+            </div>
+          </div>
+          <div id="heartbeat-policy-validation-list" class="validation-list"></div>
+          <div class="setup-actions evidence-actions">
+            <button id="heartbeat-policy-save-button" type="submit">Save Policy</button>
+            <button id="heartbeat-policy-clear-button" type="button" class="secondary-button">Clear Override</button>
+            <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
+          </div>
+        </form>
         <div class="heartbeat-summary-wrap">
           <p class="label">Heartbeat Summary</p>
           <div class="heartbeat-summary-grid">
@@ -1372,6 +1401,7 @@ const dashboardJS = `const endpoints = {
   certificates: "/api/certificates",
   sessionEvidence: "/api/session-evidence?limit=20",
   cabinetProfile: "/api/cabinet-profile",
+  heartbeatPolicy: "/api/heartbeat-policy",
   cabinetPreflight: "/api/cabinet-preflight",
   certificateImport: "/api/certificates/import",
   certificateExport: "/api/certificates/export"
@@ -1405,6 +1435,16 @@ function currentRuntime() {
   return clientState.displaySnapshot?.status?.runtime || clientState.lastGoodStatus?.status?.runtime || {};
 }
 
+function currentHeartbeatPolicy(snapshot) {
+  const source = snapshot?.heartbeatPolicy?.effective || snapshot?.status?.heartbeat_policy || null;
+  const runtime = snapshot?.status?.runtime || currentRuntime();
+  return {
+    interval_ms: Number(source?.interval_ms || runtime.egm_heartbeat_interval_ms || 0),
+    warning_after_missed: Number(source?.warning_after_missed || 3),
+    block_after_missed: Number(source?.block_after_missed || 6)
+  };
+}
+
 function setupActionsRequireToken() {
   return currentRuntime().api_mutation_auth_required === true;
 }
@@ -1428,6 +1468,7 @@ function emptySnapshot() {
     certificates: [],
     sessionEvidence: [],
     cabinetProfile: null,
+    heartbeatPolicy: null,
     cabinetPreflight: null
   };
 }
@@ -1449,6 +1490,7 @@ function copySnapshot(snapshot) {
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
     cabinetProfile: snapshot.cabinetProfile || null,
+    heartbeatPolicy: snapshot.heartbeatPolicy || null,
     cabinetPreflight: snapshot.cabinetPreflight || null
   };
 }
@@ -1473,7 +1515,10 @@ function heartbeatEventsFromHistory(records) {
   return (Array.isArray(records) ? records : []).filter((item) => isHeartbeatEventType(item?.event_type));
 }
 
-function heartbeatSummary(records, intervalMs, referenceTime) {
+function heartbeatSummary(records, policy, referenceTime) {
+  const intervalMs = Number(policy?.interval_ms || 0);
+  const warningAfterMissed = Math.max(1, Number(policy?.warning_after_missed || 3));
+  const blockAfterMissed = Math.max(warningAfterMissed, Number(policy?.block_after_missed || 6));
   const heartbeats = heartbeatEventsFromHistory(records)
     .slice()
     .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
@@ -1494,35 +1539,53 @@ function heartbeatSummary(records, intervalMs, referenceTime) {
   const lastObservedMs = lastObserved ? new Date(lastObserved.created_at || 0).getTime() : 0;
   const sinceLastKeepAliveMs = lastKeepAliveMs && Number.isFinite(refTimeMs) ? Math.max(0, refTimeMs - lastKeepAliveMs) : 0;
   const sinceLastObservedMs = lastObservedMs && Number.isFinite(refTimeMs) ? Math.max(0, refTimeMs - lastObservedMs) : 0;
-  const thresholdMs = intervalMs > 0 ? Math.max(intervalMs * 3, intervalMs + 1000) : 0;
+  const warningThresholdMs = intervalMs > 0 ? Math.max(intervalMs * warningAfterMissed, intervalMs + 1000) : 0;
+  const blockThresholdMs = intervalMs > 0 ? Math.max(intervalMs * blockAfterMissed, warningThresholdMs) : 0;
   let health = "NO_TRAFFIC";
   let label = "No heartbeat observed";
   let message = "No commsOnLine or keepAlive traffic is present in the current window.";
+  let severity = "idle";
   if (heartbeats.length > 0) {
-    if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > thresholdMs) {
-      health = "DEGRADED";
+    if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > blockThresholdMs) {
+      health = "BLOCKING";
       label = "Keepalive missing";
-      message = "commsOnLine was observed, but keepAlive traffic did not follow within the configured cadence.";
+      message = "commsOnLine was observed, but keepAlive traffic did not follow before the blocking threshold.";
+      severity = "blocking";
+    } else if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > warningThresholdMs) {
+      health = "WARNING";
+      label = "Keepalive delayed";
+      message = "commsOnLine was observed, but keepAlive traffic has not started within the warning threshold.";
+      severity = "warning";
     } else if (keepAlives.length === 0) {
       health = "ONLINE_ONLY";
       label = "Online only";
       message = "commsOnLine was observed, but keepAlive traffic has not started in this window.";
+      severity = "info";
     } else if (intervalMs <= 0) {
       health = "OBSERVED";
       label = "Observed";
       message = "Heartbeat traffic is present; configured interval is unavailable so gap checks are disabled.";
-    } else if (maxGapMs > thresholdMs || sinceLastKeepAliveMs > thresholdMs) {
-      health = "DEGRADED";
+      severity = "info";
+    } else if (maxGapMs > blockThresholdMs || sinceLastKeepAliveMs > blockThresholdMs) {
+      health = "BLOCKING";
       label = "Gap detected";
-      message = "Heartbeat traffic is present, but a keepAlive gap exceeded the configured cadence.";
+      message = "Heartbeat traffic is present, but a keepAlive gap exceeded the blocking threshold.";
+      severity = "blocking";
+    } else if (maxGapMs > warningThresholdMs || sinceLastKeepAliveMs > warningThresholdMs) {
+      health = "WARNING";
+      label = "Gap warning";
+      message = "Heartbeat traffic is present, but a keepAlive gap exceeded the warning threshold.";
+      severity = "warning";
     } else {
       health = "HEALTHY";
       label = "Healthy";
       message = "Heartbeat traffic matches the configured cadence for this run window.";
+      severity = "healthy";
     }
   }
   return {
     health: health,
+    severity: severity,
     label: label,
     message: message,
     total: heartbeats.length,
@@ -1532,10 +1595,26 @@ function heartbeatSummary(records, intervalMs, referenceTime) {
     last_observed_at: lastObserved ? lastObserved.created_at : "",
     last_keepalive_at: lastKeepAlive ? lastKeepAlive.created_at : "",
     interval_ms: intervalMs || 0,
+    warning_after_missed: warningAfterMissed,
+    block_after_missed: blockAfterMissed,
+    warning_threshold_ms: warningThresholdMs,
+    block_threshold_ms: blockThresholdMs,
     max_gap_ms: maxGapMs,
     since_last_observed_ms: sinceLastObservedMs,
     since_last_keepalive_ms: sinceLastKeepAliveMs
   };
+}
+
+function runWindowIsActive(snapshot) {
+  const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers.slice() : [];
+  markers.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+  let active = false;
+  markers.forEach((marker) => {
+    const type = String(marker?.marker_type || "").toLowerCase();
+    if (type === "start") active = true;
+    if (type === "end") active = false;
+  });
+  return active;
 }
 
 function stateClass(value, prefix) {
@@ -1722,7 +1801,7 @@ function buildFirstCabinetSessionState(snapshot) {
   const preflightState = preflight ? (preflight.overall || "UNKNOWN") : "UNAVAILABLE";
   const lastCheckedValue = preflight?.timestamp || (clientState.lastGoodAt ? new Date(clientState.lastGoodAt).toISOString() : "");
   const blockers = [];
-  const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
+  const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], currentHeartbeatPolicy(snapshot), new Date().toISOString());
 
   if (!readyz || readyz.ok === false || readyzState === "DEGRADED") {
     appendUniqueBlocker(blockers, "Readiness is degraded");
@@ -1741,7 +1820,7 @@ function buildFirstCabinetSessionState(snapshot) {
   if (authRequired && !getSetupToken() && !getCertToken()) {
     appendUniqueBlocker(blockers, "API token is required for protected setup actions");
   }
-  if (heartbeat.health === "DEGRADED") {
+  if (heartbeat.severity === "blocking" && runWindowIsActive(snapshot)) {
     appendUniqueBlocker(blockers, "Heartbeat gap exceeds configured interval");
   }
 
@@ -1803,7 +1882,7 @@ function buildSessionEvidence(snapshot) {
   const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
   const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
   const runMarkers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
-  const heartbeat = heartbeatSummary(egmHistory, Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
+  const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
@@ -2413,7 +2492,7 @@ function boundedRunReport(snapshot) {
   const stateHistory = (snapshot?.stateHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const runMarkers = (snapshot?.runMarkers || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const sessionEvidence = (snapshot?.sessionEvidence || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
-  const heartbeat = heartbeatSummary(egmHistory, Number(snapshot?.status?.runtime?.egm_heartbeat_interval_ms || 0), endMarker.created_at || "");
+  const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), endMarker.created_at || "");
   return {
     generated_at: new Date().toISOString(),
     window: {
@@ -2518,13 +2597,146 @@ function renderRunReportControls(snapshot) {
 
 function renderHeartbeatSummary(snapshot) {
   const runtime = snapshot?.status?.runtime || currentRuntime();
-  const summary = heartbeatSummary(snapshot?.egmHistory || [], Number(runtime.egm_heartbeat_interval_ms || 0), snapshot?.status?.updated_at || "");
+  const summary = heartbeatSummary(snapshot?.egmHistory || [], currentHeartbeatPolicy(snapshot), new Date().toISOString());
   $("heartbeat-health").textContent = summary.label;
   $("heartbeat-observed").textContent = summary.total + " total / " + summary.keepalive_count + " keepAlive";
   $("heartbeat-last-keepalive").textContent = summary.last_keepalive_at ? fmtTime(summary.last_keepalive_at) : "-";
   $("heartbeat-max-gap").textContent = fmtDurationMs(summary.max_gap_ms || 0);
   const intervalText = summary.interval_ms > 0 ? ("configured " + fmtDurationMs(summary.interval_ms)) : "configured interval unavailable";
   $("heartbeat-summary-message").textContent = summary.message + " (" + intervalText + ")";
+}
+
+function heartbeatPolicyHasFocus() {
+  const form = $("heartbeat-policy-form");
+  return !!(form && form.contains(document.activeElement));
+}
+
+function fillHeartbeatPolicyForm(policyResponse) {
+  const effective = policyResponse?.effective || currentHeartbeatPolicy({ heartbeatPolicy: policyResponse });
+  $("heartbeat-policy-interval").value = String(effective.interval_ms || 0);
+  $("heartbeat-policy-warning-after-missed").value = String(effective.warning_after_missed || 3);
+  $("heartbeat-policy-block-after-missed").value = String(effective.block_after_missed || 6);
+  $("heartbeat-policy-updated").value = policyResponse?.policy_last_updated_at ? fmtTime(policyResponse.policy_last_updated_at) : "file baseline";
+  renderHeartbeatPolicy(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+}
+
+function heartbeatPolicyPayloadFromForm() {
+  return {
+    warning_after_missed: Number($("heartbeat-policy-warning-after-missed").value || 0),
+    block_after_missed: Number($("heartbeat-policy-block-after-missed").value || 0)
+  };
+}
+
+function validateHeartbeatPolicyForm(snapshot) {
+  const payload = heartbeatPolicyPayloadFromForm();
+  const problems = [];
+  if (!Number.isInteger(payload.warning_after_missed) || payload.warning_after_missed <= 0) {
+    problems.push("Warning After Missed Beats must be a whole number greater than zero.");
+  }
+  if (!Number.isInteger(payload.block_after_missed) || payload.block_after_missed <= 0) {
+    problems.push("Block Active Run After Missed Beats must be a whole number greater than zero.");
+  }
+  if (payload.block_after_missed > 0 && payload.warning_after_missed > 0 && payload.block_after_missed < payload.warning_after_missed) {
+    problems.push("Block Active Run After Missed Beats must be greater than or equal to Warning After Missed Beats.");
+  }
+  const intervalMs = Number(currentHeartbeatPolicy(snapshot).interval_ms || 0);
+  $("heartbeat-policy-warning-gap").textContent = intervalMs > 0 && payload.warning_after_missed > 0 ? fmtDurationMs(intervalMs * payload.warning_after_missed) : "-";
+  $("heartbeat-policy-block-gap").textContent = intervalMs > 0 && payload.block_after_missed > 0 ? fmtDurationMs(intervalMs * payload.block_after_missed) : "-";
+  $("heartbeat-policy-validation-list").innerHTML = problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
+  return { payload, problems };
+}
+
+function renderHeartbeatPolicy(snapshot) {
+  const policyResponse = snapshot?.heartbeatPolicy;
+  const effective = currentHeartbeatPolicy(snapshot);
+  const source = policyResponse?.policy_source || snapshot?.status?.heartbeat_policy_source || "file";
+  const sourceBadge = $("heartbeat-policy-source");
+  sourceBadge.textContent = source;
+  sourceBadge.className = "source-pill source-" + source;
+  $("heartbeat-policy-interval").value = String(effective.interval_ms || 0);
+  if (!heartbeatPolicyHasFocus()) {
+    $("heartbeat-policy-warning-after-missed").value = String(effective.warning_after_missed || 3);
+    $("heartbeat-policy-block-after-missed").value = String(effective.block_after_missed || 6);
+  }
+  $("heartbeat-policy-updated").value = policyResponse?.policy_last_updated_at ? fmtTime(policyResponse.policy_last_updated_at) : "file baseline";
+  const tokenRequired = setupActionsRequireToken();
+  const tokenPresent = !!getSetupToken() || !!getCertToken();
+  const validation = validateHeartbeatPolicyForm(snapshot);
+  $("heartbeat-policy-save-button").disabled = validation.problems.length > 0 || (tokenRequired && !tokenPresent);
+  $("heartbeat-policy-clear-button").disabled = !policyResponse?.override_present || (tokenRequired && !tokenPresent);
+  $("heartbeat-policy-message").textContent = tokenRequired && !tokenPresent
+    ? "Enter a setup or certificate API token before changing heartbeat policy."
+    : "Tune warning and blocking thresholds for heartbeat gap handling.";
+}
+
+function syncHeartbeatPolicyFromSnapshot(snapshot) {
+  renderHeartbeatPolicy(snapshot);
+}
+
+async function reloadHeartbeatPolicyForm() {
+  const response = await fetch(endpoints.heartbeatPolicy, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Heartbeat policy reload failed: HTTP " + response.status);
+  }
+  const payload = await response.json();
+  const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  snapshot.heartbeatPolicy = payload;
+  clientState.displaySnapshot = snapshot;
+  syncHeartbeatPolicyFromSnapshot(snapshot);
+}
+
+async function saveHeartbeatPolicyOverride(event) {
+  event.preventDefault();
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const validation = validateHeartbeatPolicyForm(snapshot);
+  if (validation.problems.length > 0) {
+    $("heartbeat-policy-message").textContent = "Resolve heartbeat policy issues before saving.";
+    return;
+  }
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    $("heartbeat-policy-message").textContent = "Enter a setup or certificate API token before saving heartbeat policy.";
+    return;
+  }
+  const headers = { "Content-Type": "application/json" };
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  const response = await fetch(endpoints.heartbeatPolicy, {
+    method: "PUT",
+    headers: headers,
+    body: JSON.stringify(validation.payload)
+  });
+  if (!response.ok) {
+    const detail = sanitizeHTTPText(await response.text());
+    $("heartbeat-policy-message").textContent = "Save failed: HTTP " + response.status + (detail ? " " + detail : "");
+    return;
+  }
+  $("heartbeat-policy-message").textContent = "Heartbeat policy saved.";
+  schedulePoll(0);
+}
+
+async function clearHeartbeatPolicyOverride() {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    $("heartbeat-policy-message").textContent = "Enter a setup or certificate API token before clearing heartbeat policy.";
+    return;
+  }
+  const headers = {};
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  const response = await fetch(endpoints.heartbeatPolicy, {
+    method: "DELETE",
+    headers: headers
+  });
+  if (!response.ok) {
+    const detail = sanitizeHTTPText(await response.text());
+    $("heartbeat-policy-message").textContent = "Clear failed: HTTP " + response.status + (detail ? " " + detail : "");
+    return;
+  }
+  $("heartbeat-policy-message").textContent = "Heartbeat policy override cleared.";
+  schedulePoll(0);
 }
 
 function exportRunReportJSON() {
@@ -3209,6 +3421,7 @@ function renderStatus(snapshot) {
   renderFirstCabinetSession(snapshot);
   renderSessionEvidence(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
+  syncHeartbeatPolicyFromSnapshot(snapshot);
   renderEGMTable(status);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
@@ -3218,7 +3431,7 @@ function renderStatus(snapshot) {
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
   );
   const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
-  const heartbeat = heartbeatSummary(egmHistory, Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
+  const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
   const egmDisplay = egmHistory.filter((item) => !isHeartbeatEventType(item.event_type));
   if (heartbeat.total > 0) {
     egmDisplay.unshift({
@@ -3261,7 +3474,7 @@ function renderAlerts(snapshot) {
   const egms = Array.isArray(status.egms) ? status.egms : [];
   const unhealthy = egms.filter((egm) => unhealthyStates.has(String(egm.status || "").toUpperCase()));
   const blockingCerts = (snapshot?.certificates || []).filter((cert) => certSeverity(cert, runtime) === "blocking");
-  const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
+  const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], currentHeartbeatPolicy(snapshot), new Date().toISOString());
 
   const readyzDegraded = readyz.ok === false || readyz.overall === "DEGRADED";
   document.body.classList.toggle("console-degraded", readyzDegraded);
@@ -3283,7 +3496,7 @@ function renderAlerts(snapshot) {
     setAlert("warning", "Blocking certificate issues: " + blockingCerts.length, "Required certificates must be corrected for healthy runtime.");
     return;
   }
-  if (heartbeat.health === "DEGRADED") {
+  if (heartbeat.severity === "blocking" || heartbeat.severity === "warning") {
     setAlert("warning", "Heartbeat anomaly detected", heartbeat.message);
     return;
   }
@@ -3408,10 +3621,11 @@ async function pollOnce() {
       fetchJSON(endpoints.certificates),
       fetchJSON(endpoints.sessionEvidence),
       fetchJSON(endpoints.cabinetProfile),
+      fetchJSON(endpoints.heartbeatPolicy),
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -3441,6 +3655,7 @@ async function pollOnce() {
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
     if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
+    if (heartbeatPolicyResult.status === "fulfilled") snapshot.heartbeatPolicy = heartbeatPolicyResult.value;
     if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
@@ -3450,6 +3665,7 @@ async function pollOnce() {
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
     if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
+    if (heartbeatPolicyResult.status !== "fulfilled") failures.push("heartbeat policy unavailable");
     if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
 
     clientState.displaySnapshot = snapshot;
@@ -3567,6 +3783,19 @@ function bindControls() {
   });
   $("run-report-json-button").addEventListener("click", exportRunReportJSON);
   $("run-report-markdown-button").addEventListener("click", exportRunReportMarkdown);
+  $("heartbeat-policy-form").addEventListener("submit", saveHeartbeatPolicyOverride);
+  $("heartbeat-policy-clear-button").addEventListener("click", clearHeartbeatPolicyOverride);
+  $("heartbeat-policy-reload-button").addEventListener("click", () => {
+    reloadHeartbeatPolicyForm().catch((err) => {
+      $("heartbeat-policy-message").textContent = err && err.message ? err.message : "Heartbeat policy reload failed.";
+    });
+  });
+  $("heartbeat-policy-warning-after-missed").addEventListener("input", () => {
+    renderHeartbeatPolicy(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("heartbeat-policy-block-after-missed").addEventListener("input", () => {
+    renderHeartbeatPolicy(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-role-select").addEventListener("change", () => {
@@ -3643,6 +3872,7 @@ renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
 renderRunMarkerControls(emptySnapshot());
 renderRunReportControls(emptySnapshot());
+renderHeartbeatPolicy(emptySnapshot());
 renderHeartbeatSummary(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());
 schedulePoll(0);

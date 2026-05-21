@@ -50,6 +50,8 @@ type Alerts struct {
 type Timeouts struct {
 	G2SRequestTimeoutMS     int `json:"g2s_request_timeout_ms"`
 	EGMHeartbeatIntervalMS  int `json:"egm_heartbeat_interval_ms"`
+	EGMHeartbeatWarningAfterMissed int `json:"egm_heartbeat_warning_after_missed"`
+	EGMHeartbeatBlockAfterMissed   int `json:"egm_heartbeat_block_after_missed"`
 	UISessionTimeoutMinutes int `json:"ui_session_timeout_minutes"`
 }
 

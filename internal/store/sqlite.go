@@ -25,6 +25,13 @@ type CabinetProfileOverride struct {
 	UpdatedBy string
 }
 
+type HeartbeatPolicyOverride struct {
+	WarningAfterMissed int
+	BlockAfterMissed   int
+	UpdatedAt          time.Time
+	UpdatedBy          string
+}
+
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
 	if path == "" {
 		return nil, fmt.Errorf("database path is required")
@@ -464,6 +471,56 @@ func (s *SQLiteStore) ClearCabinetProfileOverride(ctx context.Context) error {
 	return err
 }
 
+func (s *SQLiteStore) GetHeartbeatPolicyOverride(ctx context.Context) (*HeartbeatPolicyOverride, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT warning_after_missed, block_after_missed, updated_at, COALESCE(updated_by, '')
+		   FROM heartbeat_policy_overrides
+		  WHERE id = 1`,
+	)
+
+	var warningAfterMissed int
+	var blockAfterMissed int
+	var updatedAt time.Time
+	var updatedBy string
+	if err := row.Scan(&warningAfterMissed, &blockAfterMissed, &updatedAt, &updatedBy); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &HeartbeatPolicyOverride{
+		WarningAfterMissed: warningAfterMissed,
+		BlockAfterMissed:   blockAfterMissed,
+		UpdatedAt:          updatedAt,
+		UpdatedBy:          updatedBy,
+	}, nil
+}
+
+func (s *SQLiteStore) UpsertHeartbeatPolicyOverride(ctx context.Context, warningAfterMissed int, blockAfterMissed int, updatedBy string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO heartbeat_policy_overrides (
+		    id, warning_after_missed, block_after_missed, updated_at, updated_by
+		 ) VALUES (1, ?, ?, CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		    warning_after_missed = excluded.warning_after_missed,
+		    block_after_missed = excluded.block_after_missed,
+		    updated_at = CURRENT_TIMESTAMP,
+		    updated_by = excluded.updated_by`,
+		warningAfterMissed,
+		blockAfterMissed,
+		updatedBy,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ClearHeartbeatPolicyOverride(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM heartbeat_policy_overrides WHERE id = 1`)
+	return err
+}
+
 func (s *SQLiteStore) RecordSessionEvidence(ctx context.Context, record model.SessionEvidenceRecord) (int64, error) {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -583,7 +640,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}
