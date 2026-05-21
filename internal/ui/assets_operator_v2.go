@@ -62,6 +62,24 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
+    <section class="grid">
+      <div class="panel egm-focus-panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>EGM Focus</h2>
+            <span id="egm-focus-summary" class="muted-text">All EGMs</span>
+          </div>
+          <span id="egm-focus-description" class="muted-text">Use this to scope EGM-specific views while keeping global context visible.</span>
+        </div>
+        <div class="focus-controls">
+          <label for="egm-focus-select">EGM Focus</label>
+          <select id="egm-focus-select">
+            <option value="">All EGMs</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
     <section class="grid two">
       <div class="panel wide">
         <div class="panel-head">
@@ -146,10 +164,12 @@ const dashboardHTML = `<!doctype html>
         <dl class="kv-list">
           <div><dt>Current Session State</dt><dd id="session-evidence-overall">-</dd></div>
           <div><dt>Snapshot Timestamp</dt><dd id="session-evidence-timestamp">-</dd></div>
-          <div><dt>Incidents in Snapshot</dt><dd id="session-evidence-incident-count">0</dd></div>
-          <div><dt>State History Rows</dt><dd id="session-evidence-state-count">0</dd></div>
-          <div><dt>Run Markers in Snapshot</dt><dd id="session-evidence-run-marker-count">0</dd></div>
-          <div><dt>Heartbeat Events in Snapshot</dt><dd id="session-evidence-heartbeat-count">0</dd></div>
+          <div><dt>EGM Focus</dt><dd id="session-evidence-egm-focus">All EGMs</dd></div>
+          <div><dt>Incidents in Snapshot (global)</dt><dd id="session-evidence-incident-count">0</dd></div>
+          <div><dt>State History Rows (global)</dt><dd id="session-evidence-state-count">0</dd></div>
+          <div><dt>Run Markers in Snapshot (global)</dt><dd id="session-evidence-run-marker-count">0</dd></div>
+          <div><dt>EGM History Rows (focused)</dt><dd id="session-evidence-egm-count">0</dd></div>
+          <div><dt>Heartbeat Events (focused)</dt><dd id="session-evidence-heartbeat-count">0</dd></div>
           <div><dt>Heartbeat Health</dt><dd id="session-evidence-heartbeat-health">-</dd></div>
           <div><dt>Heartbeat Source</dt><dd id="session-evidence-heartbeat-source">-</dd></div>
         </dl>
@@ -383,6 +403,7 @@ const dashboardHTML = `<!doctype html>
         <div class="heartbeat-summary-wrap">
           <p class="label">Heartbeat Summary</p>
           <div class="heartbeat-summary-grid">
+            <div><p class="label">Scope</p><strong id="heartbeat-scope">All EGMs</strong></div>
             <div><p class="label">Health</p><strong id="heartbeat-health">-</strong></div>
             <div><p class="label">Observed</p><strong id="heartbeat-observed">-</strong></div>
             <div><p class="label">Last Keepalive</p><strong id="heartbeat-last-keepalive">-</strong></div>
@@ -403,8 +424,9 @@ const dashboardHTML = `<!doctype html>
 
     <section class="grid two">
       <div class="panel">
-        <div class="panel-head">
+        <div class="panel-head panel-head-stack">
           <h2>EGM History</h2>
+          <span id="egm-history-scope" class="muted-text">Scope: All EGMs</span>
         </div>
         <div id="egm-history" class="timeline"></div>
       </div>
@@ -798,6 +820,29 @@ h2 { font-size: 18px; }
 
 .panel-head h2 { color: var(--ink); }
 
+.focus-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 18px;
+}
+
+.egm-focus-panel .panel-head {
+  border-bottom: 0;
+}
+
+.focus-controls label {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+  min-width: 92px;
+}
+
+.focus-controls select {
+  min-width: 220px;
+  max-width: 100%;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -899,6 +944,28 @@ th {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.timeline-entry-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timeline-scope {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.timeline-scope-global {
+  background: #e8edf0;
+  color: #496171;
 }
 
 .timeline-kind {
@@ -1455,6 +1522,11 @@ button:disabled {
     flex-direction: column;
   }
 
+  .focus-controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .form-grid,
   .setup-details {
     grid-template-columns: 1fr;
@@ -1492,6 +1564,7 @@ const clientState = {
   backoffStep: 0,
   timerId: null,
   displaySnapshot: null,
+  egmFocusID: "",
   egmSortKey: "egm_id",
   egmSortDir: "asc",
   egmFilter: "all",
@@ -1566,6 +1639,81 @@ function copySnapshot(snapshot) {
     heartbeatPolicy: snapshot.heartbeatPolicy || null,
     cabinetPreflight: snapshot.cabinetPreflight || null
   };
+}
+
+function currentEGMFocusID() {
+  return String(clientState.egmFocusID || "").trim();
+}
+
+function currentEGMFocusLabel() {
+  const focusID = currentEGMFocusID();
+  return focusID || "All EGMs";
+}
+
+function uniqueEGMIDsFromSnapshot(snapshot) {
+  const ids = new Set();
+  const statusEGMs = Array.isArray(snapshot?.status?.egms) ? snapshot.status.egms : [];
+  statusEGMs.forEach((egm) => {
+    const id = String(egm?.id || "").trim();
+    if (id) ids.add(id);
+  });
+  const history = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
+  history.forEach((item) => {
+    const id = String(item?.egm_id || "").trim();
+    if (id) ids.add(id);
+  });
+  const drillIDs = Array.isArray(snapshot?.operatorDrill?.available_egm_ids) ? snapshot.operatorDrill.available_egm_ids : [];
+  drillIDs.forEach((item) => {
+    const id = String(item || "").trim();
+    if (id) ids.add(id);
+  });
+  if (currentEGMFocusID()) {
+    ids.add(currentEGMFocusID());
+  }
+  return Array.from(ids).sort((a, b) => a.localeCompare(b));
+}
+
+function filterRecordsByFocusedEGM(records, fieldName) {
+  const list = Array.isArray(records) ? records : [];
+  const focusID = currentEGMFocusID();
+  if (!focusID) {
+    return list.slice();
+  }
+  return list.filter((item) => String(item?.[fieldName] || "").trim() === focusID);
+}
+
+function filterStatusEGMsByFocus(egms) {
+  return filterRecordsByFocusedEGM(egms, "id");
+}
+
+function filterHistoryByFocus(history) {
+  return filterRecordsByFocusedEGM(history, "egm_id");
+}
+
+function egmFocusScope(snapshot) {
+  const focusID = currentEGMFocusID();
+  return {
+    mode: focusID ? "SINGLE_EGM" : "ALL_EGMS",
+    selected_egm_id: focusID,
+    label: currentEGMFocusLabel(),
+    available_egm_ids: uniqueEGMIDsFromSnapshot(snapshot),
+    egm_specific_views_filtered: focusID !== "",
+    global_sections_included: true
+  };
+}
+
+function renderEGMFocusControl(snapshot) {
+  const select = $("egm-focus-select");
+  const focus = egmFocusScope(snapshot);
+  const options = ["<option value=\"\">All EGMs</option>"]
+    .concat(focus.available_egm_ids.map((id) => "<option value=\"" + escapeHTML(id) + "\">" + escapeHTML(id) + "</option>"));
+  select.innerHTML = options.join("");
+  select.value = focus.selected_egm_id;
+  $("egm-focus-summary").textContent = focus.selected_egm_id ? ("Focused: " + focus.selected_egm_id) : "All EGMs";
+  $("egm-focus-description").textContent = focus.selected_egm_id
+    ? ("EGM-specific sections are filtered to " + focus.selected_egm_id + "; global sections remain visible.")
+    : "Use this to scope EGM-specific views while keeping global context visible.";
+  $("egm-history-scope").textContent = "Scope: " + focus.label;
 }
 
 function isHeartbeatEventType(eventType) {
@@ -1976,6 +2124,7 @@ function renderFirstCabinetSession(snapshot) {
 }
 
 function buildSessionEvidence(snapshot) {
+  const focus = egmFocusScope(snapshot);
   const session = buildFirstCabinetSessionState(snapshot);
   const status = snapshot?.status || {};
   const runtime = status.runtime || {};
@@ -1984,15 +2133,17 @@ function buildSessionEvidence(snapshot) {
   const profile = profilePayload?.effective || status.cabinet_profile || {};
   const certificates = Array.isArray(snapshot?.certificates) ? snapshot.certificates : [];
   const incidents = Array.isArray(snapshot?.incidents) ? snapshot.incidents : [];
-  const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
+  const egmHistoryAll = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
+  const egmHistoryFocused = filterHistoryByFocus(egmHistoryAll);
   const stateHistory = Array.isArray(snapshot?.stateHistory) ? snapshot.stateHistory : [];
   const runMarkers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
   const drillState = currentOperatorDrill(snapshot);
-  const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
-  const drillEvidence = operatorDrillEvidence(egmHistory, drillState);
+  const heartbeat = heartbeatSummary(egmHistoryFocused, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+  const drillEvidence = operatorDrillEvidence(egmHistoryFocused, drillState);
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
+    egm_focus: focus,
     session: {
       overall_state: session.overallState,
       ready_for_session: session.readyForSession,
@@ -2027,10 +2178,13 @@ function buildSessionEvidence(snapshot) {
       warnings: Array.isArray(readiness.warnings) ? readiness.warnings : []
     },
     egm_snapshot_count: Array.isArray(status.egms) ? status.egms.length : 0,
+    egm_history_total_count: egmHistoryAll.length,
+    egm_history_focused_count: egmHistoryFocused.length,
     heartbeat_summary: heartbeat,
     operator_drill: drillEvidence,
     incidents: incidents,
-    egm_history: egmHistory,
+    egm_history: egmHistoryFocused,
+    egm_history_all: egmHistoryAll,
     state_history: stateHistory,
     run_markers: runMarkers,
     certificates: certificates,
@@ -2044,6 +2198,8 @@ function buildSessionEvidenceMarkdown(evidence) {
     "",
     "- Captured at: " + (evidence.captured_at || "-"),
     "- Session state: " + (evidence.session.overall_state || "-"),
+    "- EGM focus: " + (evidence?.egm_focus?.label || "All EGMs"),
+    "- EGM-specific views filtered: " + String(evidence?.egm_focus?.egm_specific_views_filtered === true),
     "- Ready for session: " + String(evidence.session.ready_for_session === true),
     "- Readyz state: " + (evidence.session.readyz_state || "-"),
     "- Preflight state: " + (evidence.session.preflight_state || "-"),
@@ -2055,6 +2211,8 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- Certificate blocking count: " + String(evidence.session.certificate_blocking_count || 0),
     "- Certificate lab optional count: " + String(evidence.session.certificate_lab_optional_count || 0),
     "- EGM snapshot count: " + String(evidence.egm_snapshot_count || 0),
+    "- EGM history rows (focused): " + String(evidence.egm_history_focused_count || 0),
+    "- EGM history rows (all): " + String(evidence.egm_history_total_count || 0),
     "- Incident rows captured: " + String((evidence.incidents || []).length),
     "- State history rows captured: " + String((evidence.state_history || []).length),
     "- Run markers captured: " + String((evidence.run_markers || []).length),
@@ -2158,11 +2316,12 @@ function renderSelectedSavedSessionEvidence(record) {
   const runMarkers = Array.isArray(evidence?.run_markers) ? evidence.run_markers : [];
   const heartbeat = evidence?.heartbeat_summary || {};
   const drill = evidence?.operator_drill || {};
+  const focusLabel = evidence?.egm_focus?.label || "All EGMs";
   renderItems("session-evidence-selected", [record], "", () =>
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
-      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
@@ -2298,12 +2457,14 @@ function renderSessionEvidence(snapshot) {
   const selectedRecord = selectedSavedSessionEvidence(snapshot);
   $("session-evidence-overall").textContent = evidence.session.overall_state || "-";
   $("session-evidence-timestamp").textContent = fmtTime(evidence.session.last_checked || evidence.captured_at);
+  $("session-evidence-egm-focus").textContent = evidence?.egm_focus?.label || "All EGMs";
   $("session-evidence-incident-count").textContent = String((evidence.incidents || []).length);
   $("session-evidence-state-count").textContent = String((evidence.state_history || []).length);
   $("session-evidence-run-marker-count").textContent = String((evidence.run_markers || []).length);
+  $("session-evidence-egm-count").textContent = String(evidence.egm_history_focused_count || 0);
   $("session-evidence-heartbeat-count").textContent = String(evidence?.heartbeat_summary?.total || 0);
   $("session-evidence-heartbeat-health").textContent = evidence?.heartbeat_summary?.label || "-";
-  $("session-evidence-heartbeat-source").textContent = evidence?.operator_drill?.source || "-";
+  $("session-evidence-heartbeat-source").textContent = (evidence?.operator_drill?.source || "-") + " | " + (evidence?.egm_focus?.label || "All EGMs");
   const ready = !!snapshot?.status;
   $("session-evidence-save-button").disabled = !ready || (setupActionsRequireToken() && !getSetupToken() && !getCertToken());
   $("session-evidence-json-button").disabled = !ready;
@@ -2626,6 +2787,8 @@ function buildCabinetRunTimeline(snapshot) {
   incidents.forEach((item) => {
     timeline.push({
       kind: "incident",
+      egm_id: "",
+      global: true,
       createdAt: item.created_at || "",
       sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
       title: "#" + String(item.id || "-") + " " + String(item.trigger_type || "incident"),
@@ -2638,6 +2801,8 @@ function buildCabinetRunTimeline(snapshot) {
     const heartbeat = isHeartbeatEventType(item.event_type);
     timeline.push({
       kind: heartbeat ? "heartbeat" : "egm",
+      egm_id: String(item.egm_id || "").trim(),
+      global: false,
       createdAt: item.created_at || "",
       sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
       title: String(item.egm_id || "-") + " " + (heartbeat ? String(item.event_type || "heartbeat") : String(item.status || "-")),
@@ -2649,6 +2814,8 @@ function buildCabinetRunTimeline(snapshot) {
   stateHistory.forEach((item) => {
     timeline.push({
       kind: "state",
+      egm_id: "",
+      global: true,
       createdAt: item.created_at || "",
       sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
       title: String(item.old_state || "-") + " -> " + String(item.new_state || "-"),
@@ -2660,6 +2827,8 @@ function buildCabinetRunTimeline(snapshot) {
   runMarkers.forEach((item) => {
     timeline.push({
       kind: "marker",
+      egm_id: "",
+      global: true,
       createdAt: item.created_at || "",
       sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
       title: String(item.title || item.marker_type || "marker"),
@@ -2672,6 +2841,14 @@ function buildCabinetRunTimeline(snapshot) {
   return timeline;
 }
 
+function applyTimelineFocus(items) {
+  const focusID = currentEGMFocusID();
+  if (!focusID) {
+    return items.slice();
+  }
+  return items.filter((item) => item.global === true || String(item.egm_id || "").trim() === focusID);
+}
+
 function applyTimelineFilter(items) {
   if (clientState.timelineFilter === "all") {
     return items.filter((item) => item.kind !== "heartbeat");
@@ -2680,6 +2857,7 @@ function applyTimelineFilter(items) {
 }
 
 function updateTimelineFilterLabels(total, filtered, heartbeatCount) {
+  const focusID = currentEGMFocusID();
   const map = {
     all: heartbeatCount > 0 ? ("Showing all timeline events with " + heartbeatCount + " heartbeat row(s) collapsed") : "Showing all timeline events",
     incident: "Showing incident timeline events",
@@ -2689,7 +2867,7 @@ function updateTimelineFilterLabels(total, filtered, heartbeatCount) {
     marker: "Showing operator run markers"
   };
   $("timeline-count").textContent = filtered + " / " + total + " events";
-  $("timeline-filter-label").textContent = map[clientState.timelineFilter] || map.all;
+  $("timeline-filter-label").textContent = (focusID ? ("Focus " + focusID + " | ") : "") + (map[clientState.timelineFilter] || map.all);
   document.querySelectorAll(".timeline-filter-tab").forEach((button) => {
     button.classList.toggle("is-active", (button.dataset.timelineFilter || "all") === clientState.timelineFilter);
   });
@@ -2736,6 +2914,7 @@ function recordInRange(createdAt, startTime, endTime) {
 }
 
 function boundedRunReport(snapshot) {
+  const focus = egmFocusScope(snapshot);
   const selection = normalizeRunReportSelections(snapshot);
   if (!selection.start || !selection.end) {
     return null;
@@ -2748,7 +2927,8 @@ function boundedRunReport(snapshot) {
   const endTime = new Date(endMarker.created_at).getTime();
   const profile = currentCabinetProfileSnapshot();
   const incidents = (snapshot?.incidents || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
-  const egmHistory = (snapshot?.egmHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const egmHistoryAll = (snapshot?.egmHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
+  const egmHistory = filterHistoryByFocus(egmHistoryAll);
   const stateHistory = (snapshot?.stateHistory || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const runMarkers = (snapshot?.runMarkers || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
   const sessionEvidence = (snapshot?.sessionEvidence || []).filter((item) => recordInRange(item.created_at, startTime, endTime));
@@ -2757,6 +2937,12 @@ function boundedRunReport(snapshot) {
   const drillEvidence = operatorDrillEvidence(egmHistory, drillState);
   return {
     generated_at: new Date().toISOString(),
+    egm_focus: focus,
+    scope: {
+      egm_history_scope: focus.egm_specific_views_filtered ? "FILTERED_TO_EGM" : "FULL_SESSION",
+      selected_egm_id: focus.selected_egm_id || "",
+      global_sections_scope: "FULL_SESSION_GLOBAL_INCLUDED"
+    },
     window: {
       start_marker: startMarker,
       end_marker: endMarker,
@@ -2771,6 +2957,7 @@ function boundedRunReport(snapshot) {
     summary: {
       incidents: incidents.length,
       egm_events: egmHistory.length,
+      egm_events_total: egmHistoryAll.length,
       heartbeat_events: heartbeat.total,
       state_changes: stateHistory.length,
       run_markers: runMarkers.length,
@@ -2780,6 +2967,7 @@ function boundedRunReport(snapshot) {
     operator_drill: drillEvidence,
     incidents: incidents,
     egm_history: egmHistory,
+    egm_history_all: egmHistoryAll,
     state_history: stateHistory,
     run_markers: runMarkers,
     saved_evidence: sessionEvidence
@@ -2791,6 +2979,8 @@ function buildRunReportMarkdown(report) {
     "# Cabinet Run Report",
     "",
     "- Generated at: " + (report.generated_at || "-"),
+    "- EGM focus: " + (report?.egm_focus?.label || "All EGMs"),
+    "- EGM history scope: " + (report?.scope?.egm_history_scope || "FULL_SESSION"),
     "- Host ID: " + (report.cabinet_profile.host_id || "-"),
     "- Wire host URL: " + (report.cabinet_profile.wire_host_url || "-"),
     "- Start marker: " + (report.window.start_marker.title || "-"),
@@ -2799,7 +2989,8 @@ function buildRunReportMarkdown(report) {
     "- End time: " + (report.window.ended_at || "-"),
     "- Duration (s): " + String(report.window.duration_seconds || 0),
     "- Incidents: " + String(report.summary.incidents || 0),
-    "- EGM events: " + String(report.summary.egm_events || 0),
+    "- EGM events (focused scope): " + String(report.summary.egm_events || 0),
+    "- EGM events (all EGMs in window): " + String(report.summary.egm_events_total || 0),
     "- Heartbeat events: " + String(report.summary.heartbeat_events || 0),
     "- State changes: " + String(report.summary.state_changes || 0),
     "- Run markers: " + String(report.summary.run_markers || 0),
@@ -2862,21 +3053,23 @@ function renderRunReportControls(snapshot) {
     return;
   }
   $("run-report-window-summary").textContent = fmtTime(report.window.started_at) + " -> " + fmtTime(report.window.ended_at) + " (" + report.window.duration_seconds + "s)";
-  $("run-report-count-summary").textContent = "incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + ", heartbeat " + report.summary.heartbeat_events + " (" + (report?.operator_drill?.source || "-") + "), state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
+  $("run-report-count-summary").textContent = "focus " + (report?.egm_focus?.label || "All EGMs") + ", incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + "/" + report.summary.egm_events_total + ", heartbeat " + report.summary.heartbeat_events + " (" + (report?.operator_drill?.source || "-") + "), state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
   $("run-report-state").textContent = "ready";
   $("run-report-state").className = "source-pill source-file";
   $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ".";
 }
 
 function renderHeartbeatSummary(snapshot) {
-  const runtime = snapshot?.status?.runtime || currentRuntime();
-  const summary = heartbeatSummary(snapshot?.egmHistory || [], currentHeartbeatPolicy(snapshot), new Date().toISOString());
+  const focusLabel = currentEGMFocusLabel();
+  const focusedHistory = filterHistoryByFocus(snapshot?.egmHistory || []);
+  const summary = heartbeatSummary(focusedHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+  $("heartbeat-scope").textContent = focusLabel;
   $("heartbeat-health").textContent = summary.label;
   $("heartbeat-observed").textContent = summary.total + " total / " + summary.keepalive_count + " keepAlive";
   $("heartbeat-last-keepalive").textContent = summary.last_keepalive_at ? fmtTime(summary.last_keepalive_at) : "-";
   $("heartbeat-max-gap").textContent = fmtDurationMs(summary.max_gap_ms || 0);
   const intervalText = summary.interval_ms > 0 ? ("configured " + fmtDurationMs(summary.interval_ms)) : "configured interval unavailable";
-  $("heartbeat-summary-message").textContent = summary.message + " (" + intervalText + ")";
+  $("heartbeat-summary-message").textContent = (currentEGMFocusID() ? ("Focused on " + focusLabel + ". ") : "") + summary.message + " (" + intervalText + ")";
 }
 
 function heartbeatPolicyHasFocus() {
@@ -3038,16 +3231,18 @@ function exportRunReportMarkdown() {
 
 function renderCabinetRunTimeline(snapshot) {
   const items = buildCabinetRunTimeline(snapshot);
-  const filtered = applyTimelineFilter(items);
-  const heartbeatCount = items.filter((item) => item.kind === "heartbeat").length;
-  updateTimelineFilterLabels(items.length, filtered.length, heartbeatCount);
-  renderItems("cabinet-run-timeline", filtered, "No cabinet run events captured yet", (item) =>
-    "<div class=\"item timeline-entry\">" +
-      "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.title) + "</strong><span class=\"timeline-kind timeline-kind-" + escapeHTML(item.kind) + "\">" + escapeHTML(item.kind) + "</span></div>" +
+  const focusScoped = applyTimelineFocus(items);
+  const filtered = applyTimelineFilter(focusScoped);
+  const heartbeatCount = focusScoped.filter((item) => item.kind === "heartbeat").length;
+  updateTimelineFilterLabels(focusScoped.length, filtered.length, heartbeatCount);
+  renderItems("cabinet-run-timeline", filtered, "No cabinet run events captured yet", (item) => {
+    const scopeChip = currentEGMFocusID() && item.global ? "<span class=\"timeline-scope timeline-scope-global\">global</span>" : "";
+    return "<div class=\"item timeline-entry\">" +
+      "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.title) + "</strong><div class=\"timeline-entry-tags\">" + scopeChip + "<span class=\"timeline-kind timeline-kind-" + escapeHTML(item.kind) + "\">" + escapeHTML(item.kind) + "</span></div></div>" +
       "<span>" + escapeHTML(item.detail) + "</span>" +
       "<span>" + escapeHTML(fmtTime(item.createdAt)) + " | " + escapeHTML(item.meta) + "</span>" +
-    "</div>"
-  );
+    "</div>";
+  });
 }
 
 function egmSortValue(egm, key) {
@@ -3099,7 +3294,8 @@ function updateSortLabels() {
 
 function renderEGMTable(status) {
   const all = Array.isArray(status?.egms) ? status.egms.slice() : [];
-  const filtered = applyEGMFilter(all);
+  const focusScoped = filterStatusEGMsByFocus(all);
+  const filtered = applyEGMFilter(focusScoped);
   const rows = filtered.sort(compareEGM).map((egm) =>
     "<tr>" +
       "<td><strong>" + escapeHTML(egm.id) + "</strong><br><span class=\"minor\">" + escapeHTML((egm.vendor || "") + " " + (egm.cabinet_family || "")).trim() + "</span></td>" +
@@ -3110,7 +3306,10 @@ function renderEGMTable(status) {
       "<td>" + escapeHTML(fmtTime(egm.last_seen)) + "<br><span class=\"minor\">" + escapeHTML(fmtAge(egm.last_seen)) + "</span></td>" +
     "</tr>"
   );
-  $("egm-count").textContent = filtered.length + " / " + all.length + " EGMs";
+  const focusID = currentEGMFocusID();
+  $("egm-count").textContent = focusID
+    ? ("Focus " + focusID + " | " + filtered.length + " / " + all.length + " EGMs")
+    : (filtered.length + " / " + all.length + " EGMs");
   $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"6\">No EGMs match current filter</td></tr>";
   updateSortLabels();
 }
@@ -3697,6 +3896,7 @@ function renderStatus(snapshot) {
   syncCabinetSetupFromSnapshot(snapshot);
   syncHeartbeatPolicyFromSnapshot(snapshot);
   renderOperatorDrill(snapshot);
+  renderEGMFocusControl(snapshot);
   renderEGMTable(status);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
@@ -3706,11 +3906,12 @@ function renderStatus(snapshot) {
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
   );
   const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
-  const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
-  const egmDisplay = egmHistory.filter((item) => !isHeartbeatEventType(item.event_type));
+  const focusedHistory = filterHistoryByFocus(egmHistory);
+  const heartbeat = heartbeatSummary(focusedHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+  const egmDisplay = focusedHistory.filter((item) => !isHeartbeatEventType(item.event_type));
   if (heartbeat.total > 0) {
     egmDisplay.unshift({
-      egm_id: "Heartbeat",
+      egm_id: currentEGMFocusID() ? (currentEGMFocusID() + " heartbeat") : "Heartbeat",
       status: "",
       event_type: heartbeat.label,
       created_at: heartbeat.last_keepalive_at || heartbeat.first_comms_online_at || "",
@@ -3998,6 +4199,20 @@ function setFilter(filter) {
   }
 }
 
+function setEGMFocus(value) {
+  clientState.egmFocusID = String(value || "").trim();
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || null;
+  if (!snapshot) {
+    const empty = emptySnapshot();
+    renderEGMFocusControl(empty);
+    renderHeartbeatSummary(empty);
+    renderCabinetRunTimeline(empty);
+    return;
+  }
+  renderStatus(snapshot);
+  renderAlerts(snapshot);
+}
+
 function setSort(key) {
   if (clientState.egmSortKey === key) {
     clientState.egmSortDir = clientState.egmSortDir === "asc" ? "desc" : "asc";
@@ -4015,6 +4230,10 @@ function setSort(key) {
 function bindControls() {
   $("refresh-button").addEventListener("click", () => {
     schedulePoll(0);
+  });
+
+  $("egm-focus-select").addEventListener("change", (event) => {
+    setEGMFocus(event.target.value || "");
   });
 
   $("session-evidence-save-button").addEventListener("click", saveSessionEvidenceToHistory);
@@ -4172,6 +4391,7 @@ function bindControls() {
 bindControls();
 updateSortLabels();
 updateStaleBadge();
+renderEGMFocusControl(emptySnapshot());
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
