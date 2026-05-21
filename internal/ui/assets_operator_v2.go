@@ -77,6 +77,11 @@ const dashboardHTML = `<!doctype html>
             <option value="">All EGMs</option>
           </select>
         </div>
+        <div class="focus-egm-summary-wrap">
+          <p class="label">Multi-EGM Grouped Summary</p>
+          <div id="egm-grouped-summary-scope" class="muted-text">Scope: All EGMs</div>
+          <div id="egm-grouped-summary" class="timeline egm-grouped-summary"></div>
+        </div>
       </div>
     </section>
 
@@ -151,6 +156,10 @@ const dashboardHTML = `<!doctype html>
           <p class="label">Operator Signals</p>
           <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
         </div>
+        <div class="first-cabinet-session-workflow-wrap">
+          <p class="label">Operator Workflow</p>
+          <div id="first-cabinet-session-workflow" class="first-cabinet-session-workflow"></div>
+        </div>
       </div>
 
       <div class="panel evidence-capture-panel">
@@ -169,6 +178,7 @@ const dashboardHTML = `<!doctype html>
           <div><dt>State History Rows (global)</dt><dd id="session-evidence-state-count">0</dd></div>
           <div><dt>Run Markers in Snapshot (global)</dt><dd id="session-evidence-run-marker-count">0</dd></div>
           <div><dt>EGM History Rows (focused)</dt><dd id="session-evidence-egm-count">0</dd></div>
+          <div><dt>EGM Groups (focused / all)</dt><dd id="session-evidence-egm-groups">0 / 0</dd></div>
           <div><dt>Heartbeat Events (focused)</dt><dd id="session-evidence-heartbeat-count">0</dd></div>
           <div><dt>Heartbeat Health</dt><dd id="session-evidence-heartbeat-health">-</dd></div>
           <div><dt>Heartbeat Source</dt><dd id="session-evidence-heartbeat-source">-</dd></div>
@@ -289,6 +299,7 @@ const dashboardHTML = `<!doctype html>
             </div>
             <span id="timeline-filter-label" class="muted-text">Showing all timeline events</span>
           </div>
+          <span id="timeline-grouping-label" class="muted-text">All EGM rows grouped by EGM ID; global rows remain grouped as global.</span>
         </div>
         <form id="run-marker-form" class="setup-form run-marker-form">
           <div class="panel-title-row">
@@ -427,6 +438,7 @@ const dashboardHTML = `<!doctype html>
         <div class="panel-head panel-head-stack">
           <h2>EGM History</h2>
           <span id="egm-history-scope" class="muted-text">Scope: All EGMs</span>
+          <span id="egm-history-grouping" class="muted-text">Grouped by EGM ID</span>
         </div>
         <div id="egm-history" class="timeline"></div>
       </div>
@@ -843,6 +855,21 @@ h2 { font-size: 18px; }
   max-width: 100%;
 }
 
+.focus-egm-summary-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+}
+
+.focus-egm-summary-wrap .label {
+  margin-bottom: 4px;
+}
+
+.egm-grouped-summary .item {
+  display: grid;
+  gap: 4px;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -952,6 +979,19 @@ th {
   gap: 6px;
 }
 
+.timeline-egm-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  background: #e8f1fa;
+  color: #1d507b;
+}
+
 .timeline-scope {
   display: inline-flex;
   align-items: center;
@@ -1004,6 +1044,25 @@ th {
 .timeline-kind-marker {
   background: #f3ebff;
   color: #5b3f91;
+}
+
+.timeline-group-heading {
+  border-top: 1px solid var(--line);
+  padding: 8px 12px;
+  background: #f4f8f5;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.timeline-group-heading-egm {
+  border-left: 3px solid #9dbac2;
+}
+
+.timeline-group-heading-global {
+  border-left: 3px solid #7f9aaa;
 }
 
 .cabinet-run-panel {
@@ -1445,6 +1504,54 @@ button:disabled {
   color: #1e6c47;
 }
 
+.first-cabinet-session-workflow-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+}
+
+.first-cabinet-session-workflow {
+  display: grid;
+  gap: 8px;
+}
+
+.first-cabinet-session-workflow-step {
+  border-left: 3px solid #8fa1aa;
+  padding: 8px 10px;
+  background: #f3f7f4;
+  display: grid;
+  gap: 4px;
+}
+
+.first-cabinet-session-workflow-step.step-complete {
+  border-left-color: var(--green);
+  background: var(--green-bg);
+}
+
+.first-cabinet-session-workflow-step.step-active {
+  border-left-color: #245f91;
+  background: var(--info-bg);
+}
+
+.first-cabinet-session-workflow-step.step-action_needed {
+  border-left-color: var(--yellow);
+  background: #fbeecd;
+}
+
+.first-cabinet-session-workflow-step .step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.first-cabinet-session-workflow-step .step-state {
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 .evidence-capture-panel .kv-list {
   margin-bottom: 0;
 }
@@ -1714,6 +1821,125 @@ function renderEGMFocusControl(snapshot) {
     ? ("EGM-specific sections are filtered to " + focus.selected_egm_id + "; global sections remain visible.")
     : "Use this to scope EGM-specific views while keeping global context visible.";
   $("egm-history-scope").textContent = "Scope: " + focus.label;
+  $("egm-history-grouping").textContent = focus.selected_egm_id
+    ? "Single EGM rows with global context retained in timeline"
+    : "Grouped by EGM ID";
+}
+
+function numericTime(value) {
+  if (!value) return 0;
+  const ts = new Date(value).getTime();
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenceTime) {
+  const rowsByID = {};
+  const statusList = Array.isArray(statusEGMs) ? statusEGMs : [];
+  const historyList = Array.isArray(historyRecords) ? historyRecords : [];
+  const policySnapshot = policy || {};
+  const reference = referenceTime || new Date().toISOString();
+
+  const ensure = (egmID) => {
+    const id = String(egmID || "").trim();
+    if (!id) return null;
+    if (!rowsByID[id]) {
+      rowsByID[id] = {
+        egm_id: id,
+        source: "",
+        status: "",
+        last_seen_at: "",
+        total_events: 0,
+        non_heartbeat_events: 0,
+        heartbeat_records: [],
+        last_history_status: ""
+      };
+    }
+    return rowsByID[id];
+  };
+
+  statusList.forEach((egm) => {
+    const row = ensure(egm?.id);
+    if (!row) return;
+    row.source = String(egm?.source || row.source || "CONFIGURED").toUpperCase();
+    row.status = String(egm?.status || row.status || "").toUpperCase();
+    const seen = String(egm?.last_seen || "").trim();
+    if (numericTime(seen) > numericTime(row.last_seen_at)) {
+      row.last_seen_at = seen;
+    }
+  });
+
+  historyList.forEach((record) => {
+    const row = ensure(record?.egm_id);
+    if (!row) return;
+    row.total_events += 1;
+    if (isHeartbeatEventType(record?.event_type)) {
+      row.heartbeat_records.push(record);
+    } else {
+      row.non_heartbeat_events += 1;
+      if (record?.status) {
+        row.last_history_status = String(record.status).toUpperCase();
+      }
+    }
+    const seen = String(record?.created_at || "").trim();
+    if (numericTime(seen) > numericTime(row.last_seen_at)) {
+      row.last_seen_at = seen;
+    }
+    if (!row.source) {
+      row.source = "DISCOVERED";
+    }
+  });
+
+  return Object.keys(rowsByID)
+    .sort((a, b) => a.localeCompare(b))
+    .map((id) => {
+      const row = rowsByID[id];
+      const heartbeat = heartbeatSummary(row.heartbeat_records, policySnapshot, reference);
+      return {
+        egm_id: row.egm_id,
+        source: row.source || "DISCOVERED",
+        status: row.status || row.last_history_status || "UNKNOWN",
+        last_seen_at: row.last_seen_at || "",
+        total_events: row.total_events,
+        non_heartbeat_events: row.non_heartbeat_events,
+        heartbeat_events: heartbeat.total,
+        keepalive_events: heartbeat.keepalive_count,
+        heartbeat_health: heartbeat.health,
+        heartbeat_label: heartbeat.label,
+        heartbeat_last_keepalive_at: heartbeat.last_keepalive_at || "",
+        heartbeat: heartbeat
+      };
+    });
+}
+
+function groupedSummaryRowsForSnapshot(snapshot) {
+  const statusEGMs = Array.isArray(snapshot?.status?.egms) ? snapshot.status.egms : [];
+  const history = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
+  return buildEGMGroupedSummaryRows(statusEGMs, history, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+}
+
+function groupedRowsForCurrentFocus(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const focusID = currentEGMFocusID();
+  if (!focusID) {
+    return list;
+  }
+  return list.filter((item) => String(item?.egm_id || "").trim() === focusID);
+}
+
+function renderEGMGroupedSummary(snapshot) {
+  const focusID = currentEGMFocusID();
+  const allRows = groupedSummaryRowsForSnapshot(snapshot);
+  const rows = groupedRowsForCurrentFocus(allRows);
+  $("egm-grouped-summary-scope").textContent = focusID
+    ? ("Scope: " + focusID + " (focused EGM)")
+    : "Scope: All EGMs grouped by EGM ID";
+  renderItems("egm-grouped-summary", rows, "No EGM telemetry observed yet.", (row) =>
+    "<div class=\"item timeline-entry\">" +
+      "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(row.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(row.egm_id) + "</span>" + egmSourcePill(row.source) + statusPill(row.status) + "</div></div>" +
+      "<span>events " + String(row.total_events) + " total | " + String(row.non_heartbeat_events) + " status events | " + String(row.keepalive_events) + " keepAlive | heartbeat " + escapeHTML(row.heartbeat_label) + "</span>" +
+      "<span>last seen " + escapeHTML(fmtTime(row.last_seen_at)) + " | last keepAlive " + escapeHTML(fmtTime(row.heartbeat_last_keepalive_at)) + "</span>" +
+    "</div>"
+  );
 }
 
 function isHeartbeatEventType(eventType) {
@@ -2096,12 +2322,97 @@ function buildFirstCabinetSessionState(snapshot) {
   };
 }
 
+function cabinetSessionStepStateClass(value) {
+  return String(value || "action_needed").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+function buildCabinetSessionWorkflow(snapshot, session) {
+  const status = snapshot?.status || {};
+  const focus = egmFocusScope(snapshot);
+  const groupedRows = groupedSummaryRowsForSnapshot(snapshot);
+  const focusedRows = groupedRowsForCurrentFocus(groupedRows);
+  const focusedObserved = focusedRows.some((row) => row.total_events > 0 || numericTime(row.last_seen_at) > 0);
+  const anyObserved = groupedRows.some((row) => row.total_events > 0 || numericTime(row.last_seen_at) > 0);
+  const runActive = runWindowIsActive(snapshot);
+  const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
+  const startCount = markers.filter((item) => String(item?.marker_type || "").toLowerCase() === "start").length;
+  const endCount = markers.filter((item) => String(item?.marker_type || "").toLowerCase() === "end").length;
+  const evidenceCount = Array.isArray(snapshot?.sessionEvidence) ? snapshot.sessionEvidence.length : 0;
+  const focusTarget = focus.selected_egm_id || "current cabinet set";
+
+  const precheckComplete = session.readyForSession === true;
+  const connectComplete = focus.selected_egm_id ? focusedObserved : anyObserved;
+  const runComplete = !runActive && startCount > 0 && endCount > 0;
+  const captureComplete = evidenceCount > 0;
+  const sessionComplete = runComplete && captureComplete;
+
+  const steps = [
+    {
+      id: "pre_check",
+      title: "Pre-check",
+      state: precheckComplete ? "COMPLETE" : "ACTION_NEEDED",
+      detail: precheckComplete
+        ? "Readyz, preflight, profile, certificate, and auth gates are ready."
+        : "Resolve readiness blockers before starting cabinet session traffic."
+    },
+    {
+      id: "connect_observe",
+      title: "Connect/Observe",
+      state: connectComplete ? "COMPLETE" : "ACTION_NEEDED",
+      detail: connectComplete
+        ? ("Traffic observed for " + focusTarget + ".")
+        : ("No commsOnLine/keepAlive observed yet for " + focusTarget + ".")
+    },
+    {
+      id: "run_active",
+      title: "Run Active",
+      state: runActive ? "ACTIVE" : (runComplete ? "COMPLETE" : "ACTION_NEEDED"),
+      detail: runActive
+        ? "Run window is active; continue operator actions and timeline notes."
+        : (runComplete ? "Run window markers show start/end captured." : "Mark run start and end to bound the cabinet session window.")
+    },
+    {
+      id: "capture_evidence",
+      title: "Capture Evidence",
+      state: captureComplete ? "COMPLETE" : "ACTION_NEEDED",
+      detail: captureComplete
+        ? ("Saved captures available: " + String(evidenceCount) + ".")
+        : "Capture JSON or Markdown evidence before ending the session."
+    },
+    {
+      id: "session_complete",
+      title: "Session Complete",
+      state: sessionComplete ? "COMPLETE" : "ACTION_NEEDED",
+      detail: sessionComplete
+        ? "Run markers and saved evidence are complete for this cabinet session."
+        : "Complete run markers and evidence capture to close the cabinet session."
+    }
+  ];
+
+  let currentStep = "Session Complete";
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i].state === "ACTION_NEEDED" || steps[i].state === "ACTIVE") {
+      currentStep = steps[i].title;
+      break;
+    }
+  }
+
+  return {
+    current_step: currentStep,
+    focus_label: focus.label,
+    focus_mode: focus.mode,
+    status_state: status.state || "",
+    steps: steps
+  };
+}
+
 function renderFirstCabinetSession(snapshot) {
   const session = buildFirstCabinetSessionState(snapshot);
+  const workflow = buildCabinetSessionWorkflow(snapshot, session);
   const stateBadge = $("first-cabinet-session-state");
   stateBadge.textContent = session.overallState;
   stateBadge.className = "source-pill " + (session.readyForSession ? "source-file" : "source-mixed");
-  $("first-cabinet-session-message").textContent = session.message;
+  $("first-cabinet-session-message").textContent = session.message + " Current workflow step: " + workflow.current_step + ".";
 
   $("first-cabinet-overall").textContent = session.overallState;
   $("first-cabinet-last-checked").textContent = fmtTime(session.lastCheckedValue);
@@ -2121,11 +2432,19 @@ function renderFirstCabinetSession(snapshot) {
   } else {
     blockerList.innerHTML = session.blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
   }
+
+  renderItems("first-cabinet-session-workflow", workflow.steps, "No operator workflow data yet.", (step) =>
+    "<div class=\"first-cabinet-session-workflow-step step-" + cabinetSessionStepStateClass(step.state) + "\">" +
+      "<div class=\"step-head\"><strong>" + escapeHTML(step.title) + "</strong><span class=\"step-state\">" + escapeHTML(step.state) + "</span></div>" +
+      "<span>" + escapeHTML(step.detail) + "</span>" +
+    "</div>"
+  );
 }
 
 function buildSessionEvidence(snapshot) {
   const focus = egmFocusScope(snapshot);
   const session = buildFirstCabinetSessionState(snapshot);
+  const workflow = buildCabinetSessionWorkflow(snapshot, session);
   const status = snapshot?.status || {};
   const runtime = status.runtime || {};
   const readiness = status.readiness || {};
@@ -2140,10 +2459,19 @@ function buildSessionEvidence(snapshot) {
   const drillState = currentOperatorDrill(snapshot);
   const heartbeat = heartbeatSummary(egmHistoryFocused, currentHeartbeatPolicy(snapshot), new Date().toISOString());
   const drillEvidence = operatorDrillEvidence(egmHistoryFocused, drillState);
+  const groupedSummaryAll = buildEGMGroupedSummaryRows(status?.egms, egmHistoryAll, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+  const groupedSummaryFocused = groupedRowsForCurrentFocus(groupedSummaryAll);
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
     egm_focus: focus,
+    scope: {
+      egm_history_scope: focus.egm_specific_views_filtered ? "FILTERED_TO_EGM" : "FULL_SESSION",
+      selected_egm_id: focus.selected_egm_id || "",
+      grouped_summary_scope: focus.egm_specific_views_filtered ? "FILTERED_TO_EGM" : "FULL_SESSION",
+      global_sections_scope: "FULL_SESSION_GLOBAL_INCLUDED"
+    },
+    workflow: workflow,
     session: {
       overall_state: session.overallState,
       ready_for_session: session.readyForSession,
@@ -2180,11 +2508,15 @@ function buildSessionEvidence(snapshot) {
     egm_snapshot_count: Array.isArray(status.egms) ? status.egms.length : 0,
     egm_history_total_count: egmHistoryAll.length,
     egm_history_focused_count: egmHistoryFocused.length,
+    egm_grouped_summary_count: groupedSummaryFocused.length,
+    egm_grouped_summary_count_all: groupedSummaryAll.length,
     heartbeat_summary: heartbeat,
     operator_drill: drillEvidence,
     incidents: incidents,
     egm_history: egmHistoryFocused,
     egm_history_all: egmHistoryAll,
+    egm_grouped_summary: groupedSummaryFocused,
+    egm_grouped_summary_all: groupedSummaryAll,
     state_history: stateHistory,
     run_markers: runMarkers,
     certificates: certificates,
@@ -2199,6 +2531,8 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- Captured at: " + (evidence.captured_at || "-"),
     "- Session state: " + (evidence.session.overall_state || "-"),
     "- EGM focus: " + (evidence?.egm_focus?.label || "All EGMs"),
+    "- EGM focus mode: " + (evidence?.egm_focus?.mode || "ALL_EGMS"),
+    "- EGM history scope: " + (evidence?.scope?.egm_history_scope || "FULL_SESSION"),
     "- EGM-specific views filtered: " + String(evidence?.egm_focus?.egm_specific_views_filtered === true),
     "- Ready for session: " + String(evidence.session.ready_for_session === true),
     "- Readyz state: " + (evidence.session.readyz_state || "-"),
@@ -2213,6 +2547,8 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- EGM snapshot count: " + String(evidence.egm_snapshot_count || 0),
     "- EGM history rows (focused): " + String(evidence.egm_history_focused_count || 0),
     "- EGM history rows (all): " + String(evidence.egm_history_total_count || 0),
+    "- EGM grouped rows (focused): " + String(evidence.egm_grouped_summary_count || 0),
+    "- EGM grouped rows (all): " + String(evidence.egm_grouped_summary_count_all || 0),
     "- Incident rows captured: " + String((evidence.incidents || []).length),
     "- State history rows captured: " + String((evidence.state_history || []).length),
     "- Run markers captured: " + String((evidence.run_markers || []).length),
@@ -2236,6 +2572,31 @@ function buildSessionEvidenceMarkdown(evidence) {
   }
   lines.push("", "## Operator Notes", "");
   lines.push(evidence.operator_notes || "None");
+  lines.push("", "## Workflow", "");
+  const workflowSteps = Array.isArray(evidence?.workflow?.steps) ? evidence.workflow.steps : [];
+  lines.push("- Current step: " + (evidence?.workflow?.current_step || "-"));
+  if (workflowSteps.length > 0) {
+    workflowSteps.forEach((step) => lines.push("- " + [step.title || "-", step.state || "-", step.detail || ""].filter(Boolean).join(" | ")));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Grouped EGM Summary", "");
+  const groupedRows = Array.isArray(evidence?.egm_grouped_summary) ? evidence.egm_grouped_summary : [];
+  const groupedRowsAll = Array.isArray(evidence?.egm_grouped_summary_all) ? evidence.egm_grouped_summary_all : [];
+  lines.push("- Scope rows: " + String(groupedRows.length));
+  lines.push("- All-session rows: " + String(groupedRowsAll.length));
+  if (groupedRows.length > 0) {
+    groupedRows.forEach((row) => lines.push("- " + [
+      row.egm_id || "-",
+      row.source || "-",
+      row.status || "-",
+      "events=" + String(row.total_events || 0),
+      "heartbeat=" + String(row.heartbeat_label || "-"),
+      "last_seen=" + String(row.last_seen_at || "-")
+    ].join(" | ")));
+  } else {
+    lines.push("- None");
+  }
   lines.push("", "## Run Markers", "");
   if (Array.isArray(evidence.run_markers) && evidence.run_markers.length) {
     evidence.run_markers.forEach((item) => lines.push("- " + [item.marker_type || "marker", item.title || "-", item.created_at || "-", item.notes || ""].filter(Boolean).join(" | ")));
@@ -2317,12 +2678,16 @@ function renderSelectedSavedSessionEvidence(record) {
   const heartbeat = evidence?.heartbeat_summary || {};
   const drill = evidence?.operator_drill || {};
   const focusLabel = evidence?.egm_focus?.label || "All EGMs";
+  const workflowStep = evidence?.workflow?.current_step || "-";
+  const groupedFocusedCount = Number(evidence?.egm_grouped_summary_count || (Array.isArray(evidence?.egm_grouped_summary) ? evidence.egm_grouped_summary.length : 0));
+  const groupedAllCount = Number(evidence?.egm_grouped_summary_count_all || (Array.isArray(evidence?.egm_grouped_summary_all) ? evidence.egm_grouped_summary_all.length : groupedFocusedCount));
   renderItems("session-evidence-selected", [record], "", () =>
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
-      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Workflow: " + escapeHTML(workflowStep) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Grouped EGMs (focused/all): " + escapeHTML(String(groupedFocusedCount)) + " / " + escapeHTML(String(groupedAllCount)) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
   );
@@ -2462,6 +2827,7 @@ function renderSessionEvidence(snapshot) {
   $("session-evidence-state-count").textContent = String((evidence.state_history || []).length);
   $("session-evidence-run-marker-count").textContent = String((evidence.run_markers || []).length);
   $("session-evidence-egm-count").textContent = String(evidence.egm_history_focused_count || 0);
+  $("session-evidence-egm-groups").textContent = String(evidence.egm_grouped_summary_count || 0) + " / " + String(evidence.egm_grouped_summary_count_all || 0);
   $("session-evidence-heartbeat-count").textContent = String(evidence?.heartbeat_summary?.total || 0);
   $("session-evidence-heartbeat-health").textContent = evidence?.heartbeat_summary?.label || "-";
   $("session-evidence-heartbeat-source").textContent = (evidence?.operator_drill?.source || "-") + " | " + (evidence?.egm_focus?.label || "All EGMs");
@@ -2873,6 +3239,47 @@ function updateTimelineFilterLabels(total, filtered, heartbeatCount) {
   });
 }
 
+function timelineEntryHTML(item) {
+  const egmID = String(item?.egm_id || "").trim();
+  const globalChip = item?.global ? "<span class=\"timeline-scope timeline-scope-global\">global</span>" : "";
+  const egmChip = egmID ? "<span class=\"timeline-egm-chip\">" + escapeHTML(egmID) + "</span>" : "";
+  return "<div class=\"item timeline-entry\">" +
+    "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item?.title || "-") + "</strong><div class=\"timeline-entry-tags\">" + globalChip + egmChip + "<span class=\"timeline-kind timeline-kind-" + escapeHTML(item?.kind || "egm") + "\">" + escapeHTML(item?.kind || "egm") + "</span></div></div>" +
+    "<span>" + escapeHTML(item?.detail || "-") + "</span>" +
+    "<span>" + escapeHTML(fmtTime(item?.createdAt || "")) + " | " + escapeHTML(item?.meta || "-") + "</span>" +
+  "</div>";
+}
+
+function renderGroupedTimelineAll(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    $("cabinet-run-timeline").innerHTML = "<div class=\"empty\">No cabinet run events captured yet</div>";
+    return;
+  }
+  const globalItems = [];
+  const byEGM = {};
+  list.forEach((item) => {
+    const egmID = String(item?.egm_id || "").trim();
+    if (item?.global || !egmID) {
+      globalItems.push(item);
+      return;
+    }
+    if (!byEGM[egmID]) byEGM[egmID] = [];
+    byEGM[egmID].push(item);
+  });
+  let html = "";
+  if (globalItems.length > 0) {
+    html += "<div class=\"timeline-group-heading timeline-group-heading-global\">Global Session Events (" + String(globalItems.length) + ")</div>";
+    html += globalItems.map((item) => timelineEntryHTML(item)).join("");
+  }
+  Object.keys(byEGM).sort((a, b) => a.localeCompare(b)).forEach((egmID) => {
+    const records = byEGM[egmID];
+    html += "<div class=\"timeline-group-heading timeline-group-heading-egm\">EGM " + escapeHTML(egmID) + " (" + String(records.length) + ")</div>";
+    html += records.map((item) => timelineEntryHTML(item)).join("");
+  });
+  $("cabinet-run-timeline").innerHTML = html || "<div class=\"empty\">No cabinet run events captured yet</div>";
+}
+
 function markerLabel(marker) {
   if (!marker) return "-";
   return (marker.marker_type || "marker").toUpperCase() + " | " + fmtTime(marker.created_at) + " | " + (marker.title || "-");
@@ -2915,6 +3322,8 @@ function recordInRange(createdAt, startTime, endTime) {
 
 function boundedRunReport(snapshot) {
   const focus = egmFocusScope(snapshot);
+  const session = buildFirstCabinetSessionState(snapshot);
+  const workflow = buildCabinetSessionWorkflow(snapshot, session);
   const selection = normalizeRunReportSelections(snapshot);
   if (!selection.start || !selection.end) {
     return null;
@@ -2935,14 +3344,18 @@ function boundedRunReport(snapshot) {
   const drillState = currentOperatorDrill(snapshot);
   const heartbeat = heartbeatSummary(egmHistory, currentHeartbeatPolicy(snapshot), endMarker.created_at || "");
   const drillEvidence = operatorDrillEvidence(egmHistory, drillState);
+  const groupedSummaryAll = buildEGMGroupedSummaryRows(snapshot?.status?.egms, egmHistoryAll, currentHeartbeatPolicy(snapshot), endMarker.created_at || "");
+  const groupedSummaryFocused = groupedRowsForCurrentFocus(groupedSummaryAll);
   return {
     generated_at: new Date().toISOString(),
     egm_focus: focus,
     scope: {
       egm_history_scope: focus.egm_specific_views_filtered ? "FILTERED_TO_EGM" : "FULL_SESSION",
       selected_egm_id: focus.selected_egm_id || "",
+      grouped_summary_scope: focus.egm_specific_views_filtered ? "FILTERED_TO_EGM" : "FULL_SESSION",
       global_sections_scope: "FULL_SESSION_GLOBAL_INCLUDED"
     },
+    workflow: workflow,
     window: {
       start_marker: startMarker,
       end_marker: endMarker,
@@ -2958,6 +3371,8 @@ function boundedRunReport(snapshot) {
       incidents: incidents.length,
       egm_events: egmHistory.length,
       egm_events_total: egmHistoryAll.length,
+      egm_groups: groupedSummaryFocused.length,
+      egm_groups_total: groupedSummaryAll.length,
       heartbeat_events: heartbeat.total,
       state_changes: stateHistory.length,
       run_markers: runMarkers.length,
@@ -2968,6 +3383,8 @@ function boundedRunReport(snapshot) {
     incidents: incidents,
     egm_history: egmHistory,
     egm_history_all: egmHistoryAll,
+    egm_grouped_summary: groupedSummaryFocused,
+    egm_grouped_summary_all: groupedSummaryAll,
     state_history: stateHistory,
     run_markers: runMarkers,
     saved_evidence: sessionEvidence
@@ -2975,12 +3392,16 @@ function boundedRunReport(snapshot) {
 }
 
 function buildRunReportMarkdown(report) {
+  const workflowSteps = Array.isArray(report?.workflow?.steps) ? report.workflow.steps : [];
+  const groupedRows = Array.isArray(report?.egm_grouped_summary) ? report.egm_grouped_summary : [];
+  const groupedRowsAll = Array.isArray(report?.egm_grouped_summary_all) ? report.egm_grouped_summary_all : [];
   const lines = [
     "# Cabinet Run Report",
     "",
     "- Generated at: " + (report.generated_at || "-"),
     "- EGM focus: " + (report?.egm_focus?.label || "All EGMs"),
     "- EGM history scope: " + (report?.scope?.egm_history_scope || "FULL_SESSION"),
+    "- Grouped summary scope: " + (report?.scope?.grouped_summary_scope || "FULL_SESSION"),
     "- Host ID: " + (report.cabinet_profile.host_id || "-"),
     "- Wire host URL: " + (report.cabinet_profile.wire_host_url || "-"),
     "- Start marker: " + (report.window.start_marker.title || "-"),
@@ -2991,6 +3412,8 @@ function buildRunReportMarkdown(report) {
     "- Incidents: " + String(report.summary.incidents || 0),
     "- EGM events (focused scope): " + String(report.summary.egm_events || 0),
     "- EGM events (all EGMs in window): " + String(report.summary.egm_events_total || 0),
+    "- EGM groups (focused scope): " + String(report.summary.egm_groups || 0),
+    "- EGM groups (all EGMs in window): " + String(report.summary.egm_groups_total || 0),
     "- Heartbeat events: " + String(report.summary.heartbeat_events || 0),
     "- State changes: " + String(report.summary.state_changes || 0),
     "- Run markers: " + String(report.summary.run_markers || 0),
@@ -3015,12 +3438,32 @@ function buildRunReportMarkdown(report) {
     "- Auto heartbeat running: " + String(report?.operator_drill?.state?.auto_heartbeat_running === true),
     "- Auto heartbeat paused: " + String(report?.operator_drill?.state?.auto_heartbeat_paused === true),
     "",
-    "## JSON Payload",
+    "## Workflow",
     "",
-    "~~~json",
-    JSON.stringify(report, null, 2),
-    "~~~"
+    "- Current step: " + (report?.workflow?.current_step || "-"),
+    "- Focus mode: " + (report?.workflow?.focus_mode || "-")
   ];
+  if (workflowSteps.length > 0) {
+    workflowSteps.forEach((step) => lines.push("- " + [step.title || "-", step.state || "-", step.detail || ""].filter(Boolean).join(" | ")));
+  } else {
+    lines.push("- No workflow steps available");
+  }
+  lines.push("", "## Grouped EGM Summary", "");
+  lines.push("- Scope rows: " + String(groupedRows.length));
+  lines.push("- All-window rows: " + String(groupedRowsAll.length));
+  if (groupedRows.length > 0) {
+    groupedRows.forEach((row) => lines.push("- " + [
+      row.egm_id || "-",
+      row.source || "-",
+      row.status || "-",
+      "events=" + String(row.total_events || 0),
+      "heartbeat=" + String(row.heartbeat_label || "-"),
+      "last_seen=" + String(row.last_seen_at || "-")
+    ].join(" | ")));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## JSON Payload", "", "~~~json", JSON.stringify(report, null, 2), "~~~");
   return lines.join("\n");
 }
 
@@ -3053,10 +3496,10 @@ function renderRunReportControls(snapshot) {
     return;
   }
   $("run-report-window-summary").textContent = fmtTime(report.window.started_at) + " -> " + fmtTime(report.window.ended_at) + " (" + report.window.duration_seconds + "s)";
-  $("run-report-count-summary").textContent = "focus " + (report?.egm_focus?.label || "All EGMs") + ", incidents " + report.summary.incidents + ", egm " + report.summary.egm_events + "/" + report.summary.egm_events_total + ", heartbeat " + report.summary.heartbeat_events + " (" + (report?.operator_drill?.source || "-") + "), state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
+  $("run-report-count-summary").textContent = "focus " + (report?.egm_focus?.label || "All EGMs") + " [" + (report?.scope?.egm_history_scope || "FULL_SESSION") + "], incidents " + report.summary.incidents + ", egm events " + report.summary.egm_events + "/" + report.summary.egm_events_total + ", egm groups " + report.summary.egm_groups + "/" + report.summary.egm_groups_total + ", heartbeat " + report.summary.heartbeat_events + " (" + (report?.operator_drill?.source || "-") + "), state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
   $("run-report-state").textContent = "ready";
   $("run-report-state").className = "source-pill source-file";
-  $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ".";
+  $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ". Workflow step: " + (report?.workflow?.current_step || "-") + ".";
 }
 
 function renderHeartbeatSummary(snapshot) {
@@ -3070,6 +3513,79 @@ function renderHeartbeatSummary(snapshot) {
   $("heartbeat-max-gap").textContent = fmtDurationMs(summary.max_gap_ms || 0);
   const intervalText = summary.interval_ms > 0 ? ("configured " + fmtDurationMs(summary.interval_ms)) : "configured interval unavailable";
   $("heartbeat-summary-message").textContent = (currentEGMFocusID() ? ("Focused on " + focusLabel + ". ") : "") + summary.message + " (" + intervalText + ")";
+}
+
+function renderEGMHistory(snapshot) {
+  const focusID = currentEGMFocusID();
+  const scopedHistory = filterHistoryByFocus(snapshot?.egmHistory || []);
+  const grouped = {};
+  scopedHistory.forEach((item) => {
+    const egmID = String(item?.egm_id || "").trim();
+    if (!egmID) return;
+    if (!grouped[egmID]) {
+      grouped[egmID] = { egm_id: egmID, records: [], non_heartbeat: [] };
+    }
+    grouped[egmID].records.push(item);
+    if (!isHeartbeatEventType(item?.event_type)) {
+      grouped[egmID].non_heartbeat.push(item);
+    }
+  });
+
+  if (focusID) {
+    const bucket = grouped[focusID] || { egm_id: focusID, records: [], non_heartbeat: [] };
+    const heartbeat = heartbeatSummary(bucket.records, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+    const rows = [];
+    if (heartbeat.total > 0) {
+      rows.push({
+        egm_id: focusID,
+        status: "",
+        event_type: heartbeat.label,
+        created_at: heartbeat.last_keepalive_at || heartbeat.first_comms_online_at || "",
+        detail: heartbeat.message,
+        heartbeat_summary: true
+      });
+    }
+    bucket.non_heartbeat
+      .slice()
+      .sort((a, b) => numericTime(b?.created_at) - numericTime(a?.created_at))
+      .forEach((record) => rows.push(record));
+    renderItems("egm-history", rows, "No EGM history yet", (item) =>
+      "<div class=\"item timeline-entry\">" +
+        "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id || "-") + (item.status ? (" " + statusPill(item.status)) : "") + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id || "-") + "</span></div></div>" +
+        "<span>" + escapeHTML(item.event_type || "-") + " at " + escapeHTML(fmtTime(item.created_at)) + (item.detail ? " | " + escapeHTML(item.detail) : "") + "</span>" +
+      "</div>"
+    );
+    return;
+  }
+
+  const egmIDs = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+  if (egmIDs.length === 0) {
+    $("egm-history").innerHTML = "<div class=\"empty\">No EGM history yet</div>";
+    return;
+  }
+  let html = "";
+  egmIDs.forEach((egmID) => {
+    const bucket = grouped[egmID];
+    const heartbeat = heartbeatSummary(bucket.records, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+    const nonHeartbeatRows = bucket.non_heartbeat
+      .slice()
+      .sort((a, b) => numericTime(b?.created_at) - numericTime(a?.created_at));
+    html += "<div class=\"timeline-group-heading timeline-group-heading-egm\">EGM " + escapeHTML(egmID) + " (" + String(bucket.records.length) + ")</div>";
+    if (heartbeat.total > 0) {
+      html += "<div class=\"item timeline-entry\"><div class=\"timeline-entry-head\"><strong>" + escapeHTML(egmID) + " heartbeat</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(egmID) + "</span><span class=\"timeline-kind timeline-kind-heartbeat\">heartbeat</span></div></div><span>" + escapeHTML(heartbeat.label) + " at " + escapeHTML(fmtTime(heartbeat.last_keepalive_at || heartbeat.first_comms_online_at || "")) + "</span><span>" + escapeHTML(heartbeat.message) + "</span></div>";
+    }
+    if (nonHeartbeatRows.length === 0) {
+      html += "<div class=\"item\"><span>No non-heartbeat rows yet for this EGM.</span></div>";
+      return;
+    }
+    html += nonHeartbeatRows.map((item) =>
+      "<div class=\"item timeline-entry\">" +
+        "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id || "-") + (item.status ? (" " + statusPill(item.status)) : "") + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id || "-") + "</span></div></div>" +
+        "<span>" + escapeHTML(item.event_type || "-") + " at " + escapeHTML(fmtTime(item.created_at)) + (item.detail ? " | " + escapeHTML(item.detail) : "") + "</span>" +
+      "</div>"
+    ).join("");
+  });
+  $("egm-history").innerHTML = html;
 }
 
 function heartbeatPolicyHasFocus() {
@@ -3234,15 +3750,16 @@ function renderCabinetRunTimeline(snapshot) {
   const focusScoped = applyTimelineFocus(items);
   const filtered = applyTimelineFilter(focusScoped);
   const heartbeatCount = focusScoped.filter((item) => item.kind === "heartbeat").length;
+  const focusID = currentEGMFocusID();
   updateTimelineFilterLabels(focusScoped.length, filtered.length, heartbeatCount);
-  renderItems("cabinet-run-timeline", filtered, "No cabinet run events captured yet", (item) => {
-    const scopeChip = currentEGMFocusID() && item.global ? "<span class=\"timeline-scope timeline-scope-global\">global</span>" : "";
-    return "<div class=\"item timeline-entry\">" +
-      "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.title) + "</strong><div class=\"timeline-entry-tags\">" + scopeChip + "<span class=\"timeline-kind timeline-kind-" + escapeHTML(item.kind) + "\">" + escapeHTML(item.kind) + "</span></div></div>" +
-      "<span>" + escapeHTML(item.detail) + "</span>" +
-      "<span>" + escapeHTML(fmtTime(item.createdAt)) + " | " + escapeHTML(item.meta) + "</span>" +
-    "</div>";
-  });
+  $("timeline-grouping-label").textContent = focusID
+    ? ("Focused on " + focusID + "; EGM rows are filtered and global rows remain visible.")
+    : "All EGM rows grouped by EGM ID; global rows remain grouped as global.";
+  if (!focusID) {
+    renderGroupedTimelineAll(filtered);
+    return;
+  }
+  renderItems("cabinet-run-timeline", filtered, "No cabinet run events captured yet", (item) => timelineEntryHTML(item));
 }
 
 function egmSortValue(egm, key) {
@@ -3897,6 +4414,7 @@ function renderStatus(snapshot) {
   syncHeartbeatPolicyFromSnapshot(snapshot);
   renderOperatorDrill(snapshot);
   renderEGMFocusControl(snapshot);
+  renderEGMGroupedSummary(snapshot);
   renderEGMTable(status);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
@@ -3905,22 +4423,7 @@ function renderStatus(snapshot) {
   renderItems("incident-list", snapshot?.incidents, "No incidents recorded", (item) =>
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
   );
-  const egmHistory = Array.isArray(snapshot?.egmHistory) ? snapshot.egmHistory : [];
-  const focusedHistory = filterHistoryByFocus(egmHistory);
-  const heartbeat = heartbeatSummary(focusedHistory, currentHeartbeatPolicy(snapshot), new Date().toISOString());
-  const egmDisplay = focusedHistory.filter((item) => !isHeartbeatEventType(item.event_type));
-  if (heartbeat.total > 0) {
-    egmDisplay.unshift({
-      egm_id: currentEGMFocusID() ? (currentEGMFocusID() + " heartbeat") : "Heartbeat",
-      status: "",
-      event_type: heartbeat.label,
-      created_at: heartbeat.last_keepalive_at || heartbeat.first_comms_online_at || "",
-      detail: heartbeat.message
-    });
-  }
-  renderItems("egm-history", egmDisplay, "No EGM history yet", (item) =>
-    "<div class=\"item\"><strong>" + escapeHTML(item.egm_id) + (item.status ? (" " + statusPill(item.status)) : "") + "</strong><span>" + escapeHTML(item.event_type) + " at " + escapeHTML(fmtTime(item.created_at)) + (item.detail ? " | " + escapeHTML(item.detail) : "") + "</span></div>"
-  );
+  renderEGMHistory(snapshot);
   renderItems("state-history", snapshot?.stateHistory, "No state history yet", (item) =>
     "<div class=\"item\"><strong>" + escapeHTML(item.old_state) + " -> " + escapeHTML(item.new_state) + "</strong><span>" + escapeHTML(item.reason) + " at " + escapeHTML(fmtTime(item.created_at)) + "</span></div>"
   );
@@ -4205,8 +4708,10 @@ function setEGMFocus(value) {
   if (!snapshot) {
     const empty = emptySnapshot();
     renderEGMFocusControl(empty);
+    renderEGMGroupedSummary(empty);
     renderHeartbeatSummary(empty);
     renderCabinetRunTimeline(empty);
+    renderEGMHistory(empty);
     return;
   }
   renderStatus(snapshot);
@@ -4392,6 +4897,7 @@ bindControls();
 updateSortLabels();
 updateStaleBadge();
 renderEGMFocusControl(emptySnapshot());
+renderEGMGroupedSummary(emptySnapshot());
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
@@ -4401,5 +4907,6 @@ renderHeartbeatPolicy(emptySnapshot());
 renderOperatorDrill(emptySnapshot());
 renderHeartbeatSummary(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());
+renderEGMHistory(emptySnapshot());
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`
