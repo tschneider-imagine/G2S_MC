@@ -887,3 +887,103 @@ func TestRunMarkersHandlerCRUDAndAuth(t *testing.T) {
 		t.Fatalf("POST public network without token status = %d, want 401/403", unauthorizedRec.Code)
 	}
 }
+
+func TestOperatorDrillHandlerGETAndPOST(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		WebUI: config.WebUI{
+			RequireLogin:                        false,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+		EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+		Timeouts: config.Timeouts{
+			EGMHeartbeatIntervalMS: 5000,
+		},
+	}
+	eng := engine.New("G2S-MC-TEST", cfg.EGMRoster)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eng.Start(runCtx)
+
+	manager := newOperatorDrillManager(eng, cfg.EGMRoster, cfg.Timeouts.EGMHeartbeatIntervalMS)
+	t.Cleanup(func() { manager.shutdown(context.Background()) })
+	handler := operatorDrillHandler(manager, cfg)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/operator-drill", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var initial operatorDrillState
+	if err := json.Unmarshal(getRec.Body.Bytes(), &initial); err != nil {
+		t.Fatalf("decode GET: %v", err)
+	}
+	if initial.SelectedEGMID != "EGM-01" {
+		t.Fatalf("selected_egm_id = %q, want EGM-01", initial.SelectedEGMID)
+	}
+	if initial.IntervalMS != 5000 {
+		t.Fatalf("interval_ms = %d, want 5000", initial.IntervalMS)
+	}
+
+	unauthorizedReq := httptest.NewRequest(http.MethodPost, "/api/operator-drill", bytes.NewBufferString(`{"action":"comms_online"}`))
+	unauthorizedReq.RemoteAddr = "198.51.100.25:4000"
+	unauthorizedRec := httptest.NewRecorder()
+	handler(unauthorizedRec, unauthorizedReq)
+	if !deniedByAuth(unauthorizedRec.Code) {
+		t.Fatalf("POST public network without token status = %d, want 401/403", unauthorizedRec.Code)
+	}
+
+	privateReq := httptest.NewRequest(http.MethodPost, "/api/operator-drill", bytes.NewBufferString(`{"action":"comms_online"}`))
+	privateReq.RemoteAddr = "192.168.10.70:4000"
+	privateReq.Header.Set("Content-Type", "application/json")
+	privateRec := httptest.NewRecorder()
+	handler(privateRec, privateReq)
+	if privateRec.Code != http.StatusOK {
+		t.Fatalf("POST trusted private network status = %d: %s", privateRec.Code, privateRec.Body.String())
+	}
+	var privateBody operatorDrillState
+	if err := json.Unmarshal(privateRec.Body.Bytes(), &privateBody); err != nil {
+		t.Fatalf("decode POST: %v", err)
+	}
+	if privateBody.LastAction != "comms_online" {
+		t.Fatalf("last_action = %q, want comms_online", privateBody.LastAction)
+	}
+	waitForLastEvent(t, eng, string(engine.EventG2SSessionOnline))
+
+	resumeReq := httptest.NewRequest(http.MethodPost, "/api/operator-drill", bytes.NewBufferString(`{"action":"resume","interval_ms":50}`))
+	resumeReq.RemoteAddr = "192.168.10.70:4000"
+	resumeReq.Header.Set("Content-Type", "application/json")
+	resumeRec := httptest.NewRecorder()
+	handler(resumeRec, resumeReq)
+	if resumeRec.Code != http.StatusOK {
+		t.Fatalf("POST resume status = %d: %s", resumeRec.Code, resumeRec.Body.String())
+	}
+	var resumeBody operatorDrillState
+	if err := json.Unmarshal(resumeRec.Body.Bytes(), &resumeBody); err != nil {
+		t.Fatalf("decode resume: %v", err)
+	}
+	if !resumeBody.AutoHeartbeatRunning {
+		t.Fatal("expected auto_heartbeat_running after resume")
+	}
+
+	pauseReq := httptest.NewRequest(http.MethodPost, "/api/operator-drill", bytes.NewBufferString(`{"action":"pause"}`))
+	pauseReq.RemoteAddr = "192.168.10.70:4000"
+	pauseReq.Header.Set("Content-Type", "application/json")
+	pauseRec := httptest.NewRecorder()
+	handler(pauseRec, pauseReq)
+	if pauseRec.Code != http.StatusOK {
+		t.Fatalf("POST pause status = %d: %s", pauseRec.Code, pauseRec.Body.String())
+	}
+	var pauseBody operatorDrillState
+	if err := json.Unmarshal(pauseRec.Body.Bytes(), &pauseBody); err != nil {
+		t.Fatalf("decode pause: %v", err)
+	}
+	if pauseBody.AutoHeartbeatRunning {
+		t.Fatal("expected auto_heartbeat_running to be false after pause")
+	}
+	if !pauseBody.AutoHeartbeatPaused {
+		t.Fatal("expected auto_heartbeat_paused to be true after pause")
+	}
+}

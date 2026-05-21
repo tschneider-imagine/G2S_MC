@@ -345,6 +345,39 @@ const dashboardHTML = `<!doctype html>
             <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
         </form>
+        <form id="operator-drill-form" class="setup-form operator-drill-form">
+          <div class="panel-title-row">
+            <strong>Operator Drill</strong>
+            <span id="operator-drill-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="operator-drill-message" class="muted-text">Drive simulated cabinet session traffic directly from the dashboard.</span>
+          <div class="form-grid operator-drill-grid">
+            <label>EGM
+              <select id="operator-drill-egm-id"></select>
+            </label>
+            <label>Heartbeat Interval (ms)<input id="operator-drill-interval-ms" type="number" min="250" step="250"></label>
+            <label>Burst Count<input id="operator-drill-burst-count" type="number" min="1" max="50" step="1"></label>
+            <label>Last Action<input id="operator-drill-last-action" type="text" disabled></label>
+          </div>
+          <div class="setup-details run-report-details">
+            <div>
+              <p class="label">Auto Heartbeat</p>
+              <strong id="operator-drill-heartbeat-state">-</strong>
+            </div>
+            <div>
+              <p class="label">Last Action At</p>
+              <strong id="operator-drill-last-action-at">-</strong>
+            </div>
+          </div>
+          <div class="setup-actions evidence-actions operator-drill-actions">
+            <button id="operator-drill-comms-online-button" type="button">Trigger commsOnLine</button>
+            <button id="operator-drill-keepalive-button" type="button" class="secondary-button">Send keepAlive</button>
+            <button id="operator-drill-burst-button" type="button" class="secondary-button">Send keepAlive Burst</button>
+            <button id="operator-drill-resume-button" type="button" class="secondary-button">Resume Auto Heartbeat</button>
+            <button id="operator-drill-pause-button" type="button" class="secondary-button">Pause Auto Heartbeat</button>
+            <button id="operator-drill-clear-button" type="button" class="secondary-button">Clear Drill State</button>
+          </div>
+        </form>
         <div class="heartbeat-summary-wrap">
           <p class="label">Heartbeat Summary</p>
           <div class="heartbeat-summary-grid">
@@ -1040,6 +1073,20 @@ th {
   border-top: 1px solid var(--line);
 }
 
+.operator-drill-form {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.operator-drill-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.operator-drill-actions {
+  margin-top: 0;
+}
+
 .heartbeat-summary-wrap {
   border-top: 1px solid var(--line);
   padding: 12px 16px 16px;
@@ -1398,6 +1445,7 @@ const dashboardJS = `const endpoints = {
   egmHistory: "/api/egms/history?limit=30",
   stateHistory: "/api/state-history?limit=30",
   runMarkers: "/api/run-markers?limit=30",
+  operatorDrill: "/api/operator-drill",
   certificates: "/api/certificates",
   sessionEvidence: "/api/session-evidence?limit=20",
   cabinetProfile: "/api/cabinet-profile",
@@ -1465,6 +1513,7 @@ function emptySnapshot() {
     egmHistory: [],
     stateHistory: [],
     runMarkers: [],
+    operatorDrill: null,
     certificates: [],
     sessionEvidence: [],
     cabinetProfile: null,
@@ -1487,6 +1536,7 @@ function copySnapshot(snapshot) {
     egmHistory: Array.isArray(snapshot.egmHistory) ? snapshot.egmHistory.slice() : [],
     stateHistory: Array.isArray(snapshot.stateHistory) ? snapshot.stateHistory.slice() : [],
     runMarkers: Array.isArray(snapshot.runMarkers) ? snapshot.runMarkers.slice() : [],
+    operatorDrill: snapshot.operatorDrill || null,
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
     cabinetProfile: snapshot.cabinetProfile || null,
@@ -2282,6 +2332,147 @@ function defaultRunMarkerTitle(markerType) {
   if (markerType === "start") return "Session start - " + hostID;
   if (markerType === "end") return "Session end - " + hostID;
   return "Operator note - " + hostID;
+}
+
+function operatorDrillHasFocus() {
+  const form = $("operator-drill-form");
+  return !!(form && form.contains(document.activeElement));
+}
+
+function currentOperatorDrill(snapshot) {
+  const state = snapshot?.operatorDrill || {};
+  const intervalMS = Number(state.interval_ms || currentRuntime().egm_heartbeat_interval_ms || 5000);
+  const burstCount = Number(state.burst_count || 5);
+  return {
+    selected_egm_id: state.selected_egm_id || "",
+    available_egm_ids: Array.isArray(state.available_egm_ids) ? state.available_egm_ids.slice() : [],
+    auto_heartbeat_running: state.auto_heartbeat_running === true,
+    auto_heartbeat_paused: state.auto_heartbeat_paused === true,
+    interval_ms: intervalMS > 0 ? intervalMS : 5000,
+    burst_count: burstCount > 0 ? burstCount : 5,
+    last_action: state.last_action || "idle",
+    last_action_at: state.last_action_at || ""
+  };
+}
+
+function setOperatorDrillState(level, message) {
+  const badge = $("operator-drill-state");
+  badge.textContent = level;
+  badge.className = "source-pill " + (level === "ready" || level === "saved" ? "source-file" : level === "working" ? "source-override" : "source-mixed");
+  $("operator-drill-message").textContent = message;
+}
+
+function operatorDrillPayload(action) {
+  return {
+    action: action,
+    egm_id: $("operator-drill-egm-id").value || "",
+    interval_ms: Number($("operator-drill-interval-ms").value || 0),
+    burst_count: Number($("operator-drill-burst-count").value || 0)
+  };
+}
+
+function renderOperatorDrill(snapshot) {
+  const drill = currentOperatorDrill(snapshot);
+  const select = $("operator-drill-egm-id");
+  const available = drill.available_egm_ids;
+  if (available.length === 0) {
+    select.innerHTML = "<option value=\"\">No configured EGM</option>";
+  } else {
+    select.innerHTML = available.map((id) => "<option value=\"" + escapeHTML(id) + "\">" + escapeHTML(id) + "</option>").join("");
+  }
+  if (!operatorDrillHasFocus()) {
+    select.value = drill.selected_egm_id || (available[0] || "");
+    $("operator-drill-interval-ms").value = String(drill.interval_ms || 5000);
+    $("operator-drill-burst-count").value = String(drill.burst_count || 5);
+  } else if (!select.value && available.length > 0) {
+    select.value = available[0];
+  }
+  $("operator-drill-last-action").value = String(drill.last_action || "idle").replace(/_/g, " ");
+  $("operator-drill-last-action-at").textContent = drill.last_action_at ? fmtTime(drill.last_action_at) : "-";
+
+  let heartbeatState = "idle";
+  if (drill.auto_heartbeat_running) {
+    heartbeatState = "running every " + fmtDurationMs(drill.interval_ms);
+  } else if (drill.auto_heartbeat_paused) {
+    heartbeatState = "paused";
+  }
+  $("operator-drill-heartbeat-state").textContent = heartbeatState;
+
+  const tokenRequired = setupActionsRequireToken();
+  const tokenPresent = !!getSetupToken() || !!getCertToken();
+  const blockedForToken = tokenRequired && !tokenPresent;
+  const unavailable = available.length === 0;
+  [
+    "operator-drill-comms-online-button",
+    "operator-drill-keepalive-button",
+    "operator-drill-burst-button",
+    "operator-drill-resume-button",
+    "operator-drill-pause-button",
+    "operator-drill-clear-button"
+  ].forEach((id) => {
+    $(id).disabled = unavailable || blockedForToken;
+  });
+
+  if (!snapshot?.status && unavailable) {
+    setOperatorDrillState("waiting", "Waiting for appliance status before operator drill controls are available.");
+    return;
+  }
+  if (unavailable) {
+    setOperatorDrillState("blocked", "No configured EGM is available for operator drill.");
+    return;
+  }
+  if (blockedForToken) {
+    setOperatorDrillState("blocked", "Enter a setup or certificate API token before using operator drill actions.");
+    return;
+  }
+  if (drill.auto_heartbeat_running) {
+    setOperatorDrillState("ready", "Auto heartbeat drill is running at " + fmtDurationMs(drill.interval_ms) + ".");
+    return;
+  }
+  if (drill.auto_heartbeat_paused) {
+    setOperatorDrillState("ready", "Auto heartbeat drill is paused.");
+    return;
+  }
+  setOperatorDrillState("ready", "Operator drill is ready for simulated cabinet traffic.");
+}
+
+async function submitOperatorDrillAction(action) {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    setOperatorDrillState("blocked", "Enter a setup or certificate API token before using operator drill actions.");
+    return;
+  }
+  const payload = operatorDrillPayload(action);
+  if (!payload.egm_id && action !== "pause" && action !== "clear") {
+    setOperatorDrillState("blocked", "Choose an EGM before sending operator drill traffic.");
+    return;
+  }
+  try {
+    setOperatorDrillState("working", "Submitting operator drill action.");
+    const headers = { "Content-Type": "application/json" };
+    const token = getSetupToken() || getCertToken();
+    if (token) {
+      headers.Authorization = "Bearer " + token;
+    }
+    const response = await fetch(endpoints.operatorDrill, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setOperatorDrillState("blocked", "Operator drill failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    const state = await response.json();
+    const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    snapshot.operatorDrill = state;
+    clientState.displaySnapshot = snapshot;
+    renderOperatorDrill(snapshot);
+    setOperatorDrillState("saved", "Operator drill action sent: " + String(action).replace(/_/g, " ") + ".");
+    schedulePoll(0);
+  } catch (err) {
+    setOperatorDrillState("blocked", err && err.message ? err.message : "Operator drill failed.");
+  }
 }
 
 function setRunMarkerState(level, message) {
@@ -3418,6 +3609,7 @@ function renderStatus(snapshot) {
   renderSessionEvidence(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
   syncHeartbeatPolicyFromSnapshot(snapshot);
+  renderOperatorDrill(snapshot);
   renderEGMTable(status);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
@@ -3614,6 +3806,7 @@ async function pollOnce() {
       fetchJSON(endpoints.egmHistory),
       fetchJSON(endpoints.stateHistory),
       fetchJSON(endpoints.runMarkers),
+      fetchJSON(endpoints.operatorDrill),
       fetchJSON(endpoints.certificates),
       fetchJSON(endpoints.sessionEvidence),
       fetchJSON(endpoints.cabinetProfile),
@@ -3621,7 +3814,7 @@ async function pollOnce() {
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -3648,6 +3841,7 @@ async function pollOnce() {
     if (egmHistoryResult.status === "fulfilled") snapshot.egmHistory = egmHistoryResult.value;
     if (stateHistoryResult.status === "fulfilled") snapshot.stateHistory = stateHistoryResult.value;
     if (runMarkersResult.status === "fulfilled") snapshot.runMarkers = runMarkersResult.value;
+    if (operatorDrillResult.status === "fulfilled") snapshot.operatorDrill = operatorDrillResult.value;
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
     if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
@@ -3658,6 +3852,7 @@ async function pollOnce() {
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
     if (stateHistoryResult.status !== "fulfilled") failures.push("state history unavailable");
     if (runMarkersResult.status !== "fulfilled") failures.push("run markers unavailable");
+    if (operatorDrillResult.status !== "fulfilled") failures.push("operator drill unavailable");
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
     if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
@@ -3769,6 +3964,33 @@ function bindControls() {
   $("run-marker-end-button").addEventListener("click", () => {
     submitRunMarker("end");
   });
+  $("operator-drill-comms-online-button").addEventListener("click", () => {
+    submitOperatorDrillAction("comms_online");
+  });
+  $("operator-drill-keepalive-button").addEventListener("click", () => {
+    submitOperatorDrillAction("keepalive");
+  });
+  $("operator-drill-burst-button").addEventListener("click", () => {
+    submitOperatorDrillAction("keepalive_burst");
+  });
+  $("operator-drill-resume-button").addEventListener("click", () => {
+    submitOperatorDrillAction("resume");
+  });
+  $("operator-drill-pause-button").addEventListener("click", () => {
+    submitOperatorDrillAction("pause");
+  });
+  $("operator-drill-clear-button").addEventListener("click", () => {
+    submitOperatorDrillAction("clear");
+  });
+  $("operator-drill-egm-id").addEventListener("change", () => {
+    renderOperatorDrill(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("operator-drill-interval-ms").addEventListener("input", () => {
+    renderOperatorDrill(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("operator-drill-burst-count").addEventListener("input", () => {
+    renderOperatorDrill(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
   $("run-report-start-marker").addEventListener("change", (event) => {
     clientState.selectedRunReportStartID = Number(event.target.value) || 0;
     renderRunReportControls(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
@@ -3869,6 +4091,7 @@ renderSessionEvidence(emptySnapshot());
 renderRunMarkerControls(emptySnapshot());
 renderRunReportControls(emptySnapshot());
 renderHeartbeatPolicy(emptySnapshot());
+renderOperatorDrill(emptySnapshot());
 renderHeartbeatSummary(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());
 schedulePoll(0);

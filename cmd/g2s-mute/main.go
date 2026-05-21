@@ -93,6 +93,7 @@ func main() {
 	eng := engine.NewWithAuditSink(cfg.ControllerID, cfg.EGMRoster, auditStore)
 	eng.Start(ctx)
 	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now(), Detail: "startup complete"})
+	drillManager := newOperatorDrillManager(eng, cfg.EGMRoster, cfg.Timeouts.EGMHeartbeatIntervalMS)
 
 	if *simulateTrigger {
 		go func() {
@@ -128,6 +129,7 @@ func main() {
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
 	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
 	mux.HandleFunc("/api/run-markers", runMarkersHandler(auditStore, cfg))
+	mux.HandleFunc("/api/operator-drill", operatorDrillHandler(drillManager, cfg))
 	mux.HandleFunc(
 		"/api/heartbeat-policy",
 		requireMutationAuthForMethods(
@@ -186,6 +188,7 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	drillManager.shutdown(shutdownCtx)
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown http server: %v", err)
 	}
