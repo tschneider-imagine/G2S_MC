@@ -157,8 +157,24 @@ const dashboardHTML = `<!doctype html>
           <div><dt>Lab Optional Certificate Count</dt><dd id="first-cabinet-cert-lab-optional">-</dd></div>
           <div><dt>API Auth State</dt><dd id="first-cabinet-auth-state">-</dd></div>
         </dl>
+        <div class="mute-path-status-wrap">
+          <p class="label">Mute Path vs Runbook Readiness</p>
+          <div id="mute-path-summary-grid" class="mute-path-summary-grid">
+            <div id="mute-path-status-card" class="operator-readiness-group group-informational mute-path-status-card">
+              <strong id="mute-path-state">-</strong>
+              <span id="mute-path-message" class="muted-text">Mute path status will appear with telemetry.</span>
+              <span id="mute-path-confidence" class="muted-text">Software signal only.</span>
+            </div>
+            <div id="runbook-readiness-status-card" class="operator-readiness-group group-informational runbook-readiness-status-card">
+              <strong id="runbook-readiness-state">-</strong>
+              <span id="runbook-readiness-message" class="muted-text">Runbook readiness status will appear with telemetry.</span>
+              <span id="runbook-readiness-next" class="muted-text">Next action will appear here.</span>
+            </div>
+          </div>
+          <div id="mute-path-prep-status" class="muted-text">Cabinet prep status will appear with telemetry.</div>
+        </div>
         <div class="first-cabinet-session-blockers-wrap">
-          <p class="label">Operator Signals</p>
+          <p class="label">Runbook Blockers and Signals</p>
           <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
         </div>
         <div class="first-cabinet-session-actions-wrap">
@@ -1550,6 +1566,33 @@ button:disabled {
   background: #f8fbf8;
 }
 
+.mute-path-status-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+}
+
+.mute-path-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mute-path-status-card,
+.runbook-readiness-status-card {
+  min-height: 88px;
+}
+
+.mute-path-status-card strong,
+.runbook-readiness-status-card strong {
+  font-size: 14px;
+}
+
+#mute-path-prep-status {
+  font-size: 13px;
+}
+
 .operator-action-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1735,6 +1778,10 @@ button:disabled {
 
   .operator-action-summary-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .mute-path-summary-grid {
+    grid-template-columns: 1fr;
   }
 
   .form-grid,
@@ -2071,6 +2118,8 @@ function selectedEGMDetailForSnapshot(snapshot) {
       last_seen_at: "",
       heartbeat_label: "",
       heartbeat_last_keepalive_at: "",
+      live_signal: "UNKNOWN",
+      live_signal_detail: "",
       in_first_test_set: false,
       focus_mode: focus.mode,
       message: focusedID
@@ -2078,6 +2127,10 @@ function selectedEGMDetailForSnapshot(snapshot) {
         : "Select one EGM focus to view cabinet-level detail."
     };
   }
+  const liveObserved = selected.total_events > 0 || numericTime(selected.last_seen_at) > 0;
+  const liveSignalDetail = selected.heartbeat_events > 0
+    ? "commsOnLine/keepAlive traffic observed."
+    : (liveObserved ? "EGM telemetry observed." : "No EGM telemetry observed yet.");
   return {
     scope_label: focus.label,
     egm_id: selected.egm_id,
@@ -2086,9 +2139,11 @@ function selectedEGMDetailForSnapshot(snapshot) {
     last_seen_at: selected.last_seen_at,
     heartbeat_label: selected.heartbeat_label,
     heartbeat_last_keepalive_at: selected.heartbeat_last_keepalive_at,
+    live_signal: liveObserved ? "OBSERVED" : "NOT_OBSERVED",
+    live_signal_detail: liveSignalDetail,
     in_first_test_set: firstTestIDs.has(selected.egm_id),
     focus_mode: focus.mode,
-    message: selected.total_events > 0
+    message: liveObserved
       ? "Live telemetry is present for this EGM."
       : "No EGM history rows yet; waiting for session traffic."
   };
@@ -2104,7 +2159,7 @@ function renderSelectedEGMDetail(snapshot) {
   renderItems("selected-egm-detail", [detail], "", (item) =>
     "<div class=\"item timeline-entry\">" +
       "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id) + "</span>" + egmSourcePill(item.source) + statusPill(item.status) + "</div></div>" +
-      "<span>last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ") | heartbeat " + escapeHTML(item.heartbeat_label || "-") + " | last keepAlive " + escapeHTML(fmtTime(item.heartbeat_last_keepalive_at)) + "</span>" +
+      "<span>live signal " + escapeHTML(item.live_signal || "-") + " | last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ") | heartbeat " + escapeHTML(item.heartbeat_label || "-") + " | last keepAlive " + escapeHTML(fmtTime(item.heartbeat_last_keepalive_at)) + "</span>" +
       "<span>first-test set: " + escapeHTML(item.in_first_test_set ? "yes" : "no") + " | " + escapeHTML(item.message || "") + "</span>" +
     "</div>"
   );
@@ -2763,6 +2818,83 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   };
 }
 
+function mutePathClassForState(state) {
+  if (state === "NOT_GATED_BY_RUNBOOK") return "group-ready_now";
+  if (state === "UNKNOWN") return "group-lab_warning";
+  return "group-informational";
+}
+
+function runbookReadinessClassForState(state) {
+  if (state === "LAB_READY") return "group-ready_now";
+  if (state === "BLOCKED") return "group-needs_operator_action";
+  return "group-informational";
+}
+
+function buildMutePathStatus(snapshot, session, readinessModel, workflow) {
+  const runbookState = session?.overallState || "UNKNOWN";
+  const runbookBlocked = runbookState === "BLOCKED";
+  const runbookBlockers = Array.isArray(session?.blockers) ? session.blockers : [];
+  const runbookWarnings = Array.isArray(readinessModel?.lab_warning) ? readinessModel.lab_warning : [];
+  const nextActions = Array.isArray(readinessModel?.next_actions) ? readinessModel.next_actions : [];
+  const groupedRows = groupedSummaryRowsForSnapshot(snapshot);
+  const observedEGMs = groupedRows.filter((row) => row.total_events > 0 || numericTime(row.last_seen_at) > 0).length;
+
+  const mutePathState = "NOT_GATED_BY_RUNBOOK";
+  const mutePathNote = runbookBlocked
+    ? "Mute path is not gated by runbook readiness; this BLOCKED state applies to runbook prep only."
+    : "Mute path is not gated by runbook readiness.";
+  const confidenceNote = "Software signal only; physical mute-actuator verification is outside this dashboard.";
+  const runbookMessage = runbookBlocked
+    ? "Runbook readiness is blocked for first cabinet session."
+    : "Runbook readiness is clear for first cabinet session.";
+  const prepStatus = runbookBlocked
+    ? "Cabinet prep can continue by resolving runbook actions."
+    : "Cabinet prep can continue and first cabinet session can start.";
+  const nextAction = nextActions[0] || (runbookBlocked
+    ? "Resolve listed runbook actions before first cabinet session."
+    : "Start cabinet session and capture evidence.");
+
+  return {
+    mute_path_state: mutePathState,
+    mute_path_note: mutePathNote,
+    confidence_note: confidenceNote,
+    runbook_readiness_state: runbookState,
+    runbook_message: runbookMessage,
+    runbook_blocker_count: runbookBlockers.length,
+    runbook_warning_count: runbookWarnings.length,
+    next_action: nextAction,
+    can_continue_cabinet_prep: true,
+    cabinet_prep_status: prepStatus,
+    workflow_step: workflow?.current_step || "",
+    observed_egm_count: observedEGMs
+  };
+}
+
+function renderMutePathStatus(model) {
+  const summary = model || {};
+  $("mute-path-state").textContent = summary.mute_path_state || "UNKNOWN";
+  $("mute-path-message").textContent = summary.mute_path_note || "Mute path status unavailable.";
+  $("mute-path-confidence").textContent = summary.confidence_note || "Software signal only.";
+
+  const muteCard = $("mute-path-status-card");
+  muteCard.className = "operator-readiness-group mute-path-status-card " + mutePathClassForState(summary.mute_path_state || "UNKNOWN");
+
+  $("runbook-readiness-state").textContent = summary.runbook_readiness_state || "UNKNOWN";
+  $("runbook-readiness-message").textContent = (summary.runbook_message || "Runbook readiness status unavailable.") +
+    " Blockers: " + String(summary.runbook_blocker_count || 0) +
+    " | Lab warnings: " + String(summary.runbook_warning_count || 0);
+  $("runbook-readiness-next").textContent = "Next action: " + (summary.next_action || "-");
+
+  const runbookCard = $("runbook-readiness-status-card");
+  runbookCard.className = "operator-readiness-group runbook-readiness-status-card " + runbookReadinessClassForState(summary.runbook_readiness_state || "UNKNOWN");
+
+  const prepStatus = summary.can_continue_cabinet_prep === true ? "YES" : "NO";
+  $("mute-path-prep-status").textContent = "Cabinet prep can continue: " + prepStatus +
+    ". " + (summary.cabinet_prep_status || "-") +
+    " Current workflow step: " + (summary.workflow_step || "-") +
+    ". Observed EGMs: " + String(summary.observed_egm_count || 0) + ".";
+}
+
 function renderOperatorReadinessModel(model) {
   const readiness = model || { groups: [], counts: {}, next_actions: [] };
   $("operator-action-ready-count").textContent = String(readiness?.counts?.ready_now || 0);
@@ -2785,10 +2917,11 @@ function renderFirstCabinetSession(snapshot) {
   const session = buildFirstCabinetSessionState(snapshot);
   const workflow = buildCabinetSessionWorkflow(snapshot, session);
   const readinessModel = buildOperatorReadinessModel(snapshot, session, workflow);
+  const mutePathStatus = buildMutePathStatus(snapshot, session, readinessModel, workflow);
   const stateBadge = $("first-cabinet-session-state");
   stateBadge.textContent = session.overallState;
   stateBadge.className = "source-pill " + (session.readyForSession ? "source-file" : "source-mixed");
-  $("first-cabinet-session-message").textContent = session.message + " Current workflow step: " + workflow.current_step + ".";
+  $("first-cabinet-session-message").textContent = session.message + " Current workflow step: " + workflow.current_step + ". Runbook readiness is separate from mute-path status.";
 
   $("first-cabinet-overall").textContent = session.overallState;
   $("first-cabinet-last-checked").textContent = fmtTime(session.lastCheckedValue);
@@ -2808,6 +2941,7 @@ function renderFirstCabinetSession(snapshot) {
   } else {
     blockerList.innerHTML = session.blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
   }
+  renderMutePathStatus(mutePathStatus);
   renderOperatorReadinessModel(readinessModel);
 
   renderItems("first-cabinet-session-workflow", workflow.steps, "No operator workflow data yet.", (step) =>
@@ -2840,6 +2974,7 @@ function buildSessionEvidence(snapshot) {
   const groupedSummaryFocused = groupedRowsForCurrentFocus(groupedSummaryAll);
   const selectedEGMDetail = selectedEGMDetailForSnapshot(snapshot);
   const readinessModel = buildOperatorReadinessModel(snapshot, session, workflow);
+  const mutePathStatus = buildMutePathStatus(snapshot, session, readinessModel, workflow);
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
@@ -2853,6 +2988,14 @@ function buildSessionEvidence(snapshot) {
     workflow: workflow,
     selected_egm_detail: selectedEGMDetail,
     action_model: readinessModel,
+    mute_path: mutePathStatus,
+    runbook_readiness: {
+      state: mutePathStatus.runbook_readiness_state || "UNKNOWN",
+      blocker_count: mutePathStatus.runbook_blocker_count || 0,
+      warning_count: mutePathStatus.runbook_warning_count || 0,
+      can_continue_cabinet_prep: mutePathStatus.can_continue_cabinet_prep === true,
+      next_action: mutePathStatus.next_action || ""
+    },
     next_operator_actions: readinessModel.next_actions,
     lab_warnings: readinessModel.lab_warning,
     session: {
@@ -2920,6 +3063,10 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- Ready for session: " + String(evidence.session.ready_for_session === true),
     "- Readyz state: " + (evidence.session.readyz_state || "-"),
     "- Preflight state: " + (evidence.session.preflight_state || "-"),
+    "- Runbook readiness state: " + (evidence?.runbook_readiness?.state || "UNKNOWN"),
+    "- Runbook prep can continue: " + String(evidence?.runbook_readiness?.can_continue_cabinet_prep === true),
+    "- Mute path state: " + (evidence?.mute_path?.mute_path_state || "UNKNOWN"),
+    "- Mute path note: " + (evidence?.mute_path?.mute_path_note || "-"),
     "- API auth state: " + (evidence.session.api_auth_state || "-"),
     "- Cabinet profile source: " + (evidence.cabinet_profile.source || "-"),
     "- Wire host URL: " + (evidence.cabinet_profile.wire_host_url || "-"),
@@ -2941,7 +3088,15 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- Drill heartbeat events: " + String(evidence?.operator_drill?.drill_events || 0),
     ""
   ];
-  lines.push("## Blockers", "");
+  lines.push("## Mute Path Note", "");
+  lines.push("- " + (evidence?.mute_path?.mute_path_note || "Mute path status unavailable."));
+  lines.push("- " + (evidence?.mute_path?.confidence_note || "Software signal only."));
+  lines.push("", "## Runbook Readiness", "");
+  lines.push("- State: " + (evidence?.runbook_readiness?.state || "UNKNOWN"));
+  lines.push("- Blocker count: " + String(evidence?.runbook_readiness?.blocker_count || 0));
+  lines.push("- Lab warning count: " + String(evidence?.runbook_readiness?.warning_count || 0));
+  lines.push("- Next action: " + (evidence?.runbook_readiness?.next_action || "-"));
+  lines.push("", "## Runbook Blockers", "");
   if (Array.isArray(evidence.session.blockers) && evidence.session.blockers.length) {
     evidence.session.blockers.forEach((item) => lines.push("- " + item));
   } else {
@@ -2980,6 +3135,8 @@ function buildSessionEvidenceMarkdown(evidence) {
     lines.push("- EGM ID: " + selectedEGMDetail.egm_id);
     lines.push("- Source: " + (selectedEGMDetail.source || "-"));
     lines.push("- Status: " + (selectedEGMDetail.status || "-"));
+    lines.push("- Live signal: " + (selectedEGMDetail.live_signal || "-"));
+    lines.push("- Live signal detail: " + (selectedEGMDetail.live_signal_detail || "-"));
     lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
     lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
     lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
@@ -3742,6 +3899,7 @@ function boundedRunReport(snapshot) {
   const session = buildFirstCabinetSessionState(snapshot);
   const workflow = buildCabinetSessionWorkflow(snapshot, session);
   const actionModel = buildOperatorReadinessModel(snapshot, session, workflow);
+  const mutePathStatus = buildMutePathStatus(snapshot, session, actionModel, workflow);
   const selectedEGMDetail = selectedEGMDetailForSnapshot(snapshot);
   const selection = normalizeRunReportSelections(snapshot);
   if (!selection.start || !selection.end) {
@@ -3777,6 +3935,14 @@ function boundedRunReport(snapshot) {
     workflow: workflow,
     selected_egm_detail: selectedEGMDetail,
     action_model: actionModel,
+    mute_path: mutePathStatus,
+    runbook_readiness: {
+      state: mutePathStatus.runbook_readiness_state || "UNKNOWN",
+      blocker_count: mutePathStatus.runbook_blocker_count || 0,
+      warning_count: mutePathStatus.runbook_warning_count || 0,
+      can_continue_cabinet_prep: mutePathStatus.can_continue_cabinet_prep === true,
+      next_action: mutePathStatus.next_action || ""
+    },
     next_operator_actions: actionModel.next_actions,
     lab_warnings: actionModel.lab_warning,
     window: {
@@ -3829,6 +3995,10 @@ function buildRunReportMarkdown(report) {
     "- EGM focus: " + (report?.egm_focus?.label || "All EGMs"),
     "- EGM history scope: " + (report?.scope?.egm_history_scope || "FULL_SESSION"),
     "- Grouped summary scope: " + (report?.scope?.grouped_summary_scope || "FULL_SESSION"),
+    "- Runbook readiness state: " + (report?.runbook_readiness?.state || "UNKNOWN"),
+    "- Runbook prep can continue: " + String(report?.runbook_readiness?.can_continue_cabinet_prep === true),
+    "- Mute path state: " + (report?.mute_path?.mute_path_state || "UNKNOWN"),
+    "- Mute path note: " + (report?.mute_path?.mute_path_note || "-"),
     "- Host ID: " + (report.cabinet_profile.host_id || "-"),
     "- Wire host URL: " + (report.cabinet_profile.wire_host_url || "-"),
     "- Start marker: " + (report.window.start_marker.title || "-"),
@@ -3865,6 +4035,18 @@ function buildRunReportMarkdown(report) {
     "- Auto heartbeat running: " + String(report?.operator_drill?.state?.auto_heartbeat_running === true),
     "- Auto heartbeat paused: " + String(report?.operator_drill?.state?.auto_heartbeat_paused === true),
     "",
+    "## Mute Path Note",
+    "",
+    "- " + (report?.mute_path?.mute_path_note || "Mute path status unavailable."),
+    "- " + (report?.mute_path?.confidence_note || "Software signal only."),
+    "",
+    "## Runbook Readiness",
+    "",
+    "- State: " + (report?.runbook_readiness?.state || "UNKNOWN"),
+    "- Blocker count: " + String(report?.runbook_readiness?.blocker_count || 0),
+    "- Lab warning count: " + String(report?.runbook_readiness?.warning_count || 0),
+    "- Next action: " + (report?.runbook_readiness?.next_action || "-"),
+    "",
     "## Workflow",
     "",
     "- Current step: " + (report?.workflow?.current_step || "-"),
@@ -3898,6 +4080,8 @@ function buildRunReportMarkdown(report) {
     lines.push("- EGM ID: " + selectedEGMDetail.egm_id);
     lines.push("- Source: " + (selectedEGMDetail.source || "-"));
     lines.push("- Status: " + (selectedEGMDetail.status || "-"));
+    lines.push("- Live signal: " + (selectedEGMDetail.live_signal || "-"));
+    lines.push("- Live signal detail: " + (selectedEGMDetail.live_signal_detail || "-"));
     lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
     lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
     lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
