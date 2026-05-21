@@ -130,7 +130,7 @@ const dashboardHTML = `<!doctype html>
           <div><dt>API Auth State</dt><dd id="first-cabinet-auth-state">-</dd></div>
         </dl>
         <div class="first-cabinet-session-blockers-wrap">
-          <p class="label">Session Blockers</p>
+          <p class="label">Operator Signals</p>
           <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
         </div>
       </div>
@@ -321,12 +321,12 @@ const dashboardHTML = `<!doctype html>
             <strong>Heartbeat Policy</strong>
             <span id="heartbeat-policy-source" class="source-pill source-file">file</span>
           </div>
-          <span id="heartbeat-policy-message" class="muted-text">Tune warning and blocking thresholds for heartbeat gap handling.</span>
+          <span id="heartbeat-policy-message" class="muted-text">Tune warning and escalation thresholds for heartbeat gap handling.</span>
           <div class="form-grid run-report-grid">
             <label>Interval (ms)<input id="heartbeat-policy-interval" type="number" disabled></label>
             <label>Updated<input id="heartbeat-policy-updated" type="text" disabled></label>
             <label>Warning After Missed Beats<input id="heartbeat-policy-warning-after-missed" type="number" min="1"></label>
-            <label>Block Active Run After Missed Beats<input id="heartbeat-policy-block-after-missed" type="number" min="1"></label>
+            <label>Escalate Alert After Missed Beats<input id="heartbeat-policy-block-after-missed" type="number" min="1"></label>
           </div>
           <div class="setup-details run-report-details">
             <div>
@@ -334,7 +334,7 @@ const dashboardHTML = `<!doctype html>
               <strong id="heartbeat-policy-warning-gap">-</strong>
             </div>
             <div>
-              <p class="label">Blocker Gap</p>
+              <p class="label">Escalation Gap</p>
               <strong id="heartbeat-policy-block-gap">-</strong>
             </div>
           </div>
@@ -1547,10 +1547,10 @@ function heartbeatSummary(records, policy, referenceTime) {
   let severity = "idle";
   if (heartbeats.length > 0) {
     if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > blockThresholdMs) {
-      health = "BLOCKING";
+      health = "ESCALATED";
       label = "Keepalive missing";
-      message = "commsOnLine was observed, but keepAlive traffic did not follow before the blocking threshold.";
-      severity = "blocking";
+      message = "commsOnLine was observed, but keepAlive traffic did not follow before the escalation threshold.";
+      severity = "critical";
     } else if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > warningThresholdMs) {
       health = "WARNING";
       label = "Keepalive delayed";
@@ -1567,10 +1567,10 @@ function heartbeatSummary(records, policy, referenceTime) {
       message = "Heartbeat traffic is present; configured interval is unavailable so gap checks are disabled.";
       severity = "info";
     } else if (maxGapMs > blockThresholdMs || sinceLastKeepAliveMs > blockThresholdMs) {
-      health = "BLOCKING";
+      health = "ESCALATED";
       label = "Gap detected";
-      message = "Heartbeat traffic is present, but a keepAlive gap exceeded the blocking threshold.";
-      severity = "blocking";
+      message = "Heartbeat traffic is present, but a keepAlive gap exceeded the escalation threshold.";
+      severity = "critical";
     } else if (maxGapMs > warningThresholdMs || sinceLastKeepAliveMs > warningThresholdMs) {
       health = "WARNING";
       label = "Gap warning";
@@ -1820,16 +1820,12 @@ function buildFirstCabinetSessionState(snapshot) {
   if (authRequired && !getSetupToken() && !getCertToken()) {
     appendUniqueBlocker(blockers, "API token is required for protected setup actions");
   }
-  if (heartbeat.severity === "blocking" && runWindowIsActive(snapshot)) {
-    appendUniqueBlocker(blockers, "Heartbeat gap exceeds configured interval");
-  }
-
   const readyForSession = blockers.length === 0 && readyzState !== "UNAVAILABLE" && preflightState === "PASS";
   const overallState = readyForSession ? "LAB_READY" : "BLOCKED";
   return {
     overallState: overallState,
     readyForSession: readyForSession,
-    message: readyForSession ? "Ready for first cabinet lab session" : "Resolve blockers before first cabinet runbook session.",
+    message: readyForSession ? "Ready for first cabinet lab session" : "Resolve readiness issues before first cabinet runbook session.",
     lastCheckedValue: lastCheckedValue,
     readyzState: readyzState,
     preflightState: preflightState,
@@ -2634,10 +2630,10 @@ function validateHeartbeatPolicyForm(snapshot) {
     problems.push("Warning After Missed Beats must be a whole number greater than zero.");
   }
   if (!Number.isInteger(payload.block_after_missed) || payload.block_after_missed <= 0) {
-    problems.push("Block Active Run After Missed Beats must be a whole number greater than zero.");
+    problems.push("Escalate Alert After Missed Beats must be a whole number greater than zero.");
   }
   if (payload.block_after_missed > 0 && payload.warning_after_missed > 0 && payload.block_after_missed < payload.warning_after_missed) {
-    problems.push("Block Active Run After Missed Beats must be greater than or equal to Warning After Missed Beats.");
+    problems.push("Escalate Alert After Missed Beats must be greater than or equal to Warning After Missed Beats.");
   }
   const intervalMs = Number(currentHeartbeatPolicy(snapshot).interval_ms || 0);
   $("heartbeat-policy-warning-gap").textContent = intervalMs > 0 && payload.warning_after_missed > 0 ? fmtDurationMs(intervalMs * payload.warning_after_missed) : "-";
@@ -2666,7 +2662,7 @@ function renderHeartbeatPolicy(snapshot) {
   $("heartbeat-policy-clear-button").disabled = !policyResponse?.override_present || (tokenRequired && !tokenPresent);
   $("heartbeat-policy-message").textContent = tokenRequired && !tokenPresent
     ? "Enter a setup or certificate API token before changing heartbeat policy."
-    : "Tune warning and blocking thresholds for heartbeat gap handling.";
+    : "Tune warning and escalation thresholds for heartbeat gap handling.";
 }
 
 function syncHeartbeatPolicyFromSnapshot(snapshot) {
@@ -3496,8 +3492,8 @@ function renderAlerts(snapshot) {
     setAlert("warning", "Blocking certificate issues: " + blockingCerts.length, "Required certificates must be corrected for healthy runtime.");
     return;
   }
-  if (heartbeat.severity === "blocking" || heartbeat.severity === "warning") {
-    setAlert("warning", "Heartbeat anomaly detected", heartbeat.message);
+  if (heartbeat.severity === "critical" || heartbeat.severity === "warning") {
+    setAlert(heartbeat.severity === "critical" ? "critical" : "warning", "Heartbeat anomaly detected", heartbeat.message);
     return;
   }
   if (heartbeat.health === "ONLINE_ONLY") {
