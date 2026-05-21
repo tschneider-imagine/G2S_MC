@@ -23,6 +23,13 @@ const (
 	EGMGrey   EGMHealth = "GREY"
 )
 
+type EGMSource string
+
+const (
+	EGMSourceConfigured EGMSource = "CONFIGURED"
+	EGMSourceDiscovered EGMSource = "DISCOVERED"
+)
+
 type EGM struct {
 	ID              string    `json:"id"`
 	IPAddress       string    `json:"ip_address"`
@@ -31,6 +38,7 @@ type EGM struct {
 	CabinetFamily   string    `json:"cabinet_family,omitempty"`
 	GameTitle       string    `json:"game_title,omitempty"`
 	SoftwareVersion string    `json:"software_version,omitempty"`
+	Source          EGMSource `json:"source"`
 	Status          EGMHealth `json:"status"`
 	LastError       string    `json:"last_error,omitempty"`
 	LastSeen        time.Time `json:"last_seen,omitempty"`

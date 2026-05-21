@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestValidateRejectsMissingRoster(t *testing.T) {
+func TestValidateAllowsEmptyRoster(t *testing.T) {
 	cfg := Config{
 		ControllerID: "controller",
 		Database:     Database{Path: "controller.db"},
@@ -21,8 +21,8 @@ func TestValidateRejectsMissingRoster(t *testing.T) {
 		HardwareIO: HardwareIO{VoltageDropThresholdMS: 250},
 	}
 
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected missing roster to fail validation")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected empty roster to validate: %v", err)
 	}
 }
 

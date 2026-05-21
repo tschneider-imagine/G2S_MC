@@ -228,15 +228,15 @@ type runtimeInfo struct {
 
 type applianceStatus struct {
 	engine.Snapshot
-	Runtime                runtimeStatus         `json:"runtime"`
-	Readiness              readinessStatus       `json:"readiness"`
-	CabinetProfile         config.CabinetProfile `json:"cabinet_profile"`
-	HeartbeatPolicy        heartbeatPolicy       `json:"heartbeat_policy"`
-	HeartbeatPolicySource  string                `json:"heartbeat_policy_source"`
-	HeartbeatPolicyLastUpdatedAt *time.Time      `json:"heartbeat_policy_last_updated_at,omitempty"`
-	ProfileSource          string                `json:"profile_source"`
-	ProfileLastUpdatedAt   *time.Time            `json:"profile_last_updated_at,omitempty"`
-	ProfileDiffersFromFile bool                  `json:"profile_differs_from_file"`
+	Runtime                      runtimeStatus         `json:"runtime"`
+	Readiness                    readinessStatus       `json:"readiness"`
+	CabinetProfile               config.CabinetProfile `json:"cabinet_profile"`
+	HeartbeatPolicy              heartbeatPolicy       `json:"heartbeat_policy"`
+	HeartbeatPolicySource        string                `json:"heartbeat_policy_source"`
+	HeartbeatPolicyLastUpdatedAt *time.Time            `json:"heartbeat_policy_last_updated_at,omitempty"`
+	ProfileSource                string                `json:"profile_source"`
+	ProfileLastUpdatedAt         *time.Time            `json:"profile_last_updated_at,omitempty"`
+	ProfileDiffersFromFile       bool                  `json:"profile_differs_from_file"`
 }
 
 type readinessResponse struct {
@@ -285,25 +285,25 @@ type resolvedCabinetProfile struct {
 }
 
 type heartbeatPolicy struct {
-	IntervalMS          int `json:"interval_ms"`
-	WarningAfterMissed  int `json:"warning_after_missed"`
-	BlockAfterMissed    int `json:"block_after_missed"`
+	IntervalMS         int `json:"interval_ms"`
+	WarningAfterMissed int `json:"warning_after_missed"`
+	BlockAfterMissed   int `json:"block_after_missed"`
 }
 
 type resolvedHeartbeatPolicy struct {
-	Effective          heartbeatPolicy
-	File               heartbeatPolicy
-	Override           *store.HeartbeatPolicyOverride
-	PolicySource       string
+	Effective           heartbeatPolicy
+	File                heartbeatPolicy
+	Override            *store.HeartbeatPolicyOverride
+	PolicySource        string
 	PolicyLastUpdatedAt *time.Time
 }
 
 type heartbeatPolicyResponse struct {
-	Effective          heartbeatPolicy                `json:"effective"`
-	PolicySource       string                         `json:"policy_source"`
-	PolicyLastUpdatedAt *time.Time                    `json:"policy_last_updated_at,omitempty"`
-	OverridePresent    bool                           `json:"override_present"`
-	Override           *heartbeatPolicyOverrideView   `json:"override,omitempty"`
+	Effective           heartbeatPolicy              `json:"effective"`
+	PolicySource        string                       `json:"policy_source"`
+	PolicyLastUpdatedAt *time.Time                   `json:"policy_last_updated_at,omitempty"`
+	OverridePresent     bool                         `json:"override_present"`
+	Override            *heartbeatPolicyOverrideView `json:"override,omitempty"`
 }
 
 type heartbeatPolicyOverrideView struct {
@@ -401,16 +401,16 @@ func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *stor
 		return applianceStatus{}, err
 	}
 	return applianceStatus{
-		Snapshot:               snapshot,
-		Runtime:                buildRuntimeStatus(cfg, runtime, request),
-		Readiness:              buildReadinessStatus(snapshot, cfg, certificates, profile.Warning),
-		CabinetProfile:         profile.Effective,
-		HeartbeatPolicy:        heartbeat.Effective,
-		HeartbeatPolicySource:  heartbeat.PolicySource,
+		Snapshot:                     snapshot,
+		Runtime:                      buildRuntimeStatus(cfg, runtime, request),
+		Readiness:                    buildReadinessStatus(snapshot, cfg, certificates, profile.Warning),
+		CabinetProfile:               profile.Effective,
+		HeartbeatPolicy:              heartbeat.Effective,
+		HeartbeatPolicySource:        heartbeat.PolicySource,
 		HeartbeatPolicyLastUpdatedAt: heartbeat.PolicyLastUpdatedAt,
-		ProfileSource:          profile.ProfileSource,
-		ProfileLastUpdatedAt:   profile.ProfileLastUpdatedAt,
-		ProfileDiffersFromFile: profile.ProfileDiffersFromFile,
+		ProfileSource:                profile.ProfileSource,
+		ProfileLastUpdatedAt:         profile.ProfileLastUpdatedAt,
+		ProfileDiffersFromFile:       profile.ProfileDiffersFromFile,
 	}, nil
 }
 
@@ -455,8 +455,7 @@ func buildReadinessStatus(snapshot engine.Snapshot, cfg config.Config, certifica
 		}
 	}
 	if len(snapshot.EGMs) == 0 {
-		status.Overall = "DEGRADED"
-		status.Issues = append(status.Issues, "no EGMs configured")
+		status.Warnings = append(status.Warnings, "No EGM traffic has been observed yet")
 	}
 	for _, certificate := range certificates {
 		if certificateBlocksRuntime(cfg, certificate) {
@@ -864,10 +863,10 @@ func buildCabinetProfileResponse(profile resolvedCabinetProfile) cabinetProfileR
 
 func buildHeartbeatPolicyResponse(policy resolvedHeartbeatPolicy) heartbeatPolicyResponse {
 	response := heartbeatPolicyResponse{
-		Effective:          policy.Effective,
-		PolicySource:       policy.PolicySource,
+		Effective:           policy.Effective,
+		PolicySource:        policy.PolicySource,
 		PolicyLastUpdatedAt: policy.PolicyLastUpdatedAt,
-		OverridePresent:    policy.Override != nil,
+		OverridePresent:     policy.Override != nil,
 	}
 	if policy.Override != nil {
 		response.Override = &heartbeatPolicyOverrideView{

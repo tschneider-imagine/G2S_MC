@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +77,7 @@ func NewWithAuditSink(controllerID string, roster []config.EGM, audit AuditSink)
 			CabinetFamily:   item.CabinetFamily,
 			GameTitle:       item.GameTitle,
 			SoftwareVersion: item.SoftwareVersion,
+			Source:          model.EGMSourceConfigured,
 			Status:          model.EGMGreen,
 		}
 	}
@@ -153,15 +155,33 @@ func (e *Engine) handle(event Event) {
 		e.openIncident(event)
 		e.state = model.StateEmergencyActive
 	case EventG2SSessionOnline, EventKeepAlive:
-		if egm, ok := e.egms[event.EGMID]; ok {
-			egm.Status = model.EGMGreen
-			egm.LastSeen = event.At
-			egm.LastError = ""
-			e.egms[event.EGMID] = egm
-			e.recordEGMStatus(event, egm)
+		egmID := strings.TrimSpace(event.EGMID)
+		if egmID == "" {
+			break
 		}
+		event.EGMID = egmID
+		egm, ok := e.egms[egmID]
+		if !ok {
+			egm = model.EGM{
+				ID:     egmID,
+				Source: model.EGMSourceDiscovered,
+			}
+		}
+		if egm.Source == "" {
+			egm.Source = model.EGMSourceConfigured
+		}
+		egm.Status = model.EGMGreen
+		egm.LastSeen = event.At
+		egm.LastError = ""
+		e.egms[egmID] = egm
+		e.recordEGMStatus(event, egm)
 	case EventEGMResult:
-		if egm, ok := e.egms[event.EGMID]; ok {
+		egmID := strings.TrimSpace(event.EGMID)
+		if egmID == "" {
+			break
+		}
+		event.EGMID = egmID
+		if egm, ok := e.egms[egmID]; ok {
 			egm.LastSeen = event.At
 			if event.OK {
 				egm.Status = model.EGMRed
@@ -170,7 +190,7 @@ func (e *Engine) handle(event Event) {
 				egm.Status = model.EGMGrey
 				egm.LastError = event.Detail
 			}
-			e.egms[event.EGMID] = egm
+			e.egms[egmID] = egm
 			e.recordEGMStatus(event, egm)
 			e.recordEGMCompliance(event, egm)
 		}

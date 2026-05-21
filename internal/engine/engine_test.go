@@ -61,8 +61,61 @@ func TestSessionOnlineMarksEGMGreen(t *testing.T) {
 	eng.handle(Event{Type: EventG2SSessionOnline, EGMID: "EGM-1", At: time.Now()})
 
 	snapshot := eng.Snapshot()
-	if got := snapshot.EGMs[0].Status; got != model.EGMGreen {
+	egm, ok := snapshotEGMByID(snapshot, "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if got := egm.Status; got != model.EGMGreen {
 		t.Fatalf("expected EGM green, got %s", got)
+	}
+	if egm.Source != model.EGMSourceConfigured {
+		t.Fatalf("expected configured source, got %q", egm.Source)
+	}
+}
+
+func TestSessionOnlineDiscoversUnknownEGM(t *testing.T) {
+	eng := New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	now := time.Now()
+	eng.handle(Event{Type: EventG2SSessionOnline, EGMID: "EGM-2", At: now})
+
+	snapshot := eng.Snapshot()
+	egm, ok := snapshotEGMByID(snapshot, "EGM-2")
+	if !ok {
+		t.Fatalf("expected discovered EGM-2 in snapshot")
+	}
+	if egm.Source != model.EGMSourceDiscovered {
+		t.Fatalf("expected discovered source, got %q", egm.Source)
+	}
+	if egm.Status != model.EGMGreen {
+		t.Fatalf("expected discovered EGM to be GREEN, got %s", egm.Status)
+	}
+	if !egm.LastSeen.Equal(now) {
+		t.Fatalf("expected last seen to equal event time")
+	}
+}
+
+func TestKeepAliveDiscoversUnknownEGMAndRecordsAudit(t *testing.T) {
+	audit := &recordingAudit{}
+	eng := NewWithAuditSink("controller", []config.EGM{}, audit)
+	now := time.Now()
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-9", At: now})
+
+	snapshot := eng.Snapshot()
+	egm, ok := snapshotEGMByID(snapshot, "EGM-9")
+	if !ok {
+		t.Fatalf("expected discovered EGM-9 in snapshot")
+	}
+	if egm.Source != model.EGMSourceDiscovered {
+		t.Fatalf("expected discovered source, got %q", egm.Source)
+	}
+	if egm.Status != model.EGMGreen {
+		t.Fatalf("expected discovered EGM to be GREEN, got %s", egm.Status)
+	}
+	if len(audit.statuses) != 1 {
+		t.Fatalf("status records = %d, want 1", len(audit.statuses))
+	}
+	if audit.statuses[0].EGMID != "EGM-9" {
+		t.Fatalf("recorded egm_id = %q, want EGM-9", audit.statuses[0].EGMID)
 	}
 }
 
@@ -89,4 +142,13 @@ func TestAuditSinkRecordsIncidentAndEGMResult(t *testing.T) {
 	if len(audit.transitions) != 1 {
 		t.Fatalf("transition records = %d, want 1", len(audit.transitions))
 	}
+}
+
+func snapshotEGMByID(snapshot Snapshot, id string) (model.EGM, bool) {
+	for _, egm := range snapshot.EGMs {
+		if egm.ID == id {
+			return egm, true
+		}
+	}
+	return model.EGM{}, false
 }

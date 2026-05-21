@@ -85,9 +85,6 @@ func (c Config) Validate() error {
 	if c.WebUI.AllowTrustedPrivateNetworkMutations && c.WebUI.RequireLogin {
 		problems = append(problems, "web_ui.allow_trusted_private_network_mutations requires web_ui.require_login=false")
 	}
-	if len(c.EGMRoster) == 0 {
-		problems = append(problems, "egm_roster must contain at least one EGM")
-	}
 	for i, egm := range c.EGMRoster {
 		prefix := fmt.Sprintf("egm_roster[%d]", i)
 		requireText(&problems, prefix+".egm_id", egm.EGMID)

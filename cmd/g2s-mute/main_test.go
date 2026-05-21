@@ -283,6 +283,7 @@ func TestBuildReadinessStatusPrecedence(t *testing.T) {
 		certificates []model.CertificateInventory
 		wantOverall  string
 		wantIssue    string
+		wantWarning  string
 	}{
 		{
 			name:        "READY_LAB when TLS is disabled without degraded conditions",
@@ -302,14 +303,14 @@ func TestBuildReadinessStatusPrecedence(t *testing.T) {
 			wantIssue:   "audit store unavailable",
 		},
 		{
-			name: "no EGMs remains DEGRADED even when TLS is disabled",
+			name: "no EGMs becomes a warning while lab readiness remains READY_LAB",
 			cfg:  baseCfg,
 			snapshot: engine.Snapshot{
 				State: model.StateHealthy,
 				EGMs:  []model.EGM{},
 			},
-			wantOverall: "DEGRADED",
-			wantIssue:   "no EGMs configured",
+			wantOverall: "READY_LAB",
+			wantWarning: "No EGM traffic has been observed yet",
 		},
 		{
 			name: "blocking certificate remains DEGRADED even when TLS is disabled",
@@ -338,7 +339,15 @@ func TestBuildReadinessStatusPrecedence(t *testing.T) {
 				t.Fatalf("overall = %q, want %q", status.Overall, tc.wantOverall)
 			}
 			if tc.wantIssue == "" {
-				return
+				if tc.wantWarning == "" {
+					return
+				}
+				for _, warning := range status.Warnings {
+					if warning == tc.wantWarning {
+						return
+					}
+				}
+				t.Fatalf("warnings = %v, want %q", status.Warnings, tc.wantWarning)
 			}
 			for _, issue := range status.Issues {
 				if issue == tc.wantIssue {
@@ -536,9 +545,9 @@ func TestHeartbeatPolicyHandlerCRUD(t *testing.T) {
 
 	cfg := config.Config{
 		Timeouts: config.Timeouts{
-			EGMHeartbeatIntervalMS:          5000,
-			EGMHeartbeatWarningAfterMissed:  3,
-			EGMHeartbeatBlockAfterMissed:    6,
+			EGMHeartbeatIntervalMS:         5000,
+			EGMHeartbeatWarningAfterMissed: 3,
+			EGMHeartbeatBlockAfterMissed:   6,
 		},
 	}
 	handler := heartbeatPolicyHandler(auditStore, cfg)

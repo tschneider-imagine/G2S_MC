@@ -44,3 +44,74 @@ func TestCommsOnlineUpdatesEngine(t *testing.T) {
 	}
 	t.Fatal("expected EGM last seen to update")
 }
+
+func TestCommsOnlineDiscoversUnknownEGM(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-9"><commsOnLine/></g2sBody>`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := eng.Snapshot()
+		for _, egm := range snapshot.EGMs {
+			if egm.ID == "EGM-9" {
+				if egm.Source != model.EGMSourceDiscovered {
+					t.Fatalf("expected discovered source, got %q", egm.Source)
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected discovered EGM to appear in snapshot")
+}
+
+func TestKeepAliveDiscoversUnknownEGM(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-8"><keepAlive/></g2sBody>`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := eng.Snapshot()
+		for _, egm := range snapshot.EGMs {
+			if egm.ID == "EGM-8" {
+				if egm.Source != model.EGMSourceDiscovered {
+					t.Fatalf("expected discovered source, got %q", egm.Source)
+				}
+				if egm.Status != model.EGMGreen {
+					t.Fatalf("expected GREEN status, got %s", egm.Status)
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected discovered EGM to appear in snapshot")
+}

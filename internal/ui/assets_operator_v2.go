@@ -238,6 +238,7 @@ const dashboardHTML = `<!doctype html>
             <thead>
               <tr>
                 <th><button type="button" class="sort-button" data-sort-key="egm_id">EGM</button></th>
+                <th>Source</th>
                 <th><button type="button" class="sort-button" data-sort-key="status">Status</button></th>
                 <th>Address</th>
                 <th>Game</th>
@@ -245,7 +246,7 @@ const dashboardHTML = `<!doctype html>
               </tr>
             </thead>
             <tbody id="egm-table">
-              <tr><td colspan="5">Loading...</td></tr>
+              <tr><td colspan="6">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -711,6 +712,27 @@ h2 { font-size: 18px; }
 .source-file { background: var(--green); }
 .source-override { background: var(--blue); }
 .source-mixed { background: var(--yellow); }
+
+.egm-source {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.egm-source-configured {
+  background: #d8efe1;
+  color: #215a3d;
+}
+
+.egm-source-discovered {
+  background: #fbe8c4;
+  color: #6b4a12;
+}
 
 .cabinet-warning {
   color: #7b2d2a;
@@ -1708,6 +1730,14 @@ function setStatePill(el, value) {
 
 function statusPill(value) {
   return "<span class=\"status-pill " + stateClass(value, "status") + "\">" + (value || "-") + "</span>";
+}
+
+function egmSourcePill(source) {
+  const normalized = String(source || "").toUpperCase();
+  if (normalized === "DISCOVERED") {
+    return "<span class=\"egm-source egm-source-discovered\" data-egm-source=\"discovered\">discovered</span>";
+  }
+  return "<span class=\"egm-source egm-source-configured\" data-egm-source=\"configured\">configured</span>";
 }
 
 function escapeHTML(value) {
@@ -3073,6 +3103,7 @@ function renderEGMTable(status) {
   const rows = filtered.sort(compareEGM).map((egm) =>
     "<tr>" +
       "<td><strong>" + escapeHTML(egm.id) + "</strong><br><span class=\"minor\">" + escapeHTML((egm.vendor || "") + " " + (egm.cabinet_family || "")).trim() + "</span></td>" +
+      "<td>" + egmSourcePill(egm.source) + "</td>" +
       "<td>" + statusPill(egm.status) + "</td>" +
       "<td>" + escapeHTML((egm.ip_address || "-") + ":" + (egm.port || "-")) + "</td>" +
       "<td>" + escapeHTML(egm.game_title || "-") + "<br><span class=\"minor\">" + escapeHTML(egm.software_version || "") + "</span></td>" +
@@ -3080,7 +3111,7 @@ function renderEGMTable(status) {
     "</tr>"
   );
   $("egm-count").textContent = filtered.length + " / " + all.length + " EGMs";
-  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"5\">No EGMs match current filter</td></tr>";
+  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"6\">No EGMs match current filter</td></tr>";
   updateSortLabels();
 }
 
