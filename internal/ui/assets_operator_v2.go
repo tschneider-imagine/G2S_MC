@@ -2581,6 +2581,16 @@ function pushUniqueString(list, text) {
   list.push(value);
 }
 
+function preflightCheckByID(preflight, id) {
+  const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
+  for (let i = 0; i < checks.length; i++) {
+    if (String(checks[i]?.id || "") === id) {
+      return checks[i];
+    }
+  }
+  return null;
+}
+
 function groupedReadinessClass(key) {
   return String(key || "informational").toLowerCase().replace(/[^a-z0-9]+/g, "_");
 }
@@ -2652,6 +2662,12 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
       pushUniqueString(needsAction, "Cabinet preflight has unresolved failures.");
       pushUniqueString(nextActions, "Review failed preflight checks and resolve blocking items.");
     }
+  }
+  const preflightProfileCheck = preflightCheckByID(preflight, "cabinet_profile");
+  const placeholderFirstTestWarning = String(preflightProfileCheck?.detail || "").indexOf("lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER") >= 0;
+  if (placeholderFirstTestWarning) {
+    pushUniqueString(labWarning, "Replace placeholder first-test EGM IDs before real cabinet deployment.");
+    pushUniqueString(nextActions, "Replace placeholder first-test EGM IDs before real cabinet deployment.");
   }
 
   if (session?.profile?.wire_host_url && session?.profile?.host_id && Array.isArray(session?.firstEGMIDs) && session.firstEGMIDs.length > 0) {

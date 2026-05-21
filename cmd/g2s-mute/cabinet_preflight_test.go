@@ -336,6 +336,124 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 		assertCheckFailed(t, result.Checks, "certificate_mode_requirements")
 		assertCheckFailed(t, result.Checks, "certificate_san_wire_identity")
 	})
+
+	t.Run("lab mode with connected EGMs downgrades placeholder first-test ids to warning-only", func(t *testing.T) {
+		ctx := context.Background()
+		auditStore, err := store.Open(ctx, ":memory:")
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+		t.Cleanup(func() { _ = auditStore.Close() })
+
+		cfg := config.Config{
+			ControllerID: "G2S-MC-TEST",
+			Database:     config.Database{Path: ":memory:"},
+			WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
+			Crypto: config.Crypto{
+				WebServerCertPath: "",
+				WebServerKeyPath:  "",
+			},
+			G2S: config.G2S{
+				HostURL:      "http://127.0.0.1:8444/g2s",
+				EndpointPath: "/g2s",
+				RequireTLS:   false,
+			},
+			CabinetProfile: config.CabinetProfile{
+				WireHostURL:     "https://lab-cabinet.local:8444/g2s",
+				ListenerDNSName: "lab-cabinet.local",
+				RequiredSANDNS:  []string{"lab-cabinet.local"},
+				HostID:          "HOST-LAB-1001",
+				FirstTestEGMIDs: []string{"EGM-01"},
+			},
+			EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+		}
+
+		if _, err := refreshCertificateInventory(ctx, auditStore, cfg, time.Now().UTC()); err != nil {
+			t.Fatalf("refresh certificate inventory: %v", err)
+		}
+		eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
+		runCtx, cancel := context.WithCancel(ctx)
+		t.Cleanup(cancel)
+		eng.Start(runCtx)
+		eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now()})
+		waitForLastEvent(t, eng, string(engine.EventBootComplete))
+		eng.Submit(engine.Event{Type: engine.EventKeepAlive, At: time.Now().Add(time.Second), EGMID: "EGM-01"})
+		waitForLastEvent(t, eng, string(engine.EventKeepAlive))
+
+		result := evaluateCabinetPreflight(ctx, eng, auditStore, cfg, runtimeInfo{
+			ConfigPath: "/etc/g2s-mute/config.json",
+			StartedAt:  time.Now().Add(-5 * time.Second),
+		})
+		if result.Overall != preflightPass {
+			t.Fatalf("overall = %q, want PASS; blockers=%v", result.Overall, result.Blockers)
+		}
+		assertCheckPassed(t, result.Checks, "cabinet_profile")
+		profileCheck := checkByID(t, result.Checks, "cabinet_profile")
+		if !strings.Contains(profileCheck.Detail, "lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER") {
+			t.Fatalf("expected placeholder warning code in cabinet_profile detail, got %q", profileCheck.Detail)
+		}
+		if len(result.Blockers) != 0 {
+			t.Fatalf("expected no blockers, got %v", result.Blockers)
+		}
+	})
+
+	t.Run("placeholder first-test ids remain blocking without observed EGM traffic", func(t *testing.T) {
+		ctx := context.Background()
+		auditStore, err := store.Open(ctx, ":memory:")
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+		t.Cleanup(func() { _ = auditStore.Close() })
+
+		cfg := config.Config{
+			ControllerID: "G2S-MC-TEST",
+			Database:     config.Database{Path: ":memory:"},
+			WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
+			Crypto: config.Crypto{
+				WebServerCertPath: "",
+				WebServerKeyPath:  "",
+			},
+			G2S: config.G2S{
+				HostURL:      "http://127.0.0.1:8444/g2s",
+				EndpointPath: "/g2s",
+				RequireTLS:   false,
+			},
+			CabinetProfile: config.CabinetProfile{
+				WireHostURL:     "https://lab-cabinet.local:8444/g2s",
+				ListenerDNSName: "lab-cabinet.local",
+				RequiredSANDNS:  []string{"lab-cabinet.local"},
+				HostID:          "HOST-LAB-1001",
+				FirstTestEGMIDs: []string{"EGM-01"},
+			},
+			EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+		}
+
+		if _, err := refreshCertificateInventory(ctx, auditStore, cfg, time.Now().UTC()); err != nil {
+			t.Fatalf("refresh certificate inventory: %v", err)
+		}
+		eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
+		runCtx, cancel := context.WithCancel(ctx)
+		t.Cleanup(cancel)
+		eng.Start(runCtx)
+		eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now()})
+		waitForLastEvent(t, eng, string(engine.EventBootComplete))
+
+		result := evaluateCabinetPreflight(ctx, eng, auditStore, cfg, runtimeInfo{
+			ConfigPath: "/etc/g2s-mute/config.json",
+			StartedAt:  time.Now().Add(-5 * time.Second),
+		})
+		if result.Overall != preflightFail {
+			t.Fatalf("overall = %q, want FAIL", result.Overall)
+		}
+		assertCheckFailed(t, result.Checks, "cabinet_profile")
+		profileCheck := checkByID(t, result.Checks, "cabinet_profile")
+		if !strings.Contains(profileCheck.Detail, "first_test_egm_ids") {
+			t.Fatalf("expected first_test_egm_ids detail for blocking path, got %q", profileCheck.Detail)
+		}
+		if len(result.Blockers) == 0 {
+			t.Fatal("expected blocker list for strict path")
+		}
+	})
 }
 
 func TestCabinetPreflightHandler(t *testing.T) {
@@ -514,6 +632,19 @@ func assertCheckFailed(t *testing.T, checks []cabinetPreflightCheck, id string) 
 		if check.ID == id {
 			if check.Result != preflightFail {
 				t.Fatalf("check %s result = %s, want FAIL", id, check.Result)
+			}
+			return
+		}
+	}
+	t.Fatalf("check %s not found", id)
+}
+
+func assertCheckPassed(t *testing.T, checks []cabinetPreflightCheck, id string) {
+	t.Helper()
+	for _, check := range checks {
+		if check.ID == id {
+			if check.Result != preflightPass {
+				t.Fatalf("check %s result = %s, want PASS", id, check.Result)
 			}
 			return
 		}

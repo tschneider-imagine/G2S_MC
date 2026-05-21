@@ -73,7 +73,7 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 	certificates, certificatesErr := store.ListCertificateInventory(ctx)
 
 	addCheck(evaluatePreflightReadiness(status, statusErr), "")
-	addCheck(evaluatePreflightProfileCompleteness(profile, profileErr), "")
+	addCheck(evaluatePreflightProfileCompleteness(status, statusErr, cfg, profile, profileErr), "")
 	addCheck(evaluatePreflightProfileSource(profile, profileErr), "")
 	addCheck(evaluatePreflightModeCertificates(cfg, certificates, certificatesErr), "")
 	addCheck(evaluatePreflightWireIdentitySAN(cfg, profile, profileErr, certificates, certificatesErr), "")
@@ -112,7 +112,7 @@ func evaluatePreflightReadiness(status applianceStatus, statusErr error) cabinet
 	}
 }
 
-func evaluatePreflightProfileCompleteness(profile resolvedCabinetProfile, profileErr error) cabinetPreflightCheck {
+func evaluatePreflightProfileCompleteness(status applianceStatus, statusErr error, cfg config.Config, profile resolvedCabinetProfile, profileErr error) cabinetPreflightCheck {
 	if profileErr != nil {
 		return cabinetPreflightCheck{
 			ID:      "cabinet_profile",
@@ -126,9 +126,23 @@ func evaluatePreflightProfileCompleteness(profile resolvedCabinetProfile, profil
 	if err := config.ValidateCabinetProfile(profile.Effective); err != nil {
 		problems = append(problems, err.Error())
 	}
-	problems = append(problems, cabinetProfilePlaceholderProblems(profile.Effective)...)
+	placeholderProblems := cabinetProfilePlaceholderProblems(profile.Effective)
+	firstTestPlaceholderProblems, otherPlaceholderProblems := splitFirstTestPlaceholderProblems(placeholderProblems)
+	problems = append(problems, otherPlaceholderProblems...)
 	if profile.Warning != "" {
 		problems = append(problems, profile.Warning)
+	}
+	if len(firstTestPlaceholderProblems) > 0 {
+		allowAsLabWarning := len(problems) == 0 && preflightLabModeWithObservedEGMs(status, statusErr, cfg)
+		if allowAsLabWarning {
+			return cabinetPreflightCheck{
+				ID:      "cabinet_profile",
+				Result:  preflightPass,
+				Message: "Cabinet profile is usable for active lab session; first-test EGM placeholders are warning-only",
+				Detail:  "lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER; action=replace placeholder first_test_egm_ids before real cabinet deployment; observed_egms=" + fmt.Sprintf("%d", observedEGMCount(status)) + "; issues=" + strings.Join(firstTestPlaceholderProblems, " | "),
+			}
+		}
+		problems = append(problems, firstTestPlaceholderProblems...)
 	}
 	if len(problems) > 0 {
 		remediation := "set non-placeholder cabinet profile fields via config.cabinet_profile or PUT /api/cabinet-profile: wire_host_url, listener_dns_name/listener_ip, required_san_dns/required_san_ips, host_id, first_test_egm_ids"
@@ -145,6 +159,41 @@ func evaluatePreflightProfileCompleteness(profile resolvedCabinetProfile, profil
 		Message: "Cabinet profile is complete",
 		Detail:  "wire_host_url=" + profile.Effective.WireHostURL + "; host_id=" + profile.Effective.HostID,
 	}
+}
+
+func splitFirstTestPlaceholderProblems(problems []string) ([]string, []string) {
+	firstTest := []string{}
+	other := []string{}
+	for _, problem := range problems {
+		if strings.Contains(problem, "first_test_egm_ids[") {
+			firstTest = append(firstTest, problem)
+			continue
+		}
+		other = append(other, problem)
+	}
+	return firstTest, other
+}
+
+func preflightLabModeWithObservedEGMs(status applianceStatus, statusErr error, cfg config.Config) bool {
+	if statusErr != nil {
+		return false
+	}
+	labMode := status.Readiness.Overall == "READY_LAB" || (!cfg.G2S.RequireTLS && !cfg.G2S.RequireClientCert)
+	if !labMode {
+		return false
+	}
+	return observedEGMCount(status) > 0
+}
+
+func observedEGMCount(status applianceStatus) int {
+	count := 0
+	for _, egm := range status.EGMs {
+		if egm.LastSeen.IsZero() {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func evaluatePreflightProfileSource(profile resolvedCabinetProfile, profileErr error) cabinetPreflightCheck {
