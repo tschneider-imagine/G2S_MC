@@ -1480,6 +1480,7 @@ function heartbeatSummary(records, intervalMs, referenceTime) {
   const commsOnline = heartbeats.filter((item) => String(item.event_type || "").toUpperCase() === "G2S_SESSION_ONLINE");
   const keepAlives = heartbeats.filter((item) => String(item.event_type || "").toUpperCase() === "G2S_KEEPALIVE");
   const lastKeepAlive = keepAlives.length ? keepAlives[keepAlives.length - 1] : null;
+  const lastObserved = heartbeats.length ? heartbeats[heartbeats.length - 1] : null;
   let maxGapMs = 0;
   for (let i = 1; i < keepAlives.length; i++) {
     const prev = new Date(keepAlives[i - 1].created_at || 0).getTime();
@@ -1490,13 +1491,19 @@ function heartbeatSummary(records, intervalMs, referenceTime) {
   }
   const refTimeMs = referenceTime ? new Date(referenceTime).getTime() : Date.now();
   const lastKeepAliveMs = lastKeepAlive ? new Date(lastKeepAlive.created_at || 0).getTime() : 0;
+  const lastObservedMs = lastObserved ? new Date(lastObserved.created_at || 0).getTime() : 0;
   const sinceLastKeepAliveMs = lastKeepAliveMs && Number.isFinite(refTimeMs) ? Math.max(0, refTimeMs - lastKeepAliveMs) : 0;
+  const sinceLastObservedMs = lastObservedMs && Number.isFinite(refTimeMs) ? Math.max(0, refTimeMs - lastObservedMs) : 0;
   const thresholdMs = intervalMs > 0 ? Math.max(intervalMs * 3, intervalMs + 1000) : 0;
   let health = "NO_TRAFFIC";
   let label = "No heartbeat observed";
   let message = "No commsOnLine or keepAlive traffic is present in the current window.";
   if (heartbeats.length > 0) {
-    if (keepAlives.length === 0) {
+    if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > thresholdMs) {
+      health = "DEGRADED";
+      label = "Keepalive missing";
+      message = "commsOnLine was observed, but keepAlive traffic did not follow within the configured cadence.";
+    } else if (keepAlives.length === 0) {
       health = "ONLINE_ONLY";
       label = "Online only";
       message = "commsOnLine was observed, but keepAlive traffic has not started in this window.";
@@ -1522,9 +1529,11 @@ function heartbeatSummary(records, intervalMs, referenceTime) {
     comms_online_count: commsOnline.length,
     keepalive_count: keepAlives.length,
     first_comms_online_at: commsOnline.length ? commsOnline[0].created_at : "",
+    last_observed_at: lastObserved ? lastObserved.created_at : "",
     last_keepalive_at: lastKeepAlive ? lastKeepAlive.created_at : "",
     interval_ms: intervalMs || 0,
     max_gap_ms: maxGapMs,
+    since_last_observed_ms: sinceLastObservedMs,
     since_last_keepalive_ms: sinceLastKeepAliveMs
   };
 }
@@ -1713,6 +1722,7 @@ function buildFirstCabinetSessionState(snapshot) {
   const preflightState = preflight ? (preflight.overall || "UNKNOWN") : "UNAVAILABLE";
   const lastCheckedValue = preflight?.timestamp || (clientState.lastGoodAt ? new Date(clientState.lastGoodAt).toISOString() : "");
   const blockers = [];
+  const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
 
   if (!readyz || readyz.ok === false || readyzState === "DEGRADED") {
     appendUniqueBlocker(blockers, "Readiness is degraded");
@@ -1731,6 +1741,9 @@ function buildFirstCabinetSessionState(snapshot) {
   if (authRequired && !getSetupToken() && !getCertToken()) {
     appendUniqueBlocker(blockers, "API token is required for protected setup actions");
   }
+  if (heartbeat.health === "DEGRADED") {
+    appendUniqueBlocker(blockers, "Heartbeat gap exceeds configured interval");
+  }
 
   const readyForSession = blockers.length === 0 && readyzState !== "UNAVAILABLE" && preflightState === "PASS";
   const overallState = readyForSession ? "LAB_READY" : "BLOCKED";
@@ -1746,7 +1759,8 @@ function buildFirstCabinetSessionState(snapshot) {
     firstEGMIDs: firstEGMIDs,
     certCounts: certCounts,
     authState: authState,
-    blockers: blockers
+    blockers: blockers,
+    heartbeat: heartbeat
   };
 }
 
@@ -3247,6 +3261,7 @@ function renderAlerts(snapshot) {
   const egms = Array.isArray(status.egms) ? status.egms : [];
   const unhealthy = egms.filter((egm) => unhealthyStates.has(String(egm.status || "").toUpperCase()));
   const blockingCerts = (snapshot?.certificates || []).filter((cert) => certSeverity(cert, runtime) === "blocking");
+  const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], Number(runtime.egm_heartbeat_interval_ms || 0), status.updated_at || "");
 
   const readyzDegraded = readyz.ok === false || readyz.overall === "DEGRADED";
   document.body.classList.toggle("console-degraded", readyzDegraded);
@@ -3266,6 +3281,14 @@ function renderAlerts(snapshot) {
   }
   if (blockingCerts.length > 0) {
     setAlert("warning", "Blocking certificate issues: " + blockingCerts.length, "Required certificates must be corrected for healthy runtime.");
+    return;
+  }
+  if (heartbeat.health === "DEGRADED") {
+    setAlert("warning", "Heartbeat anomaly detected", heartbeat.message);
+    return;
+  }
+  if (heartbeat.health === "ONLINE_ONLY") {
+    setAlert("info", "Heartbeat session online", heartbeat.message);
     return;
   }
   if (Array.isArray(readiness.warnings) && readiness.warnings.length > 0) {
