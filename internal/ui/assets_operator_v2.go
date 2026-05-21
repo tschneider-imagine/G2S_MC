@@ -82,6 +82,11 @@ const dashboardHTML = `<!doctype html>
           <div id="egm-grouped-summary-scope" class="muted-text">Scope: All EGMs</div>
           <div id="egm-grouped-summary" class="timeline egm-grouped-summary"></div>
         </div>
+        <div class="focus-selected-egm-wrap">
+          <p class="label">Selected EGM Detail</p>
+          <div id="selected-egm-detail-scope" class="muted-text">Scope: All EGMs</div>
+          <div id="selected-egm-detail" class="timeline selected-egm-detail"></div>
+        </div>
       </div>
     </section>
 
@@ -155,6 +160,20 @@ const dashboardHTML = `<!doctype html>
         <div class="first-cabinet-session-blockers-wrap">
           <p class="label">Operator Signals</p>
           <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
+        </div>
+        <div class="first-cabinet-session-actions-wrap">
+          <p class="label">Operator Readiness Model</p>
+          <div class="operator-action-summary-grid">
+            <div><p class="label">Ready Now</p><strong id="operator-action-ready-count">0</strong></div>
+            <div><p class="label">Needs Operator Action</p><strong id="operator-action-needed-count">0</strong></div>
+            <div><p class="label">Lab Warning</p><strong id="operator-action-lab-warning-count">0</strong></div>
+            <div><p class="label">Informational</p><strong id="operator-action-info-count">0</strong></div>
+          </div>
+          <div id="operator-readiness-model" class="operator-readiness-model"></div>
+        </div>
+        <div class="first-cabinet-session-actions-wrap">
+          <p class="label">Next Operator Actions</p>
+          <div id="next-operator-actions" class="operator-readiness-model"></div>
         </div>
         <div class="first-cabinet-session-workflow-wrap">
           <p class="label">Operator Workflow</p>
@@ -870,6 +889,21 @@ h2 { font-size: 18px; }
   gap: 4px;
 }
 
+.focus-selected-egm-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+}
+
+.focus-selected-egm-wrap .label {
+  margin-bottom: 4px;
+}
+
+.selected-egm-detail .item {
+  display: grid;
+  gap: 4px;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -1510,6 +1544,71 @@ button:disabled {
   background: #f8fbf8;
 }
 
+.first-cabinet-session-actions-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+}
+
+.operator-action-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.operator-action-summary-grid > div {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.operator-readiness-model {
+  display: grid;
+  gap: 8px;
+}
+
+.operator-readiness-group {
+  border-left: 3px solid #8fa1aa;
+  padding: 8px 10px;
+  background: #f3f7f4;
+  display: grid;
+  gap: 4px;
+}
+
+.operator-readiness-group.group-ready_now {
+  border-left-color: var(--green);
+  background: var(--green-bg);
+}
+
+.operator-readiness-group.group-needs_operator_action {
+  border-left-color: var(--red);
+  background: var(--red-bg);
+}
+
+.operator-readiness-group.group-lab_warning {
+  border-left-color: var(--yellow);
+  background: #fbeecd;
+}
+
+.operator-readiness-group.group-informational {
+  border-left-color: #7f9aaa;
+  background: #eef3f6;
+}
+
+.operator-readiness-items {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.operator-readiness-items li {
+  font-size: 13px;
+  color: var(--ink);
+}
+
 .first-cabinet-session-workflow {
   display: grid;
   gap: 8px;
@@ -1632,6 +1731,10 @@ button:disabled {
   .focus-controls {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .operator-action-summary-grid {
+    grid-template-columns: 1fr 1fr;
   }
 
   .form-grid,
@@ -1938,6 +2041,71 @@ function renderEGMGroupedSummary(snapshot) {
       "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(row.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(row.egm_id) + "</span>" + egmSourcePill(row.source) + statusPill(row.status) + "</div></div>" +
       "<span>events " + String(row.total_events) + " total | " + String(row.non_heartbeat_events) + " status events | " + String(row.keepalive_events) + " keepAlive | heartbeat " + escapeHTML(row.heartbeat_label) + "</span>" +
       "<span>last seen " + escapeHTML(fmtTime(row.last_seen_at)) + " | last keepAlive " + escapeHTML(fmtTime(row.heartbeat_last_keepalive_at)) + "</span>" +
+    "</div>"
+  );
+}
+
+function firstTestEGMIDSet(snapshot) {
+  const profile = snapshot?.cabinetProfile?.effective || snapshot?.status?.cabinet_profile || {};
+  const ids = Array.isArray(profile?.first_test_egm_ids) ? profile.first_test_egm_ids : [];
+  return new Set(ids.map((item) => String(item || "").trim()).filter(Boolean));
+}
+
+function selectedEGMDetailForSnapshot(snapshot) {
+  const focus = egmFocusScope(snapshot);
+  const rows = groupedSummaryRowsForSnapshot(snapshot);
+  const firstTestIDs = firstTestEGMIDSet(snapshot);
+  const focusedID = focus.selected_egm_id || "";
+  let selected = null;
+  if (focusedID) {
+    selected = rows.find((row) => String(row?.egm_id || "").trim() === focusedID) || null;
+  } else if (rows.length === 1) {
+    selected = rows[0];
+  }
+  if (!selected) {
+    return {
+      scope_label: focus.label,
+      egm_id: "",
+      source: "",
+      status: "",
+      last_seen_at: "",
+      heartbeat_label: "",
+      heartbeat_last_keepalive_at: "",
+      in_first_test_set: false,
+      focus_mode: focus.mode,
+      message: focusedID
+        ? ("No telemetry has been observed yet for " + focusedID + ".")
+        : "Select one EGM focus to view cabinet-level detail."
+    };
+  }
+  return {
+    scope_label: focus.label,
+    egm_id: selected.egm_id,
+    source: selected.source,
+    status: selected.status,
+    last_seen_at: selected.last_seen_at,
+    heartbeat_label: selected.heartbeat_label,
+    heartbeat_last_keepalive_at: selected.heartbeat_last_keepalive_at,
+    in_first_test_set: firstTestIDs.has(selected.egm_id),
+    focus_mode: focus.mode,
+    message: selected.total_events > 0
+      ? "Live telemetry is present for this EGM."
+      : "No EGM history rows yet; waiting for session traffic."
+  };
+}
+
+function renderSelectedEGMDetail(snapshot) {
+  const detail = selectedEGMDetailForSnapshot(snapshot);
+  $("selected-egm-detail-scope").textContent = "Scope: " + (detail.scope_label || "All EGMs");
+  if (!detail.egm_id) {
+    renderItems("selected-egm-detail", [], detail.message || "Select one EGM to inspect cabinet detail.", () => "");
+    return;
+  }
+  renderItems("selected-egm-detail", [detail], "", (item) =>
+    "<div class=\"item timeline-entry\">" +
+      "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id) + "</span>" + egmSourcePill(item.source) + statusPill(item.status) + "</div></div>" +
+      "<span>last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ") | heartbeat " + escapeHTML(item.heartbeat_label || "-") + " | last keepAlive " + escapeHTML(fmtTime(item.heartbeat_last_keepalive_at)) + "</span>" +
+      "<span>first-test set: " + escapeHTML(item.in_first_test_set ? "yes" : "no") + " | " + escapeHTML(item.message || "") + "</span>" +
     "</div>"
   );
 }
@@ -2406,9 +2574,201 @@ function buildCabinetSessionWorkflow(snapshot, session) {
   };
 }
 
+function pushUniqueString(list, text) {
+  const value = String(text || "").trim();
+  if (!value) return;
+  if (list.indexOf(value) >= 0) return;
+  list.push(value);
+}
+
+function groupedReadinessClass(key) {
+  return String(key || "informational").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+function blockingCertificateRoles(certificates, runtime) {
+  const labels = [];
+  (Array.isArray(certificates) ? certificates : []).forEach((item) => {
+    if (certSeverity(item, runtime) !== "blocking") return;
+    pushUniqueString(labels, roleDisplayName(item?.role || ""));
+  });
+  return labels;
+}
+
+function buildOperatorReadinessModel(snapshot, session, workflow) {
+  const status = snapshot?.status || {};
+  const runtime = status.runtime || {};
+  const readyz = snapshot?.readyz || null;
+  const preflight = snapshot?.cabinetPreflight || null;
+  const certificates = Array.isArray(snapshot?.certificates) ? snapshot.certificates : [];
+  const groupedRows = groupedSummaryRowsForSnapshot(snapshot);
+  const focus = egmFocusScope(snapshot);
+  const selectedEGM = selectedEGMDetailForSnapshot(snapshot);
+  const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
+  const startCount = markers.filter((item) => String(item?.marker_type || "").toLowerCase() === "start").length;
+  const endCount = markers.filter((item) => String(item?.marker_type || "").toLowerCase() === "end").length;
+  const evidenceCount = Array.isArray(snapshot?.sessionEvidence) ? snapshot.sessionEvidence.length : 0;
+  const heartbeat = session?.heartbeat || heartbeatSummary(snapshot?.egmHistory || [], currentHeartbeatPolicy(snapshot), new Date().toISOString());
+
+  const readyNow = [];
+  const needsAction = [];
+  const labWarning = [];
+  const informational = [];
+  const nextActions = [];
+
+  if (readyz?.ok === true || session?.readyzState === "READY") {
+    pushUniqueString(readyNow, "Readiness endpoint is healthy.");
+  } else {
+    pushUniqueString(needsAction, "Restore appliance readiness to READY.");
+    pushUniqueString(nextActions, "Check /readyz and resolve degraded readiness issues.");
+  }
+
+  if (!preflight) {
+    pushUniqueString(needsAction, "Cabinet preflight API is unavailable.");
+    pushUniqueString(nextActions, "Restore /api/cabinet-preflight and rerun pre-check.");
+  } else if (String(preflight?.overall || "").toUpperCase() === "PASS") {
+    pushUniqueString(readyNow, "Cabinet preflight checks are passing.");
+  } else {
+    const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
+    checks.filter((item) => item?.result === "FAIL").forEach((check) => {
+      switch (String(check?.id || "")) {
+        case "cabinet_profile":
+          pushUniqueString(needsAction, "Cabinet profile values are incomplete.");
+          pushUniqueString(nextActions, "Complete cabinet profile values (wire_host_url, host_id, first_test_egm_ids).");
+          break;
+        case "certificate_mode_requirements":
+          pushUniqueString(needsAction, "Required certificate material is missing or invalid.");
+          pushUniqueString(nextActions, "Import required web/server or client certificate material.");
+          break;
+        case "certificate_san_wire_identity":
+          pushUniqueString(needsAction, "Certificate SAN does not match cabinet wire identity.");
+          pushUniqueString(nextActions, "Regenerate/import certificate matching wire_host_url and required SAN fields.");
+          break;
+        default:
+          pushUniqueString(needsAction, "Preflight check failed: " + (check?.id || "unknown") + ".");
+          break;
+      }
+    });
+    if (needsAction.length === 0) {
+      pushUniqueString(needsAction, "Cabinet preflight has unresolved failures.");
+      pushUniqueString(nextActions, "Review failed preflight checks and resolve blocking items.");
+    }
+  }
+
+  if (session?.profile?.wire_host_url && session?.profile?.host_id && Array.isArray(session?.firstEGMIDs) && session.firstEGMIDs.length > 0) {
+    pushUniqueString(readyNow, "Cabinet profile core identity values are present.");
+  } else {
+    pushUniqueString(needsAction, "Cabinet profile values are incomplete.");
+    pushUniqueString(nextActions, "Complete cabinet profile values (wire_host_url, host_id, first_test_egm_ids).");
+  }
+
+  const blockingRoles = blockingCertificateRoles(certificates, runtime);
+  if (blockingRoles.length > 0) {
+    pushUniqueString(needsAction, "Required certificate roles failing: " + blockingRoles.join(", ") + ".");
+  } else {
+    pushUniqueString(readyNow, "Required certificate roles are valid for current runtime.");
+  }
+  if (session?.certCounts?.labOptional > 0) {
+    pushUniqueString(labWarning, "Lab-optional certificate roles not configured: " + String(session.certCounts.labOptional) + ".");
+  }
+  const expiringSoon = certificates.filter((item) => certSeverity(item, runtime) === "warning").length;
+  if (expiringSoon > 0) {
+    pushUniqueString(labWarning, "Certificate rotation warning: " + String(expiringSoon) + " role(s) expiring soon.");
+  }
+
+  if (runtime.api_mutation_auth_required === true) {
+    if (getSetupToken() || getCertToken()) {
+      pushUniqueString(readyNow, "API token is present for protected setup actions.");
+    } else {
+      pushUniqueString(needsAction, "Protected setup actions require an API token.");
+      pushUniqueString(nextActions, "Enter API token to enable setup, run-marker, and evidence-save actions.");
+    }
+  } else if (runtime.trusted_mutation_bypass_active === true) {
+    pushUniqueString(labWarning, "Trusted mutation bypass is active; verify lab network boundaries.");
+  } else {
+    pushUniqueString(informational, "Mutation auth is disabled for current runtime.");
+  }
+
+  if (groupedRows.length > 0) {
+    pushUniqueString(readyNow, "EGM traffic observed across " + String(groupedRows.length) + " EGM(s).");
+  } else {
+    pushUniqueString(informational, "No EGM traffic observed yet.");
+    pushUniqueString(nextActions, "Start cabinet session and confirm commsOnLine/keepAlive traffic.");
+  }
+
+  if (!focus.selected_egm_id) {
+    pushUniqueString(informational, "All-EGMs focus is active for session-wide monitoring.");
+    pushUniqueString(nextActions, "Select one EGM focus for cabinet-level validation detail.");
+  } else if (!selectedEGM.egm_id || selectedEGM.message.indexOf("No telemetry") >= 0) {
+    pushUniqueString(informational, "Focused EGM has no telemetry yet.");
+    pushUniqueString(nextActions, "Trigger commsOnLine for " + focus.selected_egm_id + " and confirm heartbeat.");
+  } else {
+    pushUniqueString(readyNow, "Focused EGM detail is available for " + focus.selected_egm_id + ".");
+  }
+
+  if (workflow?.steps?.find((item) => item.id === "run_active")?.state === "ACTION_NEEDED" && startCount === 0) {
+    pushUniqueString(nextActions, "Mark run start before executing cabinet validation steps.");
+  }
+  if (workflow?.steps?.find((item) => item.id === "capture_evidence")?.state === "ACTION_NEEDED") {
+    pushUniqueString(nextActions, "Capture session evidence before ending run.");
+  }
+  if (startCount > 0 && endCount === 0) {
+    pushUniqueString(nextActions, "Mark run end to close the session window.");
+  }
+  if (evidenceCount > 0) {
+    pushUniqueString(readyNow, "Saved session evidence is available for follow-up.");
+  }
+
+  if (heartbeat?.severity === "critical" || heartbeat?.severity === "warning") {
+    pushUniqueString(informational, "Heartbeat signal: " + (heartbeat.label || "warning") + " (" + (heartbeat.message || "check cadence") + ").");
+  } else if (heartbeat?.total > 0) {
+    pushUniqueString(informational, "Heartbeat signal: " + (heartbeat.label || "observed") + ".");
+  } else {
+    pushUniqueString(informational, "Heartbeat signal: no traffic yet.");
+  }
+
+  return {
+    ready_now: readyNow,
+    needs_operator_action: needsAction,
+    lab_warning: labWarning,
+    informational: informational,
+    next_actions: nextActions,
+    groups: [
+      { key: "ready_now", label: "Ready Now", items: readyNow },
+      { key: "needs_operator_action", label: "Needs Operator Action", items: needsAction },
+      { key: "lab_warning", label: "Lab Warning", items: labWarning },
+      { key: "informational", label: "Informational", items: informational }
+    ],
+    counts: {
+      ready_now: readyNow.length,
+      needs_operator_action: needsAction.length,
+      lab_warning: labWarning.length,
+      informational: informational.length
+    }
+  };
+}
+
+function renderOperatorReadinessModel(model) {
+  const readiness = model || { groups: [], counts: {}, next_actions: [] };
+  $("operator-action-ready-count").textContent = String(readiness?.counts?.ready_now || 0);
+  $("operator-action-needed-count").textContent = String(readiness?.counts?.needs_operator_action || 0);
+  $("operator-action-lab-warning-count").textContent = String(readiness?.counts?.lab_warning || 0);
+  $("operator-action-info-count").textContent = String(readiness?.counts?.informational || 0);
+  renderItems("operator-readiness-model", readiness.groups, "No readiness classification available yet.", (group) => {
+    const items = Array.isArray(group?.items) ? group.items : [];
+    const listHTML = items.length > 0
+      ? ("<ul class=\"operator-readiness-items\">" + items.map((item) => "<li>" + escapeHTML(item) + "</li>").join("") + "</ul>")
+      : "<span class=\"muted-text\">No items.</span>";
+    return "<div class=\"operator-readiness-group group-" + groupedReadinessClass(group?.key) + "\"><strong>" + escapeHTML(group?.label || "-") + "</strong>" + listHTML + "</div>";
+  });
+  renderItems("next-operator-actions", readiness?.next_actions, "No immediate operator action required.", (item) =>
+    "<div class=\"operator-readiness-group group-needs_operator_action\"><strong>Action</strong><ul class=\"operator-readiness-items\"><li>" + escapeHTML(item) + "</li></ul></div>"
+  );
+}
+
 function renderFirstCabinetSession(snapshot) {
   const session = buildFirstCabinetSessionState(snapshot);
   const workflow = buildCabinetSessionWorkflow(snapshot, session);
+  const readinessModel = buildOperatorReadinessModel(snapshot, session, workflow);
   const stateBadge = $("first-cabinet-session-state");
   stateBadge.textContent = session.overallState;
   stateBadge.className = "source-pill " + (session.readyForSession ? "source-file" : "source-mixed");
@@ -2432,6 +2792,7 @@ function renderFirstCabinetSession(snapshot) {
   } else {
     blockerList.innerHTML = session.blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
   }
+  renderOperatorReadinessModel(readinessModel);
 
   renderItems("first-cabinet-session-workflow", workflow.steps, "No operator workflow data yet.", (step) =>
     "<div class=\"first-cabinet-session-workflow-step step-" + cabinetSessionStepStateClass(step.state) + "\">" +
@@ -2461,6 +2822,8 @@ function buildSessionEvidence(snapshot) {
   const drillEvidence = operatorDrillEvidence(egmHistoryFocused, drillState);
   const groupedSummaryAll = buildEGMGroupedSummaryRows(status?.egms, egmHistoryAll, currentHeartbeatPolicy(snapshot), new Date().toISOString());
   const groupedSummaryFocused = groupedRowsForCurrentFocus(groupedSummaryAll);
+  const selectedEGMDetail = selectedEGMDetailForSnapshot(snapshot);
+  const readinessModel = buildOperatorReadinessModel(snapshot, session, workflow);
   const notes = $("session-evidence-notes").value.trim();
   return {
     captured_at: new Date().toISOString(),
@@ -2472,6 +2835,10 @@ function buildSessionEvidence(snapshot) {
       global_sections_scope: "FULL_SESSION_GLOBAL_INCLUDED"
     },
     workflow: workflow,
+    selected_egm_detail: selectedEGMDetail,
+    action_model: readinessModel,
+    next_operator_actions: readinessModel.next_actions,
+    lab_warnings: readinessModel.lab_warning,
     session: {
       overall_state: session.overallState,
       ready_for_session: session.readyForSession,
@@ -2569,6 +2936,40 @@ function buildSessionEvidenceMarkdown(evidence) {
     evidence.readiness.warnings.forEach((item) => lines.push("- " + item));
   } else {
     lines.push("- None");
+  }
+  lines.push("", "## Action Items", "");
+  const actionItems = Array.isArray(evidence?.action_model?.needs_operator_action) ? evidence.action_model.needs_operator_action : [];
+  if (actionItems.length > 0) {
+    actionItems.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Lab Warnings", "");
+  const labWarnings = Array.isArray(evidence?.action_model?.lab_warning) ? evidence.action_model.lab_warning : [];
+  if (labWarnings.length > 0) {
+    labWarnings.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Next Operator Actions", "");
+  const nextActions = Array.isArray(evidence?.next_operator_actions) ? evidence.next_operator_actions : [];
+  if (nextActions.length > 0) {
+    nextActions.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Selected EGM Detail", "");
+  const selectedEGMDetail = evidence?.selected_egm_detail || {};
+  if (selectedEGMDetail?.egm_id) {
+    lines.push("- EGM ID: " + selectedEGMDetail.egm_id);
+    lines.push("- Source: " + (selectedEGMDetail.source || "-"));
+    lines.push("- Status: " + (selectedEGMDetail.status || "-"));
+    lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
+    lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
+    lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
+    lines.push("- First-test set: " + String(selectedEGMDetail.in_first_test_set === true));
+  } else {
+    lines.push("- " + (selectedEGMDetail?.message || "No selected EGM detail available."));
   }
   lines.push("", "## Operator Notes", "");
   lines.push(evidence.operator_notes || "None");
@@ -3324,6 +3725,8 @@ function boundedRunReport(snapshot) {
   const focus = egmFocusScope(snapshot);
   const session = buildFirstCabinetSessionState(snapshot);
   const workflow = buildCabinetSessionWorkflow(snapshot, session);
+  const actionModel = buildOperatorReadinessModel(snapshot, session, workflow);
+  const selectedEGMDetail = selectedEGMDetailForSnapshot(snapshot);
   const selection = normalizeRunReportSelections(snapshot);
   if (!selection.start || !selection.end) {
     return null;
@@ -3356,6 +3759,10 @@ function boundedRunReport(snapshot) {
       global_sections_scope: "FULL_SESSION_GLOBAL_INCLUDED"
     },
     workflow: workflow,
+    selected_egm_detail: selectedEGMDetail,
+    action_model: actionModel,
+    next_operator_actions: actionModel.next_actions,
+    lab_warnings: actionModel.lab_warning,
     window: {
       start_marker: startMarker,
       end_marker: endMarker,
@@ -3395,6 +3802,10 @@ function buildRunReportMarkdown(report) {
   const workflowSteps = Array.isArray(report?.workflow?.steps) ? report.workflow.steps : [];
   const groupedRows = Array.isArray(report?.egm_grouped_summary) ? report.egm_grouped_summary : [];
   const groupedRowsAll = Array.isArray(report?.egm_grouped_summary_all) ? report.egm_grouped_summary_all : [];
+  const actionItems = Array.isArray(report?.action_model?.needs_operator_action) ? report.action_model.needs_operator_action : [];
+  const labWarnings = Array.isArray(report?.action_model?.lab_warning) ? report.action_model.lab_warning : [];
+  const nextActions = Array.isArray(report?.next_operator_actions) ? report.next_operator_actions : [];
+  const selectedEGMDetail = report?.selected_egm_detail || {};
   const lines = [
     "# Cabinet Run Report",
     "",
@@ -3447,6 +3858,36 @@ function buildRunReportMarkdown(report) {
     workflowSteps.forEach((step) => lines.push("- " + [step.title || "-", step.state || "-", step.detail || ""].filter(Boolean).join(" | ")));
   } else {
     lines.push("- No workflow steps available");
+  }
+  lines.push("", "## Action Items", "");
+  if (actionItems.length > 0) {
+    actionItems.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Lab Warnings", "");
+  if (labWarnings.length > 0) {
+    labWarnings.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Next Operator Actions", "");
+  if (nextActions.length > 0) {
+    nextActions.forEach((item) => lines.push("- " + item));
+  } else {
+    lines.push("- None");
+  }
+  lines.push("", "## Selected EGM Detail", "");
+  if (selectedEGMDetail?.egm_id) {
+    lines.push("- EGM ID: " + selectedEGMDetail.egm_id);
+    lines.push("- Source: " + (selectedEGMDetail.source || "-"));
+    lines.push("- Status: " + (selectedEGMDetail.status || "-"));
+    lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
+    lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
+    lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
+    lines.push("- First-test set: " + String(selectedEGMDetail.in_first_test_set === true));
+  } else {
+    lines.push("- " + (selectedEGMDetail?.message || "No selected EGM detail available."));
   }
   lines.push("", "## Grouped EGM Summary", "");
   lines.push("- Scope rows: " + String(groupedRows.length));
@@ -4415,6 +4856,7 @@ function renderStatus(snapshot) {
   renderOperatorDrill(snapshot);
   renderEGMFocusControl(snapshot);
   renderEGMGroupedSummary(snapshot);
+  renderSelectedEGMDetail(snapshot);
   renderEGMTable(status);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
@@ -4709,6 +5151,7 @@ function setEGMFocus(value) {
     const empty = emptySnapshot();
     renderEGMFocusControl(empty);
     renderEGMGroupedSummary(empty);
+    renderSelectedEGMDetail(empty);
     renderHeartbeatSummary(empty);
     renderCabinetRunTimeline(empty);
     renderEGMHistory(empty);
@@ -4898,6 +5341,7 @@ updateSortLabels();
 updateStaleBadge();
 renderEGMFocusControl(emptySnapshot());
 renderEGMGroupedSummary(emptySnapshot());
+renderSelectedEGMDetail(emptySnapshot());
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
