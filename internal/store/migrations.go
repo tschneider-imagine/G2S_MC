@@ -115,6 +115,20 @@ CREATE TABLE IF NOT EXISTS blocker_policy_overrides (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     approved_blocker_ids_json TEXT NOT NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT,
+    last_change_action TEXT,
+    last_change_rationale TEXT,
+    last_change_actor_scope TEXT
+);
+
+CREATE TABLE IF NOT EXISTS blocker_policy_escalation_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    action TEXT NOT NULL,
+    finding_id TEXT NOT NULL,
+    rationale TEXT,
+    actor_scope TEXT NOT NULL,
+    egm_focus TEXT,
     updated_by TEXT
 );
 

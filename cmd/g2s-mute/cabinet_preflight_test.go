@@ -506,6 +506,9 @@ func TestEvaluateCabinetPreflightBlockerGovernance(t *testing.T) {
 	if len(unapprovedResult.Blockers) != 0 {
 		t.Fatalf("expected no blockers for unapproved cabinet_profile finding, got %v", unapprovedResult.Blockers)
 	}
+	if len(unapprovedResult.ActiveApprovedIDs) == 0 {
+		t.Fatalf("expected active_approved_ids to be populated")
+	}
 	foundDowngraded := false
 	for _, item := range unapprovedResult.DowngradedFindings {
 		if item.ID == "cabinet_profile" {
@@ -517,6 +520,15 @@ func TestEvaluateCabinetPreflightBlockerGovernance(t *testing.T) {
 	}
 	if !foundDowngraded {
 		t.Fatalf("expected cabinet_profile in downgraded findings: %+v", unapprovedResult.DowngradedFindings)
+	}
+	foundDowngradedID := false
+	for _, id := range unapprovedResult.DowngradedIDs {
+		if id == "cabinet_profile" {
+			foundDowngradedID = true
+		}
+	}
+	if !foundDowngradedID {
+		t.Fatalf("expected cabinet_profile in downgraded_ids: %+v", unapprovedResult.DowngradedIDs)
 	}
 
 	cfg.BlockerPolicy = config.BlockerPolicy{
@@ -585,6 +597,16 @@ func TestCabinetPreflightHandler(t *testing.T) {
 	eng.Start(runCtx)
 	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now()})
 	waitForLastEvent(t, eng, string(engine.EventBootComplete))
+	if _, err := auditStore.RecordBlockerPolicyEscalationEvent(ctx, store.BlockerPolicyEscalationEvent{
+		CreatedAt:  time.Now().UTC(),
+		Action:     blockerPolicyActionApprove,
+		FindingID:  "cabinet_profile",
+		Rationale:  "test rationale",
+		ActorScope: "local",
+		UpdatedBy:  "tester",
+	}); err != nil {
+		t.Fatalf("record blocker policy escalation event: %v", err)
+	}
 	handler := cabinetPreflightHandler(eng, auditStore, cfg, runtimeInfo{
 		ConfigPath: "/etc/g2s-mute/config.json",
 		StartedAt:  time.Now().Add(-10 * time.Second),
@@ -608,6 +630,12 @@ func TestCabinetPreflightHandler(t *testing.T) {
 	}
 	if len(payload.BlockerPolicy.Effective.ApprovedBlockerIDs) == 0 {
 		t.Fatal("expected blocker policy metadata in preflight response")
+	}
+	if len(payload.ActiveApprovedIDs) == 0 {
+		t.Fatal("expected active_approved_ids in preflight response")
+	}
+	if len(payload.EscalationHistory) == 0 {
+		t.Fatal("expected escalation_history summary in preflight response")
 	}
 
 	methodRequest := httptest.NewRequest(http.MethodPost, "/api/cabinet-preflight", nil)

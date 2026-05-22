@@ -24,13 +24,16 @@ const (
 )
 
 type cabinetPreflightResponse struct {
-	Overall            string                           `json:"overall"`
-	Checks             []cabinetPreflightCheck          `json:"checks"`
-	Blockers           []string                         `json:"blockers"`
-	Warnings           []string                         `json:"warnings,omitempty"`
-	DowngradedFindings []cabinetPreflightDowngradedItem `json:"downgraded_findings,omitempty"`
-	BlockerPolicy      blockerPolicyResponse            `json:"blocker_policy"`
-	Timestamp          time.Time                        `json:"timestamp"`
+	Overall            string                             `json:"overall"`
+	Checks             []cabinetPreflightCheck            `json:"checks"`
+	Blockers           []string                           `json:"blockers"`
+	Warnings           []string                           `json:"warnings,omitempty"`
+	DowngradedFindings []cabinetPreflightDowngradedItem   `json:"downgraded_findings,omitempty"`
+	ActiveApprovedIDs  []string                           `json:"active_approved_ids"`
+	DowngradedIDs      []string                           `json:"downgraded_ids,omitempty"`
+	EscalationHistory  []blockerPolicyEscalationEventView `json:"escalation_history,omitempty"`
+	BlockerPolicy      blockerPolicyResponse              `json:"blocker_policy"`
+	Timestamp          time.Time                          `json:"timestamp"`
 }
 
 type cabinetPreflightCheck struct {
@@ -65,6 +68,9 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 		Blockers:           []string{},
 		Warnings:           []string{},
 		DowngradedFindings: []cabinetPreflightDowngradedItem{},
+		ActiveApprovedIDs:  []string{},
+		DowngradedIDs:      []string{},
+		EscalationHistory:  []blockerPolicyEscalationEventView{},
 		Timestamp:          time.Now().UTC(),
 	}
 
@@ -72,7 +78,7 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 		response.Checks = append(response.Checks, check)
 	}
 
-	policy, policyErr := resolveBlockerPolicy(ctx, store, cfg.BlockerPolicy)
+	policy, policyErr := resolveBlockerPolicyWithHistoryLimit(ctx, store, cfg.BlockerPolicy, blockerPolicyPreflightHistoryLimit)
 	if policyErr != nil {
 		fallbackApproved := append([]string{}, defaultApprovedBlockerIDs...)
 		sort.Strings(fallbackApproved)
@@ -88,7 +94,10 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 		response.Warnings = append(response.Warnings, "blocker policy unavailable; using default approved blocker IDs")
 	}
 	response.BlockerPolicy = buildBlockerPolicyResponse(policy)
+	response.ActiveApprovedIDs = append([]string{}, response.BlockerPolicy.Effective.ApprovedBlockerIDs...)
+	response.EscalationHistory = append([]blockerPolicyEscalationEventView{}, response.BlockerPolicy.EscalationHistory...)
 	approvedBlockerIDs := blockerPolicyIDSet(policy.Effective.ApprovedBlockerIDs)
+	downgradedSet := map[string]struct{}{}
 
 	status, statusErr := computeApplianceStatus(ctx, eng, store, cfg, runtime, nil)
 	profile, profileErr := resolveCabinetProfile(ctx, store, cfg.CabinetProfile)
@@ -116,7 +125,14 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 			Message: check.Message,
 			Detail:  check.Detail,
 		})
+		downgradedSet[check.ID] = struct{}{}
 	}
+	downgradedIDs := make([]string, 0, len(downgradedSet))
+	for id := range downgradedSet {
+		downgradedIDs = append(downgradedIDs, id)
+	}
+	sort.Strings(downgradedIDs)
+	response.DowngradedIDs = downgradedIDs
 
 	return response
 }

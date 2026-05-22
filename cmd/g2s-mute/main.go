@@ -164,6 +164,31 @@ func main() {
 			http.MethodDelete,
 		),
 	)
+	mux.HandleFunc("/api/blocker-policy/suggestions", blockerPolicySuggestionsHandler(eng, auditStore, cfg, runtimeInfo{
+		ConfigPath:       *configPath,
+		StartedAt:        startedAt,
+		SimulatedTrigger: *simulateTrigger,
+	}))
+	mux.HandleFunc(
+		"/api/blocker-policy/approve",
+		requireMutationAuthForMethods(
+			blockerPolicyApproveHandler(eng, auditStore, cfg, runtimeInfo{
+				ConfigPath:       *configPath,
+				StartedAt:        startedAt,
+				SimulatedTrigger: *simulateTrigger,
+			}),
+			cfg,
+			http.MethodPost,
+		),
+	)
+	mux.HandleFunc(
+		"/api/blocker-policy/revoke",
+		requireMutationAuthForMethods(
+			blockerPolicyRevokeHandler(auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
 	mux.HandleFunc(
 		"/api/heartbeat-policy",
 		requireMutationAuthForMethods(

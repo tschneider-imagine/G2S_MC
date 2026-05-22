@@ -36,9 +36,23 @@ type HeartbeatPolicyOverride struct {
 }
 
 type BlockerPolicyOverride struct {
-	ApprovedBlockerIDs []string
-	UpdatedAt          time.Time
-	UpdatedBy          string
+	ApprovedBlockerIDs   []string
+	UpdatedAt            time.Time
+	UpdatedBy            string
+	LastChangeAction     string
+	LastChangeRationale  string
+	LastChangeActorScope string
+}
+
+type BlockerPolicyEscalationEvent struct {
+	ID         int64
+	CreatedAt  time.Time
+	Action     string
+	FindingID  string
+	Rationale  string
+	ActorScope string
+	EGMFocus   string
+	UpdatedBy  string
 }
 
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
@@ -81,7 +95,10 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.ensureHeartbeatPolicyOverrideSchema(ctx)
+	if err := s.ensureHeartbeatPolicyOverrideSchema(ctx); err != nil {
+		return err
+	}
+	return s.ensureBlockerPolicyOverrideSchema(ctx)
 }
 
 func (s *SQLiteStore) ensureHeartbeatPolicyOverrideSchema(ctx context.Context) error {
@@ -114,6 +131,58 @@ func (s *SQLiteStore) ensureHeartbeatPolicyOverrideSchema(ctx context.Context) e
 	}
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE heartbeat_policy_overrides ADD COLUMN interval_ms INTEGER`)
 	return err
+}
+
+func (s *SQLiteStore) ensureBlockerPolicyOverrideSchema(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(blocker_policy_overrides)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasLastAction := false
+	hasLastRationale := false
+	hasLastActorScope := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if normalized == "last_change_action" {
+			hasLastAction = true
+		}
+		if normalized == "last_change_rationale" {
+			hasLastRationale = true
+		}
+		if normalized == "last_change_actor_scope" {
+			hasLastActorScope = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasLastAction {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE blocker_policy_overrides ADD COLUMN last_change_action TEXT`); err != nil {
+			return err
+		}
+	}
+	if !hasLastRationale {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE blocker_policy_overrides ADD COLUMN last_change_rationale TEXT`); err != nil {
+			return err
+		}
+	}
+	if !hasLastActorScope {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE blocker_policy_overrides ADD COLUMN last_change_actor_scope TEXT`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *SQLiteStore) RecordIncident(ctx context.Context, incident model.Incident) (int64, error) {
@@ -572,7 +641,7 @@ func (s *SQLiteStore) ClearHeartbeatPolicyOverride(ctx context.Context) error {
 func (s *SQLiteStore) GetBlockerPolicyOverride(ctx context.Context) (*BlockerPolicyOverride, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT approved_blocker_ids_json, updated_at, COALESCE(updated_by, '')
+		`SELECT approved_blocker_ids_json, updated_at, COALESCE(updated_by, ''), COALESCE(last_change_action, ''), COALESCE(last_change_rationale, ''), COALESCE(last_change_actor_scope, '')
 		   FROM blocker_policy_overrides
 		  WHERE id = 1`,
 	)
@@ -580,7 +649,10 @@ func (s *SQLiteStore) GetBlockerPolicyOverride(ctx context.Context) (*BlockerPol
 	var approvedJSON string
 	var updatedAt time.Time
 	var updatedBy string
-	if err := row.Scan(&approvedJSON, &updatedAt, &updatedBy); err != nil {
+	var lastChangeAction string
+	var lastChangeRationale string
+	var lastChangeActorScope string
+	if err := row.Scan(&approvedJSON, &updatedAt, &updatedBy, &lastChangeAction, &lastChangeRationale, &lastChangeActorScope); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -593,13 +665,20 @@ func (s *SQLiteStore) GetBlockerPolicyOverride(ctx context.Context) (*BlockerPol
 	}
 
 	return &BlockerPolicyOverride{
-		ApprovedBlockerIDs: approvedIDs,
-		UpdatedAt:          updatedAt,
-		UpdatedBy:          updatedBy,
+		ApprovedBlockerIDs:   approvedIDs,
+		UpdatedAt:            updatedAt,
+		UpdatedBy:            updatedBy,
+		LastChangeAction:     lastChangeAction,
+		LastChangeRationale:  lastChangeRationale,
+		LastChangeActorScope: lastChangeActorScope,
 	}, nil
 }
 
 func (s *SQLiteStore) UpsertBlockerPolicyOverride(ctx context.Context, approvedBlockerIDs []string, updatedBy string) error {
+	return s.UpsertBlockerPolicyOverrideWithMeta(ctx, approvedBlockerIDs, updatedBy, "", "", "")
+}
+
+func (s *SQLiteStore) UpsertBlockerPolicyOverrideWithMeta(ctx context.Context, approvedBlockerIDs []string, updatedBy string, lastChangeAction string, lastChangeRationale string, lastChangeActorScope string) error {
 	approvedJSON, err := encodeJSONStringSlice(approvedBlockerIDs)
 	if err != nil {
 		return err
@@ -607,14 +686,20 @@ func (s *SQLiteStore) UpsertBlockerPolicyOverride(ctx context.Context, approvedB
 	_, err = s.db.ExecContext(
 		ctx,
 		`INSERT INTO blocker_policy_overrides (
-		    id, approved_blocker_ids_json, updated_at, updated_by
-		 ) VALUES (1, ?, CURRENT_TIMESTAMP, ?)
+		    id, approved_blocker_ids_json, updated_at, updated_by, last_change_action, last_change_rationale, last_change_actor_scope
+		 ) VALUES (1, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		    approved_blocker_ids_json = excluded.approved_blocker_ids_json,
 		    updated_at = CURRENT_TIMESTAMP,
-		    updated_by = excluded.updated_by`,
+		    updated_by = excluded.updated_by,
+		    last_change_action = excluded.last_change_action,
+		    last_change_rationale = excluded.last_change_rationale,
+		    last_change_actor_scope = excluded.last_change_actor_scope`,
 		approvedJSON,
 		updatedBy,
+		lastChangeAction,
+		lastChangeRationale,
+		lastChangeActorScope,
 	)
 	return err
 }
@@ -622,6 +707,61 @@ func (s *SQLiteStore) UpsertBlockerPolicyOverride(ctx context.Context, approvedB
 func (s *SQLiteStore) ClearBlockerPolicyOverride(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM blocker_policy_overrides WHERE id = 1`)
 	return err
+}
+
+func (s *SQLiteStore) RecordBlockerPolicyEscalationEvent(ctx context.Context, event BlockerPolicyEscalationEvent) (int64, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO blocker_policy_escalation_events (
+			created_at, action, finding_id, rationale, actor_scope, egm_focus, updated_by
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		event.CreatedAt,
+		event.Action,
+		event.FindingID,
+		event.Rationale,
+		event.ActorScope,
+		event.EGMFocus,
+		event.UpdatedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (s *SQLiteStore) ListBlockerPolicyEscalationEvents(ctx context.Context, limit int) ([]BlockerPolicyEscalationEvent, error) {
+	limit = normalizeLimit(limit)
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, created_at, action, finding_id, COALESCE(rationale, ''), actor_scope, COALESCE(egm_focus, ''), COALESCE(updated_by, '')
+		 FROM blocker_policy_escalation_events
+		 ORDER BY id DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []BlockerPolicyEscalationEvent{}
+	for rows.Next() {
+		var event BlockerPolicyEscalationEvent
+		if err := rows.Scan(
+			&event.ID,
+			&event.CreatedAt,
+			&event.Action,
+			&event.FindingID,
+			&event.Rationale,
+			&event.ActorScope,
+			&event.EGMFocus,
+			&event.UpdatedBy,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 func (s *SQLiteStore) GetSessionWorkflowProgress(ctx context.Context) (*model.SessionWorkflowProgress, error) {
@@ -935,7 +1075,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides", "blocker_policy_escalation_events":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}

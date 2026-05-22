@@ -485,6 +485,16 @@ const dashboardHTML = `<!doctype html>
             <button id="blocker-policy-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
           <div id="blocker-policy-summary" class="muted-text blocker-governance-summary">Waiting for blocker governance telemetry.</div>
+          <label>Selected Finding ID<input id="blocker-policy-finding-id" type="text" placeholder="cabinet_profile"></label>
+          <label>Escalation Rationale<textarea id="blocker-policy-rationale" rows="3" placeholder="Required cabinet deployment reason for blocker escalation approval."></textarea></label>
+          <div class="setup-actions evidence-actions">
+            <button id="blocker-policy-approve-button" type="button">Approve Selected Finding</button>
+            <button id="blocker-policy-revoke-button" type="button" class="secondary-button">Revoke Selected Finding</button>
+          </div>
+          <div class="first-cabinet-session-blockers-wrap">
+            <p class="label">Suggested Escalations</p>
+            <div id="blocker-policy-suggestions-list" class="timeline blocker-governance-list"></div>
+          </div>
           <div class="first-cabinet-session-blockers-wrap">
             <p class="label">Active Approved Blockers</p>
             <div id="blocker-policy-active-blockers" class="timeline blocker-governance-list"></div>
@@ -492,6 +502,10 @@ const dashboardHTML = `<!doctype html>
           <div class="first-cabinet-session-blockers-wrap">
             <p class="label">Downgraded to Warning by Policy</p>
             <div id="blocker-policy-downgraded-list" class="timeline blocker-governance-list"></div>
+          </div>
+          <div class="first-cabinet-session-blockers-wrap">
+            <p class="label">Escalation History</p>
+            <div id="blocker-policy-history-list" class="timeline blocker-governance-list"></div>
           </div>
         </form>
         <form id="operator-drill-form" class="setup-form operator-drill-form">
@@ -1447,6 +1461,10 @@ th {
   gap: 4px;
 }
 
+.blocker-governance-actions {
+  margin-top: 2px;
+}
+
 .operator-drill-form {
   display: grid;
   gap: 12px;
@@ -2158,6 +2176,9 @@ const dashboardJS = `const endpoints = {
   cabinetProfileSuggestions: "/api/cabinet-profile/suggestions",
   heartbeatPolicy: "/api/heartbeat-policy",
   blockerPolicy: "/api/blocker-policy",
+  blockerPolicySuggestions: "/api/blocker-policy/suggestions",
+  blockerPolicyApprove: "/api/blocker-policy/approve",
+  blockerPolicyRevoke: "/api/blocker-policy/revoke",
   cabinetPreflight: "/api/cabinet-preflight",
   certificateBackups: "/api/certificates/backups",
   certificateRestore: "/api/certificates/restore",
@@ -2242,6 +2263,7 @@ function emptySnapshot() {
     cabinetProfileSuggestions: null,
     heartbeatPolicy: null,
     blockerPolicy: null,
+    blockerPolicySuggestions: null,
     cabinetPreflight: null
   };
 }
@@ -2269,6 +2291,7 @@ function copySnapshot(snapshot) {
     cabinetProfileSuggestions: snapshot.cabinetProfileSuggestions || null,
     heartbeatPolicy: snapshot.heartbeatPolicy || null,
     blockerPolicy: snapshot.blockerPolicy || null,
+    blockerPolicySuggestions: snapshot.blockerPolicySuggestions || null,
     cabinetPreflight: snapshot.cabinetPreflight || null
   };
 }
@@ -5236,9 +5259,40 @@ function normalizeBlockerPolicyResponse(payload) {
       ? {
           approved_blocker_ids: normalizedOverride,
           updated_at: String(payload.override.updated_at || "").trim(),
-          updated_by: String(payload.override.updated_by || "").trim()
+          updated_by: String(payload.override.updated_by || "").trim(),
+          last_change_action: String(payload.override.last_change_action || "").trim(),
+          last_change_rationale: String(payload.override.last_change_rationale || "").trim(),
+          last_change_actor_scope: String(payload.override.last_change_actor_scope || "").trim()
         }
-      : null
+      : null,
+    escalation_history: normalizeBlockerPolicyEscalationHistory(payload?.escalation_history)
+  };
+}
+
+function normalizeBlockerPolicyEscalationHistory(rawRows) {
+  const rows = Array.isArray(rawRows) ? rawRows : [];
+  return rows.map((item) => ({
+    id: Number(item?.id || 0),
+    created_at: String(item?.created_at || "").trim(),
+    action: String(item?.action || "").trim(),
+    finding_id: String(item?.finding_id || "").trim(),
+    rationale: String(item?.rationale || "").trim(),
+    actor_scope: String(item?.actor_scope || "").trim(),
+    egm_focus: String(item?.egm_focus || "").trim(),
+    updated_by: String(item?.updated_by || "").trim()
+  }));
+}
+
+function normalizeBlockerPolicySuggestions(payload) {
+  const suggestions = Array.isArray(payload?.suggestions) ? payload.suggestions : [];
+  return {
+    generated_at: String(payload?.generated_at || "").trim(),
+    policy: normalizeBlockerPolicyResponse(payload?.policy || {}),
+    suggestions: suggestions.map((item) => ({
+      finding_id: String(item?.finding_id || "").trim(),
+      message: String(item?.message || "").trim(),
+      downgraded_by_policy: item?.downgraded_by_policy === true
+    })).filter((item) => item.finding_id !== "")
   };
 }
 
@@ -5273,6 +5327,8 @@ function renderBlockerGovernance(snapshot) {
   const preflight = snapshot?.cabinetPreflight || null;
   const fallbackPolicy = preflight?.blocker_policy || null;
   const policy = normalizeBlockerPolicyResponse(snapshot?.blockerPolicy || fallbackPolicy || {});
+  const suggestionsPayload = normalizeBlockerPolicySuggestions(snapshot?.blockerPolicySuggestions || {});
+  const suggestions = Array.isArray(suggestionsPayload.suggestions) ? suggestionsPayload.suggestions : [];
   const tokenRequired = setupActionsRequireToken();
   const tokenPresent = !!getSetupToken() || !!getCertToken();
 
@@ -5289,6 +5345,24 @@ function renderBlockerGovernance(snapshot) {
   const validation = validateBlockerPolicyForm();
   $("blocker-policy-save-button").disabled = validation.problems.length > 0 || (tokenRequired && !tokenPresent);
   $("blocker-policy-clear-button").disabled = !policy.override_present || (tokenRequired && !tokenPresent);
+
+  const selectedFindingID = String($("blocker-policy-finding-id").value || "").trim();
+  const selectedApproved = (policy.effective.approved_blocker_ids || []).indexOf(selectedFindingID) >= 0;
+  const selectedSuggested = suggestions.some((item) => item.finding_id === selectedFindingID);
+  $("blocker-policy-approve-button").disabled = !selectedSuggested || (tokenRequired && !tokenPresent);
+  $("blocker-policy-revoke-button").disabled = !selectedApproved || (tokenRequired && !tokenPresent);
+
+  renderItems("blocker-policy-suggestions-list", suggestions, "No suggested escalations.", (item) =>
+    "<div class=\"item blocker-governance-item\">" +
+      "<strong>" + escapeHTML(item.finding_id) + "</strong>" +
+      "<span>" + escapeHTML(item.message || \"-\") + "</span>" +
+      "<span class=\"muted-text\">" + escapeHTML(item.downgraded_by_policy ? \"downgraded_by_policy=true\" : \"downgraded_by_policy=false\") + "</span>" +
+      "<div class=\"setup-actions evidence-actions blocker-governance-actions\">" +
+        "<button type=\"button\" class=\"secondary-button blocker-policy-select-suggestion\" data-finding-id=\"" + escapeHTML(item.finding_id) + "\">Use</button>" +
+        "<button type=\"button\" class=\"blocker-policy-approve-suggestion\" data-finding-id=\"" + escapeHTML(item.finding_id) + "\">Approve</button>" +
+      "</div>" +
+    "</div>"
+  );
 
   const activeBlockers = Array.isArray(preflight?.blockers) ? preflight.blockers.map((item) => String(item || "").trim()).filter(Boolean) : [];
   renderItems("blocker-policy-active-blockers", activeBlockers, "No active approved blockers.", (item) =>
@@ -5310,10 +5384,22 @@ function renderBlockerGovernance(snapshot) {
     "</div>"
   );
 
+  const history = Array.isArray(policy?.escalation_history) ? policy.escalation_history : [];
+  renderItems("blocker-policy-history-list", history, "No escalation history yet.", (item) =>
+    "<div class=\"item blocker-governance-item\">" +
+      "<strong>" + escapeHTML((item.action || \"-\") + \" \" + (item.finding_id || \"\")) + "</strong>" +
+      "<span>" + escapeHTML(\"at \" + fmtTime(item.created_at) + \" | actor_scope=\" + (item.actor_scope || \"-\") + \" | by=\" + (item.updated_by || \"lab-api\")) + "</span>" +
+      (item.rationale ? ("<span>" + escapeHTML(\"rationale: \" + item.rationale) + "</span>") : \"\") +
+      (item.egm_focus ? ("<span class=\\\"muted-text\\\">" + escapeHTML(\"egm_focus=\" + item.egm_focus) + \"</span>\") : \"\") +
+    "</div>"
+  );
+
   const summaryParts = [
     "approved IDs " + String((policy.effective.approved_blocker_ids || []).length),
+    "suggested escalations " + String(suggestions.length),
     "active blockers " + String(activeBlockers.length),
-    "downgraded findings " + String(downgradedRows.length)
+    "downgraded findings " + String(downgradedRows.length),
+    "history rows " + String(history.length)
   ];
   $("blocker-policy-summary").textContent = "Governance summary: " + summaryParts.join(" | ");
   $("blocker-policy-message").textContent = tokenRequired && !tokenPresent
@@ -5325,14 +5411,89 @@ function syncBlockerPolicyFromSnapshot(snapshot) {
   renderBlockerGovernance(snapshot);
 }
 
-async function reloadBlockerPolicyForm() {
-  const response = await fetch(endpoints.blockerPolicy, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Blocker policy reload failed: HTTP " + response.status);
+function blockerPolicyMutationHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
   }
-  const payload = normalizeBlockerPolicyResponse(await response.json());
+  return withEGMFocusHeader(headers);
+}
+
+async function sendBlockerPolicyEscalationAction(endpoint, findingID, rationale, successMessage, failMessage) {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before changing blocker governance.";
+    return;
+  }
+  const trimmedFindingID = String(findingID || "").trim();
+  if (!trimmedFindingID) {
+    $("blocker-policy-message").textContent = "finding_id is required.";
+    return;
+  }
+  $("blocker-policy-message").textContent = "Applying blocker governance change.";
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: blockerPolicyMutationHeaders(),
+    body: JSON.stringify({
+      finding_id: trimmedFindingID,
+      rationale: String(rationale || "").trim()
+    })
+  });
+  if (!response.ok) {
+    const detail = sanitizeHTTPText(await response.text());
+    $("blocker-policy-message").textContent = failMessage + ": HTTP " + response.status + (detail ? " " + detail : "");
+    setAlert("warning", "Blocker governance update failed", failMessage + ".");
+    return;
+  }
+  $("blocker-policy-message").textContent = successMessage;
+  setAlert("info", "Blocker governance updated", successMessage);
+  schedulePoll(0);
+}
+
+async function approveSelectedBlockerFinding() {
+  const findingID = String($("blocker-policy-finding-id").value || "").trim();
+  const rationale = String($("blocker-policy-rationale").value || "").trim();
+  if (!rationale) {
+    $("blocker-policy-message").textContent = "Rationale is required for blocker escalation approval.";
+    return;
+  }
+  await sendBlockerPolicyEscalationAction(
+    endpoints.blockerPolicyApprove,
+    findingID,
+    rationale,
+    "Blocker escalation approved.",
+    "Approve failed",
+  );
+}
+
+async function revokeSelectedBlockerFinding() {
+  const findingID = String($("blocker-policy-finding-id").value || "").trim();
+  const rationale = String($("blocker-policy-rationale").value || "").trim();
+  await sendBlockerPolicyEscalationAction(
+    endpoints.blockerPolicyRevoke,
+    findingID,
+    rationale,
+    "Blocker escalation revoked.",
+    "Revoke failed",
+  );
+}
+
+async function reloadBlockerPolicyForm() {
+  const [policyResponse, suggestionsResponse] = await Promise.all([
+    fetch(endpoints.blockerPolicy, { cache: "no-store" }),
+    fetch(endpoints.blockerPolicySuggestions, { cache: "no-store" })
+  ]);
+  if (!policyResponse.ok) {
+    throw new Error("Blocker policy reload failed: HTTP " + policyResponse.status);
+  }
+  if (!suggestionsResponse.ok) {
+    throw new Error("Blocker policy suggestions reload failed: HTTP " + suggestionsResponse.status);
+  }
+  const payload = normalizeBlockerPolicyResponse(await policyResponse.json());
+  const suggestionsPayload = normalizeBlockerPolicySuggestions(await suggestionsResponse.json());
   const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   snapshot.blockerPolicy = payload;
+  snapshot.blockerPolicySuggestions = suggestionsPayload;
   clientState.displaySnapshot = snapshot;
   syncBlockerPolicyFromSnapshot(snapshot);
 }
@@ -6731,10 +6892,11 @@ async function pollOnce() {
       fetchJSON(endpoints.cabinetProfileSuggestions),
       fetchJSON(endpoints.heartbeatPolicy),
       fetchJSON(endpoints.blockerPolicy),
+      fetchJSON(endpoints.blockerPolicySuggestions),
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, blockerPolicySuggestionsResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -6770,6 +6932,7 @@ async function pollOnce() {
     if (cabinetProfileSuggestionsResult.status === "fulfilled") snapshot.cabinetProfileSuggestions = normalizeCabinetProfileSuggestions(cabinetProfileSuggestionsResult.value);
     if (heartbeatPolicyResult.status === "fulfilled") snapshot.heartbeatPolicy = heartbeatPolicyResult.value;
     if (blockerPolicyResult.status === "fulfilled") snapshot.blockerPolicy = normalizeBlockerPolicyResponse(blockerPolicyResult.value);
+    if (blockerPolicySuggestionsResult.status === "fulfilled") snapshot.blockerPolicySuggestions = normalizeBlockerPolicySuggestions(blockerPolicySuggestionsResult.value);
     if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
@@ -6785,6 +6948,7 @@ async function pollOnce() {
     if (cabinetProfileSuggestionsResult.status !== "fulfilled") failures.push("cabinet profile suggestions unavailable");
     if (heartbeatPolicyResult.status !== "fulfilled") failures.push("heartbeat policy unavailable");
     if (blockerPolicyResult.status !== "fulfilled") failures.push("blocker policy unavailable");
+    if (blockerPolicySuggestionsResult.status !== "fulfilled") failures.push("blocker policy suggestions unavailable");
     if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
 
     clientState.displaySnapshot = snapshot;
@@ -6989,6 +7153,27 @@ function bindControls() {
   });
   $("blocker-policy-approved-ids").addEventListener("input", () => {
     renderBlockerGovernance(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("blocker-policy-finding-id").addEventListener("input", () => {
+    renderBlockerGovernance(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("blocker-policy-rationale").addEventListener("input", () => {
+    renderBlockerGovernance(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("blocker-policy-approve-button").addEventListener("click", approveSelectedBlockerFinding);
+  $("blocker-policy-revoke-button").addEventListener("click", revokeSelectedBlockerFinding);
+  $("blocker-policy-suggestions-list").addEventListener("click", (event) => {
+    const selectButton = event.target.closest(".blocker-policy-select-suggestion");
+    if (selectButton) {
+      $("blocker-policy-finding-id").value = String(selectButton.getAttribute("data-finding-id") || "").trim();
+      renderBlockerGovernance(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+      return;
+    }
+    const approveButton = event.target.closest(".blocker-policy-approve-suggestion");
+    if (approveButton) {
+      $("blocker-policy-finding-id").value = String(approveButton.getAttribute("data-finding-id") || "").trim();
+      approveSelectedBlockerFinding();
+    }
   });
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
