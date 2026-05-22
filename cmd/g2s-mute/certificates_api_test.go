@@ -106,6 +106,177 @@ func TestValidateCertificateImportPayload(t *testing.T) {
 	}
 }
 
+func TestCertificatePreviewHandlerValidationScenarios(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.Config{
+		Crypto: config.Crypto{
+			G2SCAPath:         filepath.Join(tempDir, "ca.crt"),
+			G2SClientCertPath: filepath.Join(tempDir, "client.crt"),
+			G2SClientKeyPath:  filepath.Join(tempDir, "client.key"),
+			WebServerCertPath: filepath.Join(tempDir, "server.crt"),
+			WebServerKeyPath:  filepath.Join(tempDir, "server.key"),
+		},
+	}
+	handler := certificatePreviewHandler(cfg)
+
+	validCertPEM, validKeyPEM := generateTestCertificateAndKey(t, "preview-valid.local", 90*24*time.Hour)
+	_, mismatchedKeyPEM := generateTestCertificateAndKey(t, "preview-mismatch.local", 90*24*time.Hour)
+
+	tests := []struct {
+		name            string
+		request         certificateImportRequest
+		wantParseOK     bool
+		wantKeyRequired bool
+		wantKeyPresent  bool
+		wantKeyMatch    bool
+		errorContains   []string
+	}{
+		{
+			name: "invalid pem",
+			request: certificateImportRequest{
+				Role:           "g2s_ca_cert",
+				CertificatePEM: "not-a-pem",
+			},
+			wantParseOK:     false,
+			wantKeyRequired: false,
+			wantKeyPresent:  false,
+			wantKeyMatch:    true,
+			errorContains:   []string{"invalid certificate_pem"},
+		},
+		{
+			name: "missing key when required",
+			request: certificateImportRequest{
+				Role:           "g2s_client_cert",
+				CertificatePEM: validCertPEM,
+			},
+			wantParseOK:     false,
+			wantKeyRequired: true,
+			wantKeyPresent:  false,
+			wantKeyMatch:    false,
+			errorContains:   []string{"private_key_pem is required"},
+		},
+		{
+			name: "key mismatch",
+			request: certificateImportRequest{
+				Role:           "g2s_client_cert",
+				CertificatePEM: validCertPEM,
+				PrivateKeyPEM:  mismatchedKeyPEM,
+			},
+			wantParseOK:     false,
+			wantKeyRequired: true,
+			wantKeyPresent:  true,
+			wantKeyMatch:    false,
+			errorContains:   []string{"do not match"},
+		},
+		{
+			name: "valid cert only",
+			request: certificateImportRequest{
+				Role:           "g2s_ca_cert",
+				CertificatePEM: validCertPEM,
+			},
+			wantParseOK:     true,
+			wantKeyRequired: false,
+			wantKeyPresent:  false,
+			wantKeyMatch:    true,
+		},
+		{
+			name: "valid cert and key",
+			request: certificateImportRequest{
+				Role:           "g2s_client_cert",
+				CertificatePEM: validCertPEM,
+				PrivateKeyPEM:  validKeyPEM,
+			},
+			wantParseOK:     true,
+			wantKeyRequired: true,
+			wantKeyPresent:  true,
+			wantKeyMatch:    true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(tc.request)
+			if err != nil {
+				t.Fatalf("marshal payload: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/certificates/preview", bytes.NewReader(payload))
+			req.RemoteAddr = "127.0.0.1:8444"
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			var body certificatePreviewResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode preview response: %v", err)
+			}
+			if body.ParseOK != tc.wantParseOK {
+				t.Fatalf("parse_ok = %v, want %v", body.ParseOK, tc.wantParseOK)
+			}
+			if body.KeyRequired != tc.wantKeyRequired {
+				t.Fatalf("key_required = %v, want %v", body.KeyRequired, tc.wantKeyRequired)
+			}
+			if body.KeyPresent != tc.wantKeyPresent {
+				t.Fatalf("key_present = %v, want %v", body.KeyPresent, tc.wantKeyPresent)
+			}
+			if body.KeyMatchesCert != tc.wantKeyMatch {
+				t.Fatalf("key_matches_cert = %v, want %v", body.KeyMatchesCert, tc.wantKeyMatch)
+			}
+			for _, needle := range tc.errorContains {
+				found := false
+				for _, item := range body.Errors {
+					if strings.Contains(item, needle) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("expected error containing %q, got %#v", needle, body.Errors)
+				}
+			}
+			if tc.wantParseOK {
+				if strings.TrimSpace(body.CertSubject) == "" {
+					t.Fatal("expected cert_subject on parse success")
+				}
+				if strings.TrimSpace(body.CertIssuer) == "" {
+					t.Fatal("expected cert_issuer on parse success")
+				}
+				if body.NotBefore == nil || body.NotAfter == nil {
+					t.Fatal("expected validity window on parse success")
+				}
+			}
+		})
+	}
+}
+
+func TestCertificatePreviewHandlerReadOnlyAuthModel(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		Crypto: config.Crypto{
+			G2SCAPath: filepath.Join(tempDir, "ca.crt"),
+		},
+	}
+	handler := certificatePreviewHandler(cfg)
+	certificatePEM, _ := generateTestCertificateAndKey(t, "preview-auth.local", 90*24*time.Hour)
+	payload, err := json.Marshal(certificateImportRequest{
+		Role:           "g2s_ca_cert",
+		CertificatePEM: certificatePEM,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/certificates/preview", bytes.NewReader(payload))
+	req.RemoteAddr = "127.0.0.1:9018"
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
 func TestCertificateImportHandlerPersistsMaterialsAndRefreshesInventory(t *testing.T) {
 	ctx := context.Background()
 	auditStore, err := store.Open(ctx, ":memory:")

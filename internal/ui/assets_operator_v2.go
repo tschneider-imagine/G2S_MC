@@ -561,6 +561,12 @@ const dashboardHTML = `<!doctype html>
             </div>
           </div>
           <div id="cert-validation-list" class="validation-list"></div>
+          <div class="cert-preview-wrap">
+            <p class="label">Preview Validation</p>
+            <strong id="cert-preview-summary">Run preview before importing certificate material.</strong>
+            <div id="cert-preview-detail" class="muted-text cert-preview-detail">Preview is read-only and does not write files.</div>
+            <div id="cert-preview-list" class="validation-list cert-preview-list"></div>
+          </div>
           <label class="cert-textarea-label">Certificate PEM
             <textarea id="cert-certificate-pem" name="certificate_pem" rows="8" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
           </label>
@@ -568,6 +574,7 @@ const dashboardHTML = `<!doctype html>
             <textarea id="cert-private-key-pem" name="private_key_pem" rows="8" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
           </label>
           <div class="setup-actions cert-actions">
+            <button id="cert-preview-button" type="button" class="secondary-button">Preview Certificate</button>
             <button id="cert-import-button" type="submit">Import Role Certificate</button>
             <button id="cert-export-cert-button" type="button" class="secondary-button">Export Selected Public Cert</button>
             <button id="cert-export-key-button" type="button" class="secondary-button">Export Selected Cert + Key</button>
@@ -1274,6 +1281,22 @@ th {
   font-size: 13px;
 }
 
+.cert-preview-wrap {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: #f8fbf8;
+}
+
+.cert-preview-detail {
+  font-size: 13px;
+}
+
+.cert-preview-list {
+  margin-top: 0;
+}
+
 .cert-manager-details {
   margin-top: 2px;
 }
@@ -1898,6 +1921,7 @@ const dashboardJS = `const endpoints = {
   cabinetProfileSuggestions: "/api/cabinet-profile/suggestions",
   heartbeatPolicy: "/api/heartbeat-policy",
   cabinetPreflight: "/api/cabinet-preflight",
+  certificatePreview: "/api/certificates/preview",
   certificateImport: "/api/certificates/import",
   certificateExport: "/api/certificates/export"
 };
@@ -1922,6 +1946,8 @@ const clientState = {
   egmFilter: "all",
   timelineFilter: "all",
   certSelectedRole: "g2s_ca_cert",
+  certPreviewFingerprint: "",
+  certPreviewResult: null,
   selectedSessionEvidenceID: 0,
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
@@ -5241,6 +5267,19 @@ function certAuthHeaders() {
   return headers;
 }
 
+function certificatePreviewFingerprint(role, certificatePEM, privateKeyPEM, requiresKey) {
+  return [
+    String(role || "").trim(),
+    String(certificatePEM || "").trim(),
+    requiresKey ? String(privateKeyPEM || "").trim() : ""
+  ].join("\n---\n");
+}
+
+function clearCertificatePreviewState() {
+  clientState.certPreviewFingerprint = "";
+  clientState.certPreviewResult = null;
+}
+
 function setCertManagerState(level, message) {
   const badge = $("cert-manager-state");
   badge.textContent = level;
@@ -5280,22 +5319,33 @@ function validateCertificateManagerForm(snapshot) {
   const tokenPresent = !!getCertToken();
   const tokenRequired = runtime.api_mutation_auth_required === true;
   const exportKeyAllowed = runtime.allow_private_key_export === true;
-  const problems = [];
+  const baseProblems = [];
 
   if (!configured) {
-    problems.push(roleDisplayName(role) + " is not configured in appliance runtime.");
+    baseProblems.push(roleDisplayName(role) + " is not configured in appliance runtime.");
   }
   if (!certPEM) {
-    problems.push("Certificate PEM is required.");
+    baseProblems.push("Certificate PEM is required.");
   }
   if (details.requiresKey && !privateKeyPEM) {
-    problems.push("Private key PEM is required for " + roleDisplayName(role) + ".");
+    baseProblems.push("Private key PEM is required for " + roleDisplayName(role) + ".");
   }
   if (!details.requiresKey && privateKeyPEM) {
-    problems.push("Private key PEM is not used for " + roleDisplayName(role) + ".");
+    baseProblems.push("Private key PEM is not used for " + roleDisplayName(role) + ".");
   }
+
+  const previewFingerprint = certificatePreviewFingerprint(role, certPEM, privateKeyPEM, details.requiresKey);
+  const preview = clientState.certPreviewResult && clientState.certPreviewFingerprint === previewFingerprint
+    ? clientState.certPreviewResult
+    : null;
+  const importProblems = baseProblems.slice();
   if (tokenRequired && !tokenPresent) {
-    problems.push("API token is required for certificate import in this browser session.");
+    importProblems.push("API token is required for certificate import in this browser session.");
+  }
+  if (!preview) {
+    importProblems.push("Run Preview before importing certificate material.");
+  } else if (!preview.parse_ok) {
+    importProblems.push("Resolve preview validation errors before importing.");
   }
 
   let exportKeyPolicy = "Private key export not applicable for this role.";
@@ -5322,8 +5372,58 @@ function validateCertificateManagerForm(snapshot) {
     tokenPresent: tokenPresent,
     exportKeyAllowed: exportKeyAllowed,
     exportKeyPolicy: exportKeyPolicy,
-    problems: problems
+    baseProblems: baseProblems,
+    importProblems: importProblems,
+    preview: preview,
+    previewFingerprint: previewFingerprint
   };
+}
+
+function normalizeCertificatePreview(raw, certState) {
+  const payload = raw && typeof raw === "object" ? raw : {};
+  const errors = Array.isArray(payload.errors) ? payload.errors.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  const parseOK = payload.parse_ok === true && errors.length === 0;
+  return {
+    role: String(payload.role || certState.role || "").trim(),
+    parse_ok: parseOK,
+    cert_subject: String(payload.cert_subject || "").trim(),
+    cert_issuer: String(payload.cert_issuer || "").trim(),
+    not_before: payload.not_before || "",
+    not_after: payload.not_after || "",
+    san_dns: Array.isArray(payload.san_dns) ? payload.san_dns.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    san_ips: Array.isArray(payload.san_ips) ? payload.san_ips.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    key_required: payload.key_required === true,
+    key_present: payload.key_present === true,
+    key_matches_cert: payload.key_matches_cert === true,
+    errors: errors
+  };
+}
+
+function renderCertificatePreview(certState) {
+  const preview = certState.preview;
+  if (!preview) {
+    $("cert-preview-summary").textContent = "Run Preview before importing certificate material.";
+    $("cert-preview-detail").textContent = "Preview is read-only and does not write files.";
+    $("cert-preview-list").innerHTML = "";
+    return;
+  }
+  const summary = preview.parse_ok ? "Preview passed." : "Preview found " + String(preview.errors.length) + " issue(s).";
+  const keyLine = preview.key_required
+    ? (preview.key_present ? (preview.key_matches_cert ? "Private key present and matches certificate." : "Private key present but does not match certificate.") : "Private key is required and not present.")
+    : (preview.key_present ? "Private key provided for certificate-only role (not allowed)." : "Private key not required for this role.");
+  const dnsLine = preview.san_dns.length ? preview.san_dns.join(", ") : "-";
+  const ipsLine = preview.san_ips.length ? preview.san_ips.join(", ") : "-";
+  $("cert-preview-summary").textContent = summary;
+  $("cert-preview-detail").textContent = [
+    "Subject: " + (preview.cert_subject || "-"),
+    "Issuer: " + (preview.cert_issuer || "-"),
+    "Not Before: " + fmtTime(preview.not_before),
+    "Not After: " + fmtTime(preview.not_after),
+    "SAN DNS: " + dnsLine,
+    "SAN IPs: " + ipsLine,
+    keyLine
+  ].join(" | ");
+  $("cert-preview-list").innerHTML = preview.errors.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
 }
 
 function renderCertificateManager(snapshot) {
@@ -5341,8 +5441,8 @@ function renderCertificateManager(snapshot) {
   $("cert-role-rules").textContent = certificateRoleRulesText(certState.role);
   $("cert-role-current-status").textContent = certState.record ? stateDetail : support;
   $("cert-role-export-policy").textContent = certState.exportKeyPolicy;
-  $("cert-validation-summary").textContent = certState.problems.length ? certState.problems.length + " issue(s)" : "Ready to import";
-  $("cert-validation-list").innerHTML = certState.problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
+  $("cert-validation-summary").textContent = certState.importProblems.length ? certState.importProblems.length + " issue(s)" : "Ready to import";
+  $("cert-validation-list").innerHTML = certState.importProblems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
   $("cert-api-token-wrapper").classList.toggle("trusted-bypass-hidden", !certState.tokenRequired);
   $("cert-token-controls").classList.toggle("trusted-bypass-hidden", !certState.tokenRequired);
   $("cert-api-token-label").textContent = certState.tokenRequired ? "API Token (required for import/export key)" : "API Token (optional on trusted private network)";
@@ -5350,8 +5450,10 @@ function renderCertificateManager(snapshot) {
     ? "Use API token for import and private-key export actions."
     : "Trusted private network bypass is active for this browser; token is optional for import and private-key export.";
 
+  renderCertificatePreview(certState);
   setCertKeyFieldVisible(certState.details.requiresKey);
-  $("cert-import-button").disabled = certState.problems.length > 0;
+  $("cert-preview-button").disabled = certState.baseProblems.length > 0;
+  $("cert-import-button").disabled = certState.importProblems.length > 0;
   $("cert-export-cert-button").disabled = !certState.configured;
   $("cert-export-key-button").disabled = !certState.details.requiresKey || !certState.configured || !certState.exportKeyAllowed || (certState.tokenRequired && !certState.tokenPresent);
   $("cert-copy-token-button").disabled = !certState.tokenPresent;
@@ -5444,14 +5546,58 @@ function certImportPayload() {
   };
 }
 
+async function previewCertificateMaterial() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const certState = validateCertificateManagerForm(snapshot);
+  if (certState.baseProblems.length > 0) {
+    setCertManagerState("blocked", "Resolve certificate form issues before preview.");
+    setCertManagerDetail(certState.baseProblems.join(" "));
+    return;
+  }
+
+  const payload = certImportPayload();
+  if (!certState.details.requiresKey) {
+    payload.private_key_pem = "";
+  }
+
+  try {
+    setCertManagerState("working", "Previewing " + roleDisplayName(payload.role) + " material.");
+    const response = await fetch(endpoints.certificatePreview, {
+      method: "POST",
+      headers: certAuthHeaders(),
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      clearCertificatePreviewState();
+      setCertManagerState("blocked", "Preview failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      renderCertificateManager(snapshot);
+      return;
+    }
+    const result = await response.json();
+    clientState.certPreviewFingerprint = certState.previewFingerprint;
+    clientState.certPreviewResult = normalizeCertificatePreview(result, certState);
+    if (clientState.certPreviewResult.parse_ok) {
+      setCertManagerState("ready", "Preview valid. Import is now enabled for this payload.");
+    } else {
+      setCertManagerState("blocked", "Preview found validation issues.");
+    }
+    renderCertificateManager(snapshot);
+  } catch (err) {
+    clearCertificatePreviewState();
+    setCertManagerState("blocked", err && err.message ? err.message : "Preview failed.");
+    renderCertificateManager(snapshot);
+  }
+}
+
 async function importCertificateMaterial(event) {
   event.preventDefault();
   const payload = certImportPayload();
   const details = certRoleDetails(payload.role);
   const certState = validateCertificateManagerForm(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
-  if (certState.problems.length > 0) {
+  if (certState.importProblems.length > 0) {
     setCertManagerState("blocked", "Resolve certificate import issues before importing.");
-    setCertManagerDetail(certState.problems.join(" "));
+    setCertManagerDetail(certState.importProblems.join(" "));
     return;
   }
   if (!details.requiresKey) {
@@ -5474,6 +5620,7 @@ async function importCertificateMaterial(event) {
     const certState = parseCertState(result.certificate_status || "UNKNOWN");
     setCertManagerState("saved", "Import complete for " + roleDisplayName(payload.role) + " (" + certState + ").");
     setCertManagerDetail("Subject: " + (result.certificate_subject || "-") + " | Path: " + (result.certificate_path || "-") + (result.private_key_path ? " | Key path: " + result.private_key_path : ""));
+    clearCertificatePreviewState();
     if (!details.requiresKey) {
       $("cert-private-key-pem").value = "";
     }
@@ -5486,6 +5633,7 @@ async function importCertificateMaterial(event) {
 function clearCertificateManagerForm() {
   $("cert-certificate-pem").value = "";
   $("cert-private-key-pem").value = "";
+  clearCertificatePreviewState();
   setCertManagerState("ready", "Certificate form cleared.");
   setCertManagerDetail("");
   renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
@@ -5968,14 +6116,18 @@ function bindControls() {
   });
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
+  $("cert-preview-button").addEventListener("click", previewCertificateMaterial);
   $("cert-role-select").addEventListener("change", () => {
     clientState.certSelectedRole = selectedCertRole();
+    clearCertificatePreviewState();
     renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   });
   $("cert-certificate-pem").addEventListener("input", () => {
+    clearCertificatePreviewState();
     renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   });
   $("cert-private-key-pem").addEventListener("input", () => {
+    clearCertificatePreviewState();
     renderCertificateManager(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   });
   $("cert-api-token").addEventListener("input", () => {

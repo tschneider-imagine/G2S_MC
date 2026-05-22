@@ -50,6 +50,21 @@ type certificateExportResponse struct {
 	PrivateKeyPEM  string `json:"private_key_pem,omitempty"`
 }
 
+type certificatePreviewResponse struct {
+	Role           string     `json:"role"`
+	ParseOK        bool       `json:"parse_ok"`
+	CertSubject    string     `json:"cert_subject,omitempty"`
+	CertIssuer     string     `json:"cert_issuer,omitempty"`
+	NotBefore      *time.Time `json:"not_before,omitempty"`
+	NotAfter       *time.Time `json:"not_after,omitempty"`
+	SANDNS         []string   `json:"san_dns"`
+	SANIPs         []string   `json:"san_ips"`
+	KeyRequired    bool       `json:"key_required"`
+	KeyPresent     bool       `json:"key_present"`
+	KeyMatchesCert bool       `json:"key_matches_cert"`
+	Errors         []string   `json:"errors"`
+}
+
 func certificateImportHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -177,6 +192,35 @@ func certificateExportHandler(cfg config.Config) http.HandlerFunc {
 	}
 }
 
+func certificatePreviewHandler(cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !certificateMaterialRequestAllowed(r, cfg) {
+			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
+			return
+		}
+
+		var request certificateImportRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		role, err := resolveCertificateRole(request.Role, cfg.Crypto)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		writeJSON(w, buildCertificatePreviewResponse(role, request), nil)
+	}
+}
+
 func resolveCertificateRole(role string, cryptoCfg config.Crypto) (certificateRolePaths, error) {
 	normalizedRole := strings.TrimSpace(role)
 	switch normalizedRole {
@@ -230,32 +274,77 @@ func roleWithKeyPaths(role string, certificatePath string, keyPath string, certi
 }
 
 func validateCertificateImportPayload(role certificateRolePaths, request certificateImportRequest) (*x509.Certificate, error) {
-	certificatePEM := strings.TrimSpace(request.CertificatePEM)
-	privateKeyPEM := strings.TrimSpace(request.PrivateKeyPEM)
-	if certificatePEM == "" {
-		return nil, errors.New("certificate_pem is required")
+	preview := buildCertificatePreviewResponse(role, request)
+	if !preview.ParseOK {
+		return nil, errors.New(strings.Join(preview.Errors, "; "))
 	}
-
-	certificate, err := parseCertificatePEM(certificatePEM)
+	certificate, err := parseCertificatePEM(strings.TrimSpace(request.CertificatePEM))
 	if err != nil {
 		return nil, fmt.Errorf("invalid certificate_pem: %w", err)
+	}
+	return certificate, nil
+}
+
+func buildCertificatePreviewResponse(role certificateRolePaths, request certificateImportRequest) certificatePreviewResponse {
+	certificatePEM := strings.TrimSpace(request.CertificatePEM)
+	privateKeyPEM := strings.TrimSpace(request.PrivateKeyPEM)
+	response := certificatePreviewResponse{
+		Role:           role.Role,
+		ParseOK:        false,
+		SANDNS:         []string{},
+		SANIPs:         []string{},
+		KeyRequired:    role.RequiresPrivateKey,
+		KeyPresent:     privateKeyPEM != "",
+		KeyMatchesCert: !role.RequiresPrivateKey && privateKeyPEM == "",
+		Errors:         []string{},
+	}
+
+	var parsedCertificate *x509.Certificate
+	if certificatePEM == "" {
+		response.Errors = append(response.Errors, "certificate_pem is required")
+	} else {
+		certificate, err := parseCertificatePEM(certificatePEM)
+		if err != nil {
+			response.Errors = append(response.Errors, "invalid certificate_pem: "+err.Error())
+		} else {
+			parsedCertificate = certificate
+		}
+	}
+
+	if parsedCertificate != nil {
+		response.CertSubject = parsedCertificate.Subject.String()
+		response.CertIssuer = parsedCertificate.Issuer.String()
+		notBefore := parsedCertificate.NotBefore.UTC()
+		notAfter := parsedCertificate.NotAfter.UTC()
+		response.NotBefore = &notBefore
+		response.NotAfter = &notAfter
+		response.SANDNS = append(response.SANDNS, parsedCertificate.DNSNames...)
+		for _, ip := range parsedCertificate.IPAddresses {
+			response.SANIPs = append(response.SANIPs, ip.String())
+		}
 	}
 
 	if role.RequiresPrivateKey {
 		if privateKeyPEM == "" {
-			return nil, errors.New("private_key_pem is required for this role")
-		}
-		if _, err := parsePrivateKeyPEM(privateKeyPEM); err != nil {
-			return nil, fmt.Errorf("invalid private_key_pem: %w", err)
-		}
-		if _, err := tls.X509KeyPair([]byte(certificatePEM), []byte(privateKeyPEM)); err != nil {
-			return nil, fmt.Errorf("certificate and private key do not match: %w", err)
+			response.Errors = append(response.Errors, "private_key_pem is required for this role")
+		} else {
+			if _, err := parsePrivateKeyPEM(privateKeyPEM); err != nil {
+				response.Errors = append(response.Errors, "invalid private_key_pem: "+err.Error())
+			} else if parsedCertificate != nil {
+				if _, err := tls.X509KeyPair([]byte(certificatePEM), []byte(privateKeyPEM)); err != nil {
+					response.Errors = append(response.Errors, "certificate and private key do not match: "+err.Error())
+				} else {
+					response.KeyMatchesCert = true
+				}
+			}
 		}
 	} else if privateKeyPEM != "" {
-		return nil, fmt.Errorf("private_key_pem is not allowed for role %s", role.Role)
+		response.Errors = append(response.Errors, "private_key_pem is not allowed for role "+role.Role)
+		response.KeyMatchesCert = false
 	}
 
-	return certificate, nil
+	response.ParseOK = len(response.Errors) == 0
+	return response
 }
 
 func parseCertificatePEM(raw string) (*x509.Certificate, error) {

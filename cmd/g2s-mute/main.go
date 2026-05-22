@@ -158,6 +158,7 @@ func main() {
 			http.MethodDelete,
 		),
 	)
+	mux.HandleFunc("/api/certificates/preview", certificatePreviewHandler(cfg))
 	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
 	mux.HandleFunc(
