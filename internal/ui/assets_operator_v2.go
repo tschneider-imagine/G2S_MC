@@ -155,6 +155,7 @@ const dashboardHTML = `<!doctype html>
           <div><dt>First Test EGM IDs</dt><dd id="first-cabinet-egm-ids">-</dd></div>
           <div><dt>Certificate Blocking Count</dt><dd id="first-cabinet-cert-blocking">-</dd></div>
           <div><dt>Lab Optional Certificate Count</dt><dd id="first-cabinet-cert-lab-optional">-</dd></div>
+          <div><dt>Endpoint Integrity Alerts</dt><dd id="first-cabinet-endpoint-alerts">-</dd></div>
           <div><dt>API Auth State</dt><dd id="first-cabinet-auth-state">-</dd></div>
         </dl>
         <div class="mute-path-status-wrap">
@@ -330,6 +331,7 @@ const dashboardHTML = `<!doctype html>
               <button type="button" class="filter-tab is-active" data-filter="all">All</button>
               <button type="button" class="filter-tab" data-filter="healthy">Healthy</button>
               <button type="button" class="filter-tab" data-filter="unhealthy">Unhealthy</button>
+              <button type="button" class="filter-tab" data-filter="endpoint_integrity">Endpoint Alerts</button>
             </div>
             <span id="egm-sort-label" class="muted-text">Sort: EGM ID asc</span>
           </div>
@@ -353,6 +355,21 @@ const dashboardHTML = `<!doctype html>
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div class="panel endpoint-integrity-panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Endpoint Integrity</h2>
+            <span id="endpoint-integrity-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="endpoint-integrity-summary" class="muted-text">No endpoint collisions detected.</span>
+        </div>
+        <div class="setup-actions">
+          <button id="endpoint-integrity-filter-button" type="button" class="secondary-button">Show Affected EGMs</button>
+        </div>
+        <div id="endpoint-integrity-message" class="muted-text">Signals only. Endpoint integrity warnings do not block mute path.</div>
+        <div id="endpoint-integrity-list" class="timeline"></div>
       </div>
 
       <div class="panel cabinet-run-panel">
@@ -1580,6 +1597,27 @@ th {
   font-weight: 700;
 }
 
+.endpoint-integrity-panel {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.endpoint-integrity-warning {
+  border-left: 3px solid #f59e0b;
+  padding-left: 0.5rem;
+}
+
+.endpoint-integrity-warning-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.endpoint-integrity-warning-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .token-help {
   display: flex;
   flex-wrap: wrap;
@@ -2301,6 +2339,8 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
         last_endpoint_seen_at: "",
         endpoint_drift_warning: false,
         endpoint_drift_ips: [],
+        endpoint_collision_warning: false,
+        endpoint_collision_types: [],
         recent_endpoints: [],
         total_events: 0,
         non_heartbeat_events: 0,
@@ -2328,6 +2368,10 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
     }
     row.endpoint_drift_warning = egm?.endpoint_drift_warning === true;
     row.endpoint_drift_ips = Array.isArray(egm?.endpoint_drift_ips) ? egm.endpoint_drift_ips.slice() : [];
+    row.endpoint_collision_warning = egm?.endpoint_collision_warning === true;
+    row.endpoint_collision_types = Array.isArray(egm?.endpoint_collision_types)
+      ? egm.endpoint_collision_types.map((item) => String(item || "").toUpperCase()).filter(Boolean)
+      : [];
     row.recent_endpoints = Array.isArray(egm?.recent_endpoints) ? egm.recent_endpoints.slice() : [];
   });
 
@@ -2367,6 +2411,8 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
         last_endpoint_seen_at: row.last_endpoint_seen_at || "",
         endpoint_drift_warning: row.endpoint_drift_warning === true,
         endpoint_drift_ips: Array.isArray(row.endpoint_drift_ips) ? row.endpoint_drift_ips.slice() : [],
+        endpoint_collision_warning: row.endpoint_collision_warning === true,
+        endpoint_collision_types: Array.isArray(row.endpoint_collision_types) ? row.endpoint_collision_types.slice() : [],
         recent_endpoints: Array.isArray(row.recent_endpoints) ? row.recent_endpoints.slice() : [],
         total_events: row.total_events,
         non_heartbeat_events: row.non_heartbeat_events,
@@ -2409,9 +2455,73 @@ function renderEGMGroupedSummary(snapshot) {
       "<span>last seen " + escapeHTML(fmtTime(row.last_seen_at)) + " | last keepAlive " + escapeHTML(fmtTime(row.heartbeat_last_keepalive_at)) + "</span>" +
       "<span>endpoint " + escapeHTML((row.last_endpoint_ip || "-") + ":" + (row.last_endpoint_port || "-")) +
       " | endpoint seen " + escapeHTML(fmtTime(row.last_endpoint_seen_at)) +
-      " | drift " + escapeHTML(row.endpoint_drift_warning ? ("warning (" + ((row.endpoint_drift_ips || []).join(", ")) + ")") : "none") + "</span>" +
+      " | drift " + escapeHTML(row.endpoint_drift_warning ? ("warning (" + ((row.endpoint_drift_ips || []).join(", ")) + ")") : "none") +
+      " | integrity " + escapeHTML(row.endpoint_collision_warning ? ("warning (" + ((row.endpoint_collision_types || []).join(", ")) + ")") : "none") + "</span>" +
     "</div>"
   );
+}
+
+function endpointCollisionTypeLabel(value) {
+  const normalized = String(value || "").toUpperCase();
+  if (normalized === "SHARED_ENDPOINT") {
+    return "Shared Endpoint";
+  }
+  if (normalized === "ID_ENDPOINT_DRIFT") {
+    return "EGM ID Endpoint Drift";
+  }
+  return normalized || "Unknown";
+}
+
+function normalizeEndpointCollisionRows(status) {
+  const rows = Array.isArray(status?.endpoint_collisions) ? status.endpoint_collisions.slice() : [];
+  return rows
+    .map((row) => ({
+      collision_type: String(row?.collision_type || "").toUpperCase(),
+      involved_egm_ids: Array.isArray(row?.involved_egm_ids) ? row.involved_egm_ids.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      endpoint: String(row?.endpoint || "").trim(),
+      first_seen_at: String(row?.first_seen_at || "").trim(),
+      last_seen_at: String(row?.last_seen_at || "").trim()
+    }))
+    .sort((a, b) => {
+      const timeCompare = numericTime(b?.last_seen_at) - numericTime(a?.last_seen_at);
+      if (timeCompare !== 0) return timeCompare;
+      if (a.collision_type !== b.collision_type) return a.collision_type.localeCompare(b.collision_type);
+      return String(a.endpoint || "").localeCompare(String(b.endpoint || ""));
+    });
+}
+
+function renderEndpointIntegrity(snapshot) {
+  const status = snapshot?.status || {};
+  const summary = status?.endpoint_collision_summary || {};
+  const total = Number(summary?.total || 0);
+  const sharedCount = Number(summary?.shared_endpoint_count || 0);
+  const driftCount = Number(summary?.id_endpoint_drift_count || 0);
+  const affectedIDs = Array.isArray(summary?.affected_egm_ids) ? summary.affected_egm_ids.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  const rows = normalizeEndpointCollisionRows(status);
+
+  $("endpoint-integrity-state").textContent = total > 0 ? "warning" : "ready";
+  $("endpoint-integrity-state").className = "source-pill " + (total > 0 ? "source-mixed" : "source-file");
+  $("endpoint-integrity-summary").textContent = total > 0
+    ? ("Active warnings: " + String(total) + " | shared endpoint " + String(sharedCount) + " | ID endpoint drift " + String(driftCount) +
+      (affectedIDs.length ? (" | affected EGMs " + affectedIDs.join(", ")) : ""))
+    : "No endpoint collisions detected.";
+  $("endpoint-integrity-message").textContent = total > 0
+    ? "Signals only. Review endpoint collisions and verify expected cabinet network identity."
+    : "Signals only. Endpoint integrity warnings do not block mute path.";
+
+  const filterButton = $("endpoint-integrity-filter-button");
+  const integrityFilterActive = clientState.egmFilter === "endpoint_integrity";
+  filterButton.textContent = integrityFilterActive ? "Show All EGMs" : "Show Affected EGMs";
+  filterButton.disabled = total === 0 && !integrityFilterActive;
+
+  renderItems("endpoint-integrity-list", rows, "No endpoint integrity warnings detected.", (item) => {
+    const typeLabel = endpointCollisionTypeLabel(item.collision_type);
+    const ids = item.involved_egm_ids.length ? item.involved_egm_ids.join(", ") : "-";
+    return "<div class=\"item endpoint-integrity-warning\">" +
+      "<div class=\"endpoint-integrity-warning-head\"><strong>" + escapeHTML(typeLabel) + "</strong><span class=\"timeline-egm-chip\">" + escapeHTML(item.endpoint || "-") + "</span></div>" +
+      "<div class=\"endpoint-integrity-warning-meta\">EGMs: " + escapeHTML(ids) + " | first seen " + escapeHTML(fmtTime(item.first_seen_at)) + " | last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ")</div>" +
+      "</div>";
+  });
 }
 
 function firstTestEGMIDSet(snapshot) {
@@ -2445,6 +2555,8 @@ function selectedEGMDetailForSnapshot(snapshot) {
       last_endpoint_seen_at: "",
       endpoint_drift_warning: false,
       endpoint_drift_ips: [],
+      endpoint_collision_warning: false,
+      endpoint_collision_types: [],
       recent_endpoints: [],
       endpoint_warning_text: "",
       live_signal: "UNKNOWN",
@@ -2479,6 +2591,8 @@ function selectedEGMDetailForSnapshot(snapshot) {
     last_endpoint_seen_at: selected.last_endpoint_seen_at || "",
     endpoint_drift_warning: selected.endpoint_drift_warning === true,
     endpoint_drift_ips: Array.isArray(selected.endpoint_drift_ips) ? selected.endpoint_drift_ips.slice() : [],
+    endpoint_collision_warning: selected.endpoint_collision_warning === true,
+    endpoint_collision_types: Array.isArray(selected.endpoint_collision_types) ? selected.endpoint_collision_types.slice() : [],
     recent_endpoints: recentEndpoints,
     endpoint_warning_text: endpointWarningText,
     live_signal: liveObserved ? "OBSERVED" : "NOT_OBSERVED",
@@ -2513,6 +2627,7 @@ function renderSelectedEGMDetail(snapshot) {
       "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id) + "</span>" + egmSourcePill(item.source) + statusPill(item.status) + "</div></div>" +
       "<span>live signal " + escapeHTML(item.live_signal || "-") + " | last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ") | heartbeat " + escapeHTML(item.heartbeat_label || "-") + " | last keepAlive " + escapeHTML(fmtTime(item.heartbeat_last_keepalive_at)) + "</span>" +
       "<span>endpoint " + escapeHTML((item.last_endpoint_ip || "-") + ":" + (item.last_endpoint_port || "-")) + " | endpoint seen " + escapeHTML(fmtTime(item.last_endpoint_seen_at)) + " | endpoint drift " + escapeHTML(item.endpoint_drift_warning ? "warning" : "none") + (item.endpoint_drift_warning && item.endpoint_drift_ips?.length ? (" (" + escapeHTML(item.endpoint_drift_ips.join(", ")) + ")") : "") + "</span>" +
+      "<span>endpoint integrity " + escapeHTML(item.endpoint_collision_warning ? "warning" : "none") + (item.endpoint_collision_warning && item.endpoint_collision_types?.length ? (" (" + escapeHTML(item.endpoint_collision_types.join(", ")) + ")") : "") + "</span>" +
       "<span>Recent Endpoints (newest first)</span>" +
       "<ul class=\"operator-readiness-items\">" + recentHTML + "</ul>" +
       (item.endpoint_warning_text ? ("<span>" + escapeHTML(item.endpoint_warning_text) + "</span>") : "") +
@@ -3337,6 +3452,16 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
     pushUniqueString(informational, "No EGM traffic observed yet.");
     pushUniqueString(nextActions, "Start cabinet session and confirm commsOnLine/keepAlive traffic.");
   }
+  const endpointIntegrity = status?.endpoint_collision_summary || {};
+  const endpointAlerts = Number(endpointIntegrity?.total || 0);
+  if (endpointAlerts > 0) {
+    const sharedCount = Number(endpointIntegrity?.shared_endpoint_count || 0);
+    const driftCount = Number(endpointIntegrity?.id_endpoint_drift_count || 0);
+    pushUniqueString(labWarning, "Endpoint integrity warnings: " + String(endpointAlerts) + " (shared endpoint " + String(sharedCount) + ", ID endpoint drift " + String(driftCount) + ").");
+    pushUniqueString(nextActions, "Review Endpoint Integrity panel and inspect affected EGMs.");
+  } else {
+    pushUniqueString(informational, "Endpoint integrity: no active endpoint collisions detected.");
+  }
 
   if (!focus.selected_egm_id) {
     pushUniqueString(informational, "All-EGMs focus is active for session-wide monitoring.");
@@ -3509,6 +3634,11 @@ function renderFirstCabinetSession(snapshot) {
   $("first-cabinet-egm-ids").textContent = session.firstEGMIDs.length ? session.firstEGMIDs.join(", ") : "-";
   $("first-cabinet-cert-blocking").textContent = String(session.certCounts.blocking);
   $("first-cabinet-cert-lab-optional").textContent = String(session.certCounts.labOptional);
+  const endpointSummary = snapshot?.status?.endpoint_collision_summary || {};
+  const endpointAlerts = Number(endpointSummary?.total || 0);
+  $("first-cabinet-endpoint-alerts").textContent = endpointAlerts > 0
+    ? (String(endpointAlerts) + " warning(s)")
+    : "None";
   $("first-cabinet-auth-state").textContent = session.authState;
 
   const blockerList = $("first-cabinet-session-blockers");
@@ -5145,6 +5275,12 @@ function applyEGMFilter(egms) {
   if (clientState.egmFilter === "unhealthy") {
     return egms.filter((egm) => unhealthyStates.has(String(egm.status || "").toUpperCase()));
   }
+  if (clientState.egmFilter === "endpoint_integrity") {
+    return egms.filter((egm) =>
+      egm?.endpoint_collision_warning === true ||
+      egm?.endpoint_drift_warning === true
+    );
+  }
   return egms;
 }
 
@@ -5172,6 +5308,12 @@ function renderEGMTable(status) {
       const driftLabel = egm.endpoint_drift_warning === true
         ? ("warning" + (Array.isArray(egm.endpoint_drift_ips) && egm.endpoint_drift_ips.length ? (" (" + egm.endpoint_drift_ips.join(", ") + ")") : ""))
         : "none";
+      const collisionTypes = Array.isArray(egm.endpoint_collision_types)
+        ? egm.endpoint_collision_types.map((item) => String(item || "").toUpperCase()).filter(Boolean)
+        : [];
+      const integrityLabel = egm.endpoint_collision_warning === true
+        ? ("warning" + (collisionTypes.length ? (" (" + collisionTypes.join(", ") + ")") : ""))
+        : "none";
       return "" +
     "<tr>" +
       "<td><strong>" + escapeHTML(egm.id) + "</strong><br><span class=\"minor\">" + escapeHTML((egm.vendor || "") + " " + (egm.cabinet_family || "")).trim() + "</span></td>" +
@@ -5179,7 +5321,7 @@ function renderEGMTable(status) {
       "<td>" + statusPill(egm.status) + "</td>" +
       "<td>" + escapeHTML(configuredAddress) + "</td>" +
       "<td>" + escapeHTML(endpointAddress) + "<br><span class=\"minor\">seen " + escapeHTML(fmtTime(egm.last_endpoint_seen_at)) + "</span></td>" +
-      "<td>" + escapeHTML(driftLabel) + "</td>" +
+      "<td>" + escapeHTML(driftLabel) + "<br><span class=\"minor\">integrity " + escapeHTML(integrityLabel) + "</span></td>" +
       "<td>" + escapeHTML(egm.game_title || "-") + "<br><span class=\"minor\">" + escapeHTML(egm.software_version || "") + "</span></td>" +
       "<td>" + escapeHTML(fmtTime(egm.last_seen)) + "<br><span class=\"minor\">" + escapeHTML(fmtAge(egm.last_seen)) + "</span></td>" +
     "</tr>";
@@ -6135,6 +6277,7 @@ function renderStatus(snapshot) {
   renderEGMGroupedSummary(snapshot);
   renderSelectedEGMDetail(snapshot);
   renderEGMTable(status);
+  renderEndpointIntegrity(snapshot);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
   renderHeartbeatSummary(snapshot);
@@ -6427,6 +6570,7 @@ function setFilter(filter) {
   });
   if (clientState.displaySnapshot) {
     renderEGMTable(clientState.displaySnapshot.status || {});
+    renderEndpointIntegrity(clientState.displaySnapshot);
     renderAlerts(clientState.displaySnapshot);
   }
 }
@@ -6475,6 +6619,13 @@ function bindControls() {
   $("session-evidence-json-button").addEventListener("click", exportSessionEvidenceJSON);
   $("session-evidence-markdown-button").addEventListener("click", exportSessionEvidenceMarkdown);
   $("session-evidence-export-all-button").addEventListener("click", exportAllSavedSessionEvidence);
+  $("endpoint-integrity-filter-button").addEventListener("click", () => {
+    if (clientState.egmFilter === "endpoint_integrity") {
+      setFilter("all");
+      return;
+    }
+    setFilter("endpoint_integrity");
+  });
   $("session-package-export-button").addEventListener("click", exportSessionPackage);
   $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
   $("workflow-progress-clear-button").addEventListener("click", clearSessionWorkflowProgress);

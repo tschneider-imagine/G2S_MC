@@ -188,6 +188,12 @@ func TestKeepAliveSetsEndpointDriftWhenSameEGMIDMovesAcrossIPs(t *testing.T) {
 	if egm.LastEndpointIP != "10.10.1.16" {
 		t.Fatalf("last_endpoint_ip = %q, want 10.10.1.16", egm.LastEndpointIP)
 	}
+	if !egm.EndpointCollisionWarning {
+		t.Fatal("endpoint_collision_warning = false, want true for ID endpoint drift")
+	}
+	if !containsEndpointCollisionType(egm.EndpointCollisionTypes, model.EndpointCollisionIDEndpointDrift) {
+		t.Fatalf("endpoint_collision_types = %#v, want ID_ENDPOINT_DRIFT", egm.EndpointCollisionTypes)
+	}
 }
 
 func TestEndpointDriftWindowExpiresOldIPs(t *testing.T) {
@@ -221,6 +227,113 @@ func TestEndpointDriftWindowExpiresOldIPs(t *testing.T) {
 	}
 	if egm.LastEndpointIP != "10.0.0.22" {
 		t.Fatalf("last_endpoint_ip = %q, want 10.0.0.22", egm.LastEndpointIP)
+	}
+}
+
+func TestSharedEndpointCollisionAcrossMultipleEGMIDs(t *testing.T) {
+	eng := New("controller", []config.EGM{
+		{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443},
+		{EGMID: "EGM-2", IPAddress: "10.0.0.12", Port: 9444},
+	})
+	now := time.Now()
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now, SourceIP: "192.168.10.40", SourcePort: 9500})
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-2", At: now.Add(time.Second), SourceIP: "192.168.10.40", SourcePort: 9500})
+
+	snapshot := eng.Snapshot()
+	if snapshot.EndpointCollisionSummary.Total != 1 {
+		t.Fatalf("collision total = %d, want 1", snapshot.EndpointCollisionSummary.Total)
+	}
+	if snapshot.EndpointCollisionSummary.SharedEndpointCount != 1 {
+		t.Fatalf("shared endpoint count = %d, want 1", snapshot.EndpointCollisionSummary.SharedEndpointCount)
+	}
+	if snapshot.EndpointCollisionSummary.IDEndpointDriftCount != 0 {
+		t.Fatalf("id endpoint drift count = %d, want 0", snapshot.EndpointCollisionSummary.IDEndpointDriftCount)
+	}
+	if len(snapshot.EndpointCollisions) != 1 {
+		t.Fatalf("endpoint collisions len = %d, want 1", len(snapshot.EndpointCollisions))
+	}
+	row := snapshot.EndpointCollisions[0]
+	if row.CollisionType != model.EndpointCollisionSharedEndpoint {
+		t.Fatalf("collision type = %q, want %q", row.CollisionType, model.EndpointCollisionSharedEndpoint)
+	}
+	if row.Endpoint != "192.168.10.40:9500" {
+		t.Fatalf("collision endpoint = %q, want 192.168.10.40:9500", row.Endpoint)
+	}
+	if len(row.InvolvedEGMIDs) != 2 || row.InvolvedEGMIDs[0] != "EGM-1" || row.InvolvedEGMIDs[1] != "EGM-2" {
+		t.Fatalf("collision involved ids = %#v, want [EGM-1 EGM-2]", row.InvolvedEGMIDs)
+	}
+
+	egm1, ok := snapshotEGMByID(snapshot, "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if !egm1.EndpointCollisionWarning {
+		t.Fatal("EGM-1 endpoint_collision_warning = false, want true")
+	}
+	if !containsEndpointCollisionType(egm1.EndpointCollisionTypes, model.EndpointCollisionSharedEndpoint) {
+		t.Fatalf("EGM-1 endpoint_collision_types = %#v, want SHARED_ENDPOINT", egm1.EndpointCollisionTypes)
+	}
+
+	egm2, ok := snapshotEGMByID(snapshot, "EGM-2")
+	if !ok {
+		t.Fatalf("expected EGM-2 in snapshot")
+	}
+	if !egm2.EndpointCollisionWarning {
+		t.Fatal("EGM-2 endpoint_collision_warning = false, want true")
+	}
+	if !containsEndpointCollisionType(egm2.EndpointCollisionTypes, model.EndpointCollisionSharedEndpoint) {
+		t.Fatalf("EGM-2 endpoint_collision_types = %#v, want SHARED_ENDPOINT", egm2.EndpointCollisionTypes)
+	}
+}
+
+func TestIDEndpointDriftCollisionIncludesEachActiveEndpoint(t *testing.T) {
+	eng := New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443}})
+	now := time.Now()
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now, SourceIP: "10.10.1.15", SourcePort: 9443})
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now.Add(time.Minute), SourceIP: "10.10.1.16", SourcePort: 9443})
+
+	snapshot := eng.Snapshot()
+	if snapshot.EndpointCollisionSummary.SharedEndpointCount != 0 {
+		t.Fatalf("shared endpoint count = %d, want 0", snapshot.EndpointCollisionSummary.SharedEndpointCount)
+	}
+	if snapshot.EndpointCollisionSummary.IDEndpointDriftCount != 2 {
+		t.Fatalf("id endpoint drift count = %d, want 2", snapshot.EndpointCollisionSummary.IDEndpointDriftCount)
+	}
+	if snapshot.EndpointCollisionSummary.Total != 2 {
+		t.Fatalf("collision total = %d, want 2", snapshot.EndpointCollisionSummary.Total)
+	}
+	egm, ok := snapshotEGMByID(snapshot, "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if !egm.EndpointDrift {
+		t.Fatal("endpoint_drift_warning = false, want true")
+	}
+	if !egm.EndpointCollisionWarning {
+		t.Fatal("endpoint_collision_warning = false, want true")
+	}
+	if !containsEndpointCollisionType(egm.EndpointCollisionTypes, model.EndpointCollisionIDEndpointDrift) {
+		t.Fatalf("endpoint_collision_types = %#v, want ID_ENDPOINT_DRIFT", egm.EndpointCollisionTypes)
+	}
+}
+
+func TestSharedEndpointCollisionAgesOutAfterWindow(t *testing.T) {
+	eng := New("controller", []config.EGM{
+		{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443},
+		{EGMID: "EGM-2", IPAddress: "10.0.0.12", Port: 9444},
+	})
+	now := time.Now()
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now, SourceIP: "192.168.10.50", SourcePort: 9550})
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-2", At: now.Add(time.Second), SourceIP: "192.168.10.50", SourcePort: 9550})
+	initial := eng.Snapshot()
+	if initial.EndpointCollisionSummary.SharedEndpointCount == 0 {
+		t.Fatalf("expected initial shared endpoint collision")
+	}
+
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now.Add(endpointDriftWindow + 2*time.Second), SourceIP: "192.168.10.51", SourcePort: 9551})
+	snapshot := eng.Snapshot()
+	if snapshot.EndpointCollisionSummary.SharedEndpointCount != 0 {
+		t.Fatalf("shared endpoint count = %d, want 0 after stale claims age out", snapshot.EndpointCollisionSummary.SharedEndpointCount)
 	}
 }
 
@@ -320,4 +433,13 @@ func snapshotEGMByID(snapshot Snapshot, id string) (model.EGM, bool) {
 		}
 	}
 	return model.EGM{}, false
+}
+
+func containsEndpointCollisionType(types []model.EndpointCollisionType, target model.EndpointCollisionType) bool {
+	for _, entry := range types {
+		if entry == target {
+			return true
+		}
+	}
+	return false
 }

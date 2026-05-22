@@ -186,6 +186,12 @@ func TestStatusHandlerIncludesEndpointMetadataAndDriftWarning(t *testing.T) {
 	if !egm.EndpointDrift {
 		t.Fatalf("endpoint_drift_warning = false, want true")
 	}
+	if !egm.EndpointCollisionWarning {
+		t.Fatalf("endpoint_collision_warning = false, want true")
+	}
+	if len(egm.EndpointCollisionTypes) == 0 {
+		t.Fatalf("endpoint_collision_types empty, want ID_ENDPOINT_DRIFT")
+	}
 	if len(egm.EndpointDriftIPs) != 2 {
 		t.Fatalf("endpoint_drift_ips len = %d, want 2", len(egm.EndpointDriftIPs))
 	}
@@ -197,6 +203,91 @@ func TestStatusHandlerIncludesEndpointMetadataAndDriftWarning(t *testing.T) {
 	}
 	if egm.RecentEndpoints[0].SeenCount != 1 {
 		t.Fatalf("recent_endpoints[0].seen_count = %d, want 1", egm.RecentEndpoints[0].SeenCount)
+	}
+	if body.EndpointCollisionSummary.Total == 0 {
+		t.Fatalf("endpoint_collision_summary.total = %d, want >0", body.EndpointCollisionSummary.Total)
+	}
+	if body.EndpointCollisionSummary.IDEndpointDriftCount == 0 {
+		t.Fatalf("endpoint_collision_summary.id_endpoint_drift_count = %d, want >0", body.EndpointCollisionSummary.IDEndpointDriftCount)
+	}
+}
+
+func TestStatusHandlerIncludesSharedEndpointCollisionSummary(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		ControllerID: "G2S-MC-SHARED-ENDPOINT",
+		Database:     config.Database{Path: "/tmp/g2s-mute.db"},
+		WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
+		Timeouts:     config.Timeouts{EGMHeartbeatIntervalMS: 5000},
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://host-a.example/g2s",
+			ListenerDNSName: "host-a.example",
+			RequiredSANDNS:  []string{"host-a.example"},
+			HostID:          "HOST-TEST-001",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+		G2S: config.G2S{
+			HostURL:      "http://127.0.0.1:8444/g2s",
+			EndpointPath: "/g2s",
+		},
+		EGMRoster: []config.EGM{
+			{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443},
+			{EGMID: "EGM-02", IPAddress: "127.0.0.1", Port: 9444},
+		},
+	}
+	eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eng.Start(runCtx)
+	now := time.Now()
+	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: now})
+	eng.Submit(engine.Event{
+		Type:       engine.EventKeepAlive,
+		EGMID:      "EGM-01",
+		At:         now.Add(time.Second),
+		SourceIP:   "10.20.30.50",
+		SourcePort: 9550,
+	})
+	eng.Submit(engine.Event{
+		Type:       engine.EventKeepAlive,
+		EGMID:      "EGM-02",
+		At:         now.Add(2 * time.Second),
+		SourceIP:   "10.20.30.50",
+		SourcePort: 9550,
+	})
+	waitForLastEvent(t, eng, string(engine.EventKeepAlive))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	rr := httptest.NewRecorder()
+	statusHandler(eng, auditStore, cfg, runtimeInfo{
+		ConfigPath: "/etc/g2s-mute/config.json",
+		StartedAt:  now.Add(-10 * time.Second),
+	})(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var body applianceStatus
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if body.EndpointCollisionSummary.SharedEndpointCount != 1 {
+		t.Fatalf("shared endpoint count = %d, want 1", body.EndpointCollisionSummary.SharedEndpointCount)
+	}
+	if body.EndpointCollisionSummary.Total != 1 {
+		t.Fatalf("collision total = %d, want 1", body.EndpointCollisionSummary.Total)
+	}
+	if len(body.EndpointCollisions) != 1 {
+		t.Fatalf("endpoint collisions len = %d, want 1", len(body.EndpointCollisions))
+	}
+	if body.EndpointCollisions[0].CollisionType != model.EndpointCollisionSharedEndpoint {
+		t.Fatalf("collision type = %q, want %q", body.EndpointCollisions[0].CollisionType, model.EndpointCollisionSharedEndpoint)
 	}
 }
 

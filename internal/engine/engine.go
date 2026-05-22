@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,13 +40,15 @@ type Event struct {
 }
 
 type Snapshot struct {
-	ControllerID string                `json:"controller_id"`
-	State        model.ControllerState `json:"state"`
-	UpdatedAt    time.Time             `json:"updated_at"`
-	Incident     *model.Incident       `json:"incident,omitempty"`
-	EGMs         []model.EGM           `json:"egms"`
-	LastEvent    string                `json:"last_event,omitempty"`
-	AuditError   string                `json:"audit_error,omitempty"`
+	ControllerID             string                         `json:"controller_id"`
+	State                    model.ControllerState          `json:"state"`
+	UpdatedAt                time.Time                      `json:"updated_at"`
+	Incident                 *model.Incident                `json:"incident,omitempty"`
+	EGMs                     []model.EGM                    `json:"egms"`
+	EndpointCollisionSummary model.EndpointCollisionSummary `json:"endpoint_collision_summary"`
+	EndpointCollisions       []model.EndpointCollision      `json:"endpoint_collisions,omitempty"`
+	LastEvent                string                         `json:"last_event,omitempty"`
+	AuditError               string                         `json:"audit_error,omitempty"`
 }
 
 type AuditSink interface {
@@ -66,9 +69,16 @@ type Engine struct {
 	incident       *model.Incident
 	nextIncidentID int64
 	egms           map[string]model.EGM
-	endpointSeen   map[string]map[string]time.Time
+	endpointSeen   map[string]map[string]endpointObservationState
 	lastEvent      string
 	auditError     string
+}
+
+type endpointObservationState struct {
+	ip        string
+	port      int
+	firstSeen time.Time
+	lastSeen  time.Time
 }
 
 func New(controllerID string, roster []config.EGM) *Engine {
@@ -98,7 +108,7 @@ func NewWithAuditSink(controllerID string, roster []config.EGM, audit AuditSink)
 		state:        model.StateBooting,
 		updatedAt:    time.Now(),
 		egms:         egms,
-		endpointSeen: make(map[string]map[string]time.Time),
+		endpointSeen: make(map[string]map[string]endpointObservationState),
 	}
 }
 
@@ -131,10 +141,30 @@ func (e *Engine) Snapshot() Snapshot {
 		if len(egm.EndpointDriftIPs) > 0 {
 			egm.EndpointDriftIPs = append([]string(nil), egm.EndpointDriftIPs...)
 		}
+		if len(egm.EndpointCollisionTypes) > 0 {
+			egm.EndpointCollisionTypes = append([]model.EndpointCollisionType(nil), egm.EndpointCollisionTypes...)
+		}
 		if len(egm.RecentEndpoints) > 0 {
 			egm.RecentEndpoints = append([]model.EGMEndpointObservation(nil), egm.RecentEndpoints...)
 		}
 		egms = append(egms, egm)
+	}
+	endpointSummary, endpointCollisions, driftByEGM, driftIPsByEGM, collisionTypesByEGM := analyzeEndpointIntegrity(egms, e.updatedAt, endpointDriftWindow)
+	for idx := range egms {
+		egmID := strings.TrimSpace(egms[idx].ID)
+		egms[idx].EndpointDrift = driftByEGM[egmID]
+		if driftIPs := driftIPsByEGM[egmID]; len(driftIPs) > 0 {
+			egms[idx].EndpointDriftIPs = append([]string(nil), driftIPs...)
+		} else {
+			egms[idx].EndpointDriftIPs = nil
+		}
+		if collisionTypes := collisionTypesByEGM[egmID]; len(collisionTypes) > 0 {
+			egms[idx].EndpointCollisionWarning = true
+			egms[idx].EndpointCollisionTypes = append([]model.EndpointCollisionType(nil), collisionTypes...)
+		} else {
+			egms[idx].EndpointCollisionWarning = false
+			egms[idx].EndpointCollisionTypes = nil
+		}
 	}
 
 	var incident *model.Incident
@@ -144,13 +174,15 @@ func (e *Engine) Snapshot() Snapshot {
 	}
 
 	return Snapshot{
-		ControllerID: e.controllerID,
-		State:        e.state,
-		UpdatedAt:    e.updatedAt,
-		Incident:     incident,
-		EGMs:         egms,
-		LastEvent:    e.lastEvent,
-		AuditError:   e.auditError,
+		ControllerID:             e.controllerID,
+		State:                    e.state,
+		UpdatedAt:                e.updatedAt,
+		Incident:                 incident,
+		EGMs:                     egms,
+		EndpointCollisionSummary: endpointSummary,
+		EndpointCollisions:       endpointCollisions,
+		LastEvent:                e.lastEvent,
+		AuditError:               e.auditError,
 	}
 }
 
@@ -241,13 +273,23 @@ func (e *Engine) observeEndpoint(egm *model.EGM, event Event) {
 	}
 	observed := e.endpointSeen[egm.ID]
 	if observed == nil {
-		observed = make(map[string]time.Time)
+		observed = make(map[string]endpointObservationState)
 	}
-	observed[sourceIP] = event.At
+	endpointKey := formatEndpoint(sourceIP, sourcePort)
+	entry := observed[endpointKey]
+	if entry.firstSeen.IsZero() || event.At.Before(entry.firstSeen) {
+		entry.firstSeen = event.At
+	}
+	if entry.lastSeen.IsZero() || event.At.After(entry.lastSeen) {
+		entry.lastSeen = event.At
+	}
+	entry.ip = sourceIP
+	entry.port = sourcePort
+	observed[endpointKey] = entry
 	cutoff := event.At.Add(-endpointDriftWindow)
-	for ip, seenAt := range observed {
-		if seenAt.Before(cutoff) {
-			delete(observed, ip)
+	for endpoint, seen := range observed {
+		if !seen.lastSeen.IsZero() && seen.lastSeen.Before(cutoff) {
+			delete(observed, endpoint)
 		}
 	}
 	if len(observed) == 0 {
@@ -257,17 +299,285 @@ func (e *Engine) observeEndpoint(egm *model.EGM, event Event) {
 		return
 	}
 	e.endpointSeen[egm.ID] = observed
-	ips := make([]string, 0, len(observed))
-	for ip := range observed {
+	ipsByEndpoint := map[string]struct{}{}
+	for _, seen := range observed {
+		ip := strings.TrimSpace(seen.ip)
+		if ip == "" {
+			continue
+		}
+		ipsByEndpoint[ip] = struct{}{}
+	}
+	ips := make([]string, 0, len(ipsByEndpoint))
+	for ip := range ipsByEndpoint {
 		ips = append(ips, ip)
 	}
 	sort.Strings(ips)
-	egm.EndpointDrift = len(ips) > 1
+	egm.EndpointDrift = len(observed) > 1
 	if egm.EndpointDrift {
 		egm.EndpointDriftIPs = ips
 	} else {
 		egm.EndpointDriftIPs = nil
 	}
+}
+
+func analyzeEndpointIntegrity(
+	egms []model.EGM,
+	reference time.Time,
+	window time.Duration,
+) (
+	model.EndpointCollisionSummary,
+	[]model.EndpointCollision,
+	map[string]bool,
+	map[string][]string,
+	map[string][]model.EndpointCollisionType,
+) {
+	cutoff := time.Time{}
+	if !reference.IsZero() && window > 0 {
+		cutoff = reference.Add(-window)
+	}
+
+	type endpointClaim struct {
+		egmID     string
+		endpoint  string
+		firstSeen time.Time
+		lastSeen  time.Time
+	}
+	claimsByEndpoint := map[string][]endpointClaim{}
+	driftByEGM := map[string]bool{}
+	driftIPsByEGM := map[string][]string{}
+	collisionTypeSetByEGM := map[string]map[model.EndpointCollisionType]struct{}{}
+	collisions := make([]model.EndpointCollision, 0)
+
+	addCollisionType := func(egmID string, collisionType model.EndpointCollisionType) {
+		egmID = strings.TrimSpace(egmID)
+		if egmID == "" {
+			return
+		}
+		set := collisionTypeSetByEGM[egmID]
+		if set == nil {
+			set = map[model.EndpointCollisionType]struct{}{}
+		}
+		set[collisionType] = struct{}{}
+		collisionTypeSetByEGM[egmID] = set
+	}
+
+	for _, egm := range egms {
+		egmID := strings.TrimSpace(egm.ID)
+		if egmID == "" {
+			continue
+		}
+		activeEndpoints := activeEndpointObservations(egm, cutoff)
+		if len(activeEndpoints) == 0 {
+			driftByEGM[egmID] = false
+			driftIPsByEGM[egmID] = nil
+			continue
+		}
+
+		ipsSet := map[string]struct{}{}
+		for endpoint, entry := range activeEndpoints {
+			claimsByEndpoint[endpoint] = append(claimsByEndpoint[endpoint], endpointClaim{
+				egmID:     egmID,
+				endpoint:  endpoint,
+				firstSeen: entry.FirstSeenAt,
+				lastSeen:  entry.LastSeenAt,
+			})
+			ip := strings.TrimSpace(entry.IPAddress)
+			if ip != "" {
+				ipsSet[ip] = struct{}{}
+			}
+		}
+		driftByEGM[egmID] = len(activeEndpoints) > 1
+		if driftByEGM[egmID] {
+			addCollisionType(egmID, model.EndpointCollisionIDEndpointDrift)
+			ips := make([]string, 0, len(ipsSet))
+			for ip := range ipsSet {
+				ips = append(ips, ip)
+			}
+			sort.Strings(ips)
+			driftIPsByEGM[egmID] = ips
+
+			endpointKeys := make([]string, 0, len(activeEndpoints))
+			for endpoint := range activeEndpoints {
+				endpointKeys = append(endpointKeys, endpoint)
+			}
+			sort.Strings(endpointKeys)
+			for _, endpoint := range endpointKeys {
+				entry := activeEndpoints[endpoint]
+				collisions = append(collisions, model.EndpointCollision{
+					CollisionType:  model.EndpointCollisionIDEndpointDrift,
+					InvolvedEGMIDs: []string{egmID},
+					Endpoint:       endpoint,
+					FirstSeenAt:    entry.FirstSeenAt,
+					LastSeenAt:     entry.LastSeenAt,
+				})
+			}
+		} else {
+			driftIPsByEGM[egmID] = nil
+		}
+	}
+
+	for endpoint, claims := range claimsByEndpoint {
+		seenEGMIDs := map[string]struct{}{}
+		firstSeen := time.Time{}
+		lastSeen := time.Time{}
+		for _, claim := range claims {
+			seenEGMIDs[claim.egmID] = struct{}{}
+			if firstSeen.IsZero() || (!claim.firstSeen.IsZero() && claim.firstSeen.Before(firstSeen)) {
+				firstSeen = claim.firstSeen
+			}
+			if lastSeen.IsZero() || claim.lastSeen.After(lastSeen) {
+				lastSeen = claim.lastSeen
+			}
+		}
+		if len(seenEGMIDs) < 2 {
+			continue
+		}
+		ids := make([]string, 0, len(seenEGMIDs))
+		for id := range seenEGMIDs {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		collisions = append(collisions, model.EndpointCollision{
+			CollisionType:  model.EndpointCollisionSharedEndpoint,
+			InvolvedEGMIDs: ids,
+			Endpoint:       endpoint,
+			FirstSeenAt:    firstSeen,
+			LastSeenAt:     lastSeen,
+		})
+		for _, id := range ids {
+			addCollisionType(id, model.EndpointCollisionSharedEndpoint)
+		}
+	}
+
+	sort.Slice(collisions, func(i, j int) bool {
+		if collisions[i].CollisionType != collisions[j].CollisionType {
+			return collisions[i].CollisionType < collisions[j].CollisionType
+		}
+		if collisions[i].Endpoint != collisions[j].Endpoint {
+			return collisions[i].Endpoint < collisions[j].Endpoint
+		}
+		if collisions[i].LastSeenAt.Equal(collisions[j].LastSeenAt) {
+			return strings.Join(collisions[i].InvolvedEGMIDs, ",") < strings.Join(collisions[j].InvolvedEGMIDs, ",")
+		}
+		return collisions[i].LastSeenAt.After(collisions[j].LastSeenAt)
+	})
+
+	collisionTypesByEGM := map[string][]model.EndpointCollisionType{}
+	affectedIDSet := map[string]struct{}{}
+	sharedCount := 0
+	driftCount := 0
+	for _, collision := range collisions {
+		if collision.CollisionType == model.EndpointCollisionSharedEndpoint {
+			sharedCount++
+		}
+		if collision.CollisionType == model.EndpointCollisionIDEndpointDrift {
+			driftCount++
+		}
+	}
+	for egmID, typeSet := range collisionTypeSetByEGM {
+		if len(typeSet) == 0 {
+			continue
+		}
+		affectedIDSet[egmID] = struct{}{}
+		types := make([]model.EndpointCollisionType, 0, len(typeSet))
+		if _, ok := typeSet[model.EndpointCollisionSharedEndpoint]; ok {
+			types = append(types, model.EndpointCollisionSharedEndpoint)
+		}
+		if _, ok := typeSet[model.EndpointCollisionIDEndpointDrift]; ok {
+			types = append(types, model.EndpointCollisionIDEndpointDrift)
+		}
+		collisionTypesByEGM[egmID] = types
+	}
+	affected := make([]string, 0, len(affectedIDSet))
+	for egmID := range affectedIDSet {
+		affected = append(affected, egmID)
+	}
+	sort.Strings(affected)
+
+	return model.EndpointCollisionSummary{
+			Total:                len(collisions),
+			SharedEndpointCount:  sharedCount,
+			IDEndpointDriftCount: driftCount,
+			AffectedEGMIDs:       affected,
+		},
+		collisions,
+		driftByEGM,
+		driftIPsByEGM,
+		collisionTypesByEGM
+}
+
+func activeEndpointObservations(egm model.EGM, cutoff time.Time) map[string]model.EGMEndpointObservation {
+	active := map[string]model.EGMEndpointObservation{}
+	recent := append([]model.EGMEndpointObservation(nil), egm.RecentEndpoints...)
+	for _, entry := range recent {
+		ip := strings.TrimSpace(entry.IPAddress)
+		port := entry.Port
+		lastSeen := entry.LastSeenAt
+		if ip == "" {
+			continue
+		}
+		if lastSeen.IsZero() {
+			lastSeen = egm.LastEndpointSeenAt
+		}
+		if !cutoff.IsZero() && !lastSeen.IsZero() && lastSeen.Before(cutoff) {
+			continue
+		}
+		firstSeen := entry.FirstSeenAt
+		if firstSeen.IsZero() {
+			firstSeen = lastSeen
+		}
+		endpoint := formatEndpoint(ip, port)
+		existing, ok := active[endpoint]
+		if !ok {
+			active[endpoint] = model.EGMEndpointObservation{
+				IPAddress:   ip,
+				Port:        port,
+				FirstSeenAt: firstSeen,
+				LastSeenAt:  lastSeen,
+				SeenCount:   maxInt(1, entry.SeenCount),
+			}
+			continue
+		}
+		if existing.FirstSeenAt.IsZero() || (!firstSeen.IsZero() && firstSeen.Before(existing.FirstSeenAt)) {
+			existing.FirstSeenAt = firstSeen
+		}
+		if existing.LastSeenAt.IsZero() || lastSeen.After(existing.LastSeenAt) {
+			existing.LastSeenAt = lastSeen
+		}
+		existing.SeenCount += maxInt(1, entry.SeenCount)
+		active[endpoint] = existing
+	}
+	if len(active) == 0 && strings.TrimSpace(egm.LastEndpointIP) != "" && !egm.LastEndpointSeenAt.IsZero() {
+		if cutoff.IsZero() || !egm.LastEndpointSeenAt.Before(cutoff) {
+			endpoint := formatEndpoint(egm.LastEndpointIP, egm.LastEndpointPort)
+			active[endpoint] = model.EGMEndpointObservation{
+				IPAddress:   strings.TrimSpace(egm.LastEndpointIP),
+				Port:        egm.LastEndpointPort,
+				FirstSeenAt: egm.LastEndpointSeenAt,
+				LastSeenAt:  egm.LastEndpointSeenAt,
+				SeenCount:   1,
+			}
+		}
+	}
+	return active
+}
+
+func formatEndpoint(ip string, port int) string {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return ""
+	}
+	if port > 0 {
+		return ip + ":" + strconv.Itoa(port)
+	}
+	return ip + ":0"
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func updateRecentEndpoints(history []model.EGMEndpointObservation, ip string, port int, at time.Time, limit int) []model.EGMEndpointObservation {
