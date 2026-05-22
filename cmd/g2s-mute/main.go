@@ -131,6 +131,11 @@ func main() {
 	mux.HandleFunc("/api/operator-audit", operatorAuditHandler(auditStore))
 	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
 	mux.HandleFunc("/api/session-evidence/export-all", sessionEvidenceExportAllHandler(auditStore, cfg))
+	mux.HandleFunc("/api/session-package/export", sessionPackageExportHandler(eng, auditStore, cfg, runtimeInfo{
+		ConfigPath:       *configPath,
+		StartedAt:        startedAt,
+		SimulatedTrigger: *simulateTrigger,
+	}))
 	mux.HandleFunc(
 		"/api/session-evidence/",
 		requireMutationAuthForMethods(
@@ -1451,7 +1456,7 @@ func sessionEvidenceIDFromPath(path string) (int64, error) {
 func buildSessionEvidenceArchive(records []model.SessionEvidenceRecord) sessionEvidenceArchive {
 	archive := sessionEvidenceArchive{
 		GeneratedAt:  time.Now().UTC(),
-		SummaryIndex: sessionEvidenceArchiveIndex{CaptureCount: len(records), Captures: []sessionEvidenceArchiveItem{}},
+		SummaryIndex: buildSessionEvidenceArchiveIndex(records),
 		CaptureFiles: []sessionEvidenceArchiveFile{},
 	}
 
@@ -1460,7 +1465,28 @@ func buildSessionEvidenceArchive(records []model.SessionEvidenceRecord) sessionE
 		jsonName := base + ".json"
 		markdownName := base + ".md"
 		payload := parseSessionEvidencePayload(record.PayloadJSON)
-		archive.SummaryIndex.Captures = append(archive.SummaryIndex.Captures, sessionEvidenceArchiveItem{
+		archive.CaptureFiles = append(archive.CaptureFiles, sessionEvidenceArchiveFile{
+			ID:               record.ID,
+			JSONFileName:     jsonName,
+			MarkdownFileName: markdownName,
+			JSONCapture:      payload,
+			MarkdownReport:   buildSessionEvidenceArchiveMarkdown(record, payload),
+		})
+	}
+
+	return archive
+}
+
+func buildSessionEvidenceArchiveIndex(records []model.SessionEvidenceRecord) sessionEvidenceArchiveIndex {
+	index := sessionEvidenceArchiveIndex{
+		CaptureCount: len(records),
+		Captures:     []sessionEvidenceArchiveItem{},
+	}
+	for _, record := range records {
+		base := sessionEvidenceArchiveBaseName(record)
+		jsonName := base + ".json"
+		markdownName := base + ".md"
+		index.Captures = append(index.Captures, sessionEvidenceArchiveItem{
 			ID:               record.ID,
 			CreatedAt:        record.CreatedAt,
 			OverallState:     record.OverallState,
@@ -1472,16 +1498,8 @@ func buildSessionEvidenceArchive(records []model.SessionEvidenceRecord) sessionE
 			JSONFileName:     jsonName,
 			MarkdownFileName: markdownName,
 		})
-		archive.CaptureFiles = append(archive.CaptureFiles, sessionEvidenceArchiveFile{
-			ID:               record.ID,
-			JSONFileName:     jsonName,
-			MarkdownFileName: markdownName,
-			JSONCapture:      payload,
-			MarkdownReport:   buildSessionEvidenceArchiveMarkdown(record, payload),
-		})
 	}
-
-	return archive
+	return index
 }
 
 func parseSessionEvidencePayload(raw string) any {

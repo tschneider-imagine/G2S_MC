@@ -222,6 +222,13 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="workflow-progress-message" class="muted-text">Workflow progress is not saved yet.</div>
         </div>
+        <div class="first-cabinet-session-actions-wrap">
+          <p class="label">Session Package Export</p>
+          <div class="setup-actions">
+            <button id="session-package-export-button" type="button" class="secondary-button">Export Session Package</button>
+          </div>
+          <div id="session-package-export-message" class="muted-text">Download one JSON package with current status, preflight, workflow, heartbeat policy, operator audit, and saved capture metadata.</div>
+        </div>
       </div>
 
       <div class="panel evidence-capture-panel">
@@ -2060,6 +2067,7 @@ const dashboardJS = `const endpoints = {
   operatorDrill: "/api/operator-drill",
   certificates: "/api/certificates",
   operatorAudit: "/api/operator-audit",
+  sessionPackageExport: "/api/session-package/export",
   sessionEvidence: "/api/session-evidence?limit=20",
   sessionEvidenceExportAll: "/api/session-evidence/export-all",
   sessionWorkflow: "/api/session-workflow",
@@ -3486,6 +3494,10 @@ function renderFirstCabinetSession(snapshot) {
   stateBadge.textContent = session.overallState;
   stateBadge.className = "source-pill " + (session.readyForSession ? "source-file" : "source-mixed");
   $("first-cabinet-session-message").textContent = session.message + " Current workflow step: " + workflow.current_step + ". Runbook readiness is separate from mute-path status.";
+  $("session-package-export-button").disabled = !snapshot?.status;
+  if (!snapshot?.status) {
+    $("session-package-export-message").textContent = "Session package export waits for a status snapshot.";
+  }
 
   $("first-cabinet-overall").textContent = session.overallState;
   $("first-cabinet-last-checked").textContent = fmtTime(session.lastCheckedValue);
@@ -3920,6 +3932,39 @@ function exportAllSavedSessionEvidence() {
       $("session-evidence-state").className = "source-pill source-mixed";
       $("session-evidence-message").textContent = err && err.message ? err.message : "Export failed.";
       setAlert("warning", "Export All failed", "Unable to export all saved evidence captures.");
+    });
+}
+
+function exportSessionPackage() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  if (!snapshot?.status) {
+    $("session-package-export-message").textContent = "Session package export waits for a status snapshot.";
+    setAlert("warning", "Session package export unavailable", "Wait for status polling to complete before exporting.");
+    return;
+  }
+  const headers = {};
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  $("session-package-export-message").textContent = "Exporting session package.";
+  fetch(endpoints.sessionPackageExport, { cache: "no-store", headers: withEGMFocusHeader(headers) })
+    .then(async (response) => {
+      if (!response.ok) {
+        const detail = sanitizeHTTPText(await response.text());
+        throw new Error("Session package export failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      }
+      const text = await response.text();
+      const disposition = String(response.headers.get("Content-Disposition") || "");
+      const match = disposition.match(/filename=\"([^\"]+)\"/i);
+      const filename = match && match[1] ? match[1] : "session-package-export.json";
+      downloadTextMaterial(filename, text);
+      $("session-package-export-message").textContent = "Session package exported.";
+      setAlert("info", "Session package exported", "Full session package archive downloaded.");
+    })
+    .catch((err) => {
+      $("session-package-export-message").textContent = err && err.message ? err.message : "Session package export failed.";
+      setAlert("warning", "Session package export failed", "Unable to export session package.");
     });
 }
 
@@ -6430,6 +6475,7 @@ function bindControls() {
   $("session-evidence-json-button").addEventListener("click", exportSessionEvidenceJSON);
   $("session-evidence-markdown-button").addEventListener("click", exportSessionEvidenceMarkdown);
   $("session-evidence-export-all-button").addEventListener("click", exportAllSavedSessionEvidence);
+  $("session-package-export-button").addEventListener("click", exportSessionPackage);
   $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
   $("workflow-progress-clear-button").addEventListener("click", clearSessionWorkflowProgress);
   $("workflow-progress-phase").addEventListener("change", updateWorkflowProgressDirtyState);
