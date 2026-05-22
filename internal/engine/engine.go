@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +23,16 @@ const (
 	EventDegraded         EventType = "DEGRADED"
 )
 
+const endpointDriftWindow = 5 * time.Minute
+
 type Event struct {
-	Type   EventType
-	At     time.Time
-	EGMID  string
-	OK     bool
-	Detail string
+	Type       EventType
+	At         time.Time
+	EGMID      string
+	OK         bool
+	Detail     string
+	SourceIP   string
+	SourcePort int
 }
 
 type Snapshot struct {
@@ -58,6 +63,7 @@ type Engine struct {
 	incident       *model.Incident
 	nextIncidentID int64
 	egms           map[string]model.EGM
+	endpointSeen   map[string]map[string]time.Time
 	lastEvent      string
 	auditError     string
 }
@@ -89,6 +95,7 @@ func NewWithAuditSink(controllerID string, roster []config.EGM, audit AuditSink)
 		state:        model.StateBooting,
 		updatedAt:    time.Now(),
 		egms:         egms,
+		endpointSeen: make(map[string]map[string]time.Time),
 	}
 }
 
@@ -173,6 +180,7 @@ func (e *Engine) handle(event Event) {
 		egm.Status = model.EGMGreen
 		egm.LastSeen = event.At
 		egm.LastError = ""
+		e.observeEndpoint(&egm, event)
 		e.egms[egmID] = egm
 		e.recordEGMStatus(event, egm)
 	case EventEGMResult:
@@ -200,6 +208,55 @@ func (e *Engine) handle(event Event) {
 
 	if oldState != e.state {
 		e.recordStateChange(oldState, e.state, event)
+	}
+}
+
+func (e *Engine) observeEndpoint(egm *model.EGM, event Event) {
+	if egm == nil {
+		return
+	}
+	sourceIP := strings.TrimSpace(event.SourceIP)
+	sourcePort := event.SourcePort
+	if sourceIP != "" {
+		egm.LastEndpointIP = sourceIP
+	}
+	if sourcePort > 0 {
+		egm.LastEndpointPort = sourcePort
+	}
+	if sourceIP != "" || sourcePort > 0 {
+		egm.LastEndpointSeenAt = event.At
+	}
+	if sourceIP == "" {
+		return
+	}
+	observed := e.endpointSeen[egm.ID]
+	if observed == nil {
+		observed = make(map[string]time.Time)
+	}
+	observed[sourceIP] = event.At
+	cutoff := event.At.Add(-endpointDriftWindow)
+	for ip, seenAt := range observed {
+		if seenAt.Before(cutoff) {
+			delete(observed, ip)
+		}
+	}
+	if len(observed) == 0 {
+		delete(e.endpointSeen, egm.ID)
+		egm.EndpointDrift = false
+		egm.EndpointDriftIPs = nil
+		return
+	}
+	e.endpointSeen[egm.ID] = observed
+	ips := make([]string, 0, len(observed))
+	for ip := range observed {
+		ips = append(ips, ip)
+	}
+	sort.Strings(ips)
+	egm.EndpointDrift = len(ips) > 1
+	if egm.EndpointDrift {
+		egm.EndpointDriftIPs = ips
+	} else {
+		egm.EndpointDriftIPs = nil
 	}
 }
 

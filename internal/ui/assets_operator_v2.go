@@ -305,13 +305,15 @@ const dashboardHTML = `<!doctype html>
                 <th><button type="button" class="sort-button" data-sort-key="egm_id">EGM</button></th>
                 <th>Source</th>
                 <th><button type="button" class="sort-button" data-sort-key="status">Status</button></th>
-                <th>Address</th>
+                <th>Configured Address</th>
+                <th>Last Endpoint</th>
+                <th>Endpoint Drift</th>
                 <th>Game</th>
                 <th><button type="button" class="sort-button" data-sort-key="last_seen">Last seen</button></th>
               </tr>
             </thead>
             <tbody id="egm-table">
-              <tr><td colspan="6">Loading...</td></tr>
+              <tr><td colspan="8">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1998,6 +2000,11 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
         source: "",
         status: "",
         last_seen_at: "",
+        last_endpoint_ip: "",
+        last_endpoint_port: 0,
+        last_endpoint_seen_at: "",
+        endpoint_drift_warning: false,
+        endpoint_drift_ips: [],
         total_events: 0,
         non_heartbeat_events: 0,
         heartbeat_records: [],
@@ -2016,6 +2023,14 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
     if (numericTime(seen) > numericTime(row.last_seen_at)) {
       row.last_seen_at = seen;
     }
+    row.last_endpoint_ip = String(egm?.last_endpoint_ip || row.last_endpoint_ip || "").trim();
+    row.last_endpoint_port = Number(egm?.last_endpoint_port || row.last_endpoint_port || 0);
+    const endpointSeen = String(egm?.last_endpoint_seen_at || "").trim();
+    if (numericTime(endpointSeen) > numericTime(row.last_endpoint_seen_at)) {
+      row.last_endpoint_seen_at = endpointSeen;
+    }
+    row.endpoint_drift_warning = egm?.endpoint_drift_warning === true;
+    row.endpoint_drift_ips = Array.isArray(egm?.endpoint_drift_ips) ? egm.endpoint_drift_ips.slice() : [];
   });
 
   historyList.forEach((record) => {
@@ -2049,6 +2064,11 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
         source: row.source || "DISCOVERED",
         status: row.status || row.last_history_status || "UNKNOWN",
         last_seen_at: row.last_seen_at || "",
+        last_endpoint_ip: row.last_endpoint_ip || "",
+        last_endpoint_port: row.last_endpoint_port || 0,
+        last_endpoint_seen_at: row.last_endpoint_seen_at || "",
+        endpoint_drift_warning: row.endpoint_drift_warning === true,
+        endpoint_drift_ips: Array.isArray(row.endpoint_drift_ips) ? row.endpoint_drift_ips.slice() : [],
         total_events: row.total_events,
         non_heartbeat_events: row.non_heartbeat_events,
         heartbeat_events: heartbeat.total,
@@ -2088,6 +2108,9 @@ function renderEGMGroupedSummary(snapshot) {
       "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(row.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(row.egm_id) + "</span>" + egmSourcePill(row.source) + statusPill(row.status) + "</div></div>" +
       "<span>events " + String(row.total_events) + " total | " + String(row.non_heartbeat_events) + " status events | " + String(row.keepalive_events) + " keepAlive | heartbeat " + escapeHTML(row.heartbeat_label) + "</span>" +
       "<span>last seen " + escapeHTML(fmtTime(row.last_seen_at)) + " | last keepAlive " + escapeHTML(fmtTime(row.heartbeat_last_keepalive_at)) + "</span>" +
+      "<span>endpoint " + escapeHTML((row.last_endpoint_ip || "-") + ":" + (row.last_endpoint_port || "-")) +
+      " | endpoint seen " + escapeHTML(fmtTime(row.last_endpoint_seen_at)) +
+      " | drift " + escapeHTML(row.endpoint_drift_warning ? ("warning (" + ((row.endpoint_drift_ips || []).join(", ")) + ")") : "none") + "</span>" +
     "</div>"
   );
 }
@@ -2118,6 +2141,11 @@ function selectedEGMDetailForSnapshot(snapshot) {
       last_seen_at: "",
       heartbeat_label: "",
       heartbeat_last_keepalive_at: "",
+      last_endpoint_ip: "",
+      last_endpoint_port: 0,
+      last_endpoint_seen_at: "",
+      endpoint_drift_warning: false,
+      endpoint_drift_ips: [],
       live_signal: "UNKNOWN",
       live_signal_detail: "",
       in_first_test_set: false,
@@ -2139,6 +2167,11 @@ function selectedEGMDetailForSnapshot(snapshot) {
     last_seen_at: selected.last_seen_at,
     heartbeat_label: selected.heartbeat_label,
     heartbeat_last_keepalive_at: selected.heartbeat_last_keepalive_at,
+    last_endpoint_ip: selected.last_endpoint_ip || "",
+    last_endpoint_port: Number(selected.last_endpoint_port || 0),
+    last_endpoint_seen_at: selected.last_endpoint_seen_at || "",
+    endpoint_drift_warning: selected.endpoint_drift_warning === true,
+    endpoint_drift_ips: Array.isArray(selected.endpoint_drift_ips) ? selected.endpoint_drift_ips.slice() : [],
     live_signal: liveObserved ? "OBSERVED" : "NOT_OBSERVED",
     live_signal_detail: liveSignalDetail,
     in_first_test_set: firstTestIDs.has(selected.egm_id),
@@ -2160,6 +2193,7 @@ function renderSelectedEGMDetail(snapshot) {
     "<div class=\"item timeline-entry\">" +
       "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id) + "</span>" + egmSourcePill(item.source) + statusPill(item.status) + "</div></div>" +
       "<span>live signal " + escapeHTML(item.live_signal || "-") + " | last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ") | heartbeat " + escapeHTML(item.heartbeat_label || "-") + " | last keepAlive " + escapeHTML(fmtTime(item.heartbeat_last_keepalive_at)) + "</span>" +
+      "<span>endpoint " + escapeHTML((item.last_endpoint_ip || "-") + ":" + (item.last_endpoint_port || "-")) + " | endpoint seen " + escapeHTML(fmtTime(item.last_endpoint_seen_at)) + " | endpoint drift " + escapeHTML(item.endpoint_drift_warning ? "warning" : "none") + (item.endpoint_drift_warning && item.endpoint_drift_ips?.length ? (" (" + escapeHTML(item.endpoint_drift_ips.join(", ")) + ")") : "") + "</span>" +
       "<span>first-test set: " + escapeHTML(item.in_first_test_set ? "yes" : "no") + " | " + escapeHTML(item.message || "") + "</span>" +
     "</div>"
   );
@@ -3137,6 +3171,10 @@ function buildSessionEvidenceMarkdown(evidence) {
     lines.push("- Status: " + (selectedEGMDetail.status || "-"));
     lines.push("- Live signal: " + (selectedEGMDetail.live_signal || "-"));
     lines.push("- Live signal detail: " + (selectedEGMDetail.live_signal_detail || "-"));
+    lines.push("- Last endpoint: " + ((selectedEGMDetail.last_endpoint_ip || "-") + ":" + (selectedEGMDetail.last_endpoint_port || "-")));
+    lines.push("- Endpoint seen: " + (selectedEGMDetail.last_endpoint_seen_at || "-"));
+    lines.push("- Endpoint drift warning: " + String(selectedEGMDetail.endpoint_drift_warning === true));
+    lines.push("- Endpoint drift IPs: " + ((selectedEGMDetail.endpoint_drift_ips || []).join(", ") || "-"));
     lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
     lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
     lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
@@ -4082,6 +4120,10 @@ function buildRunReportMarkdown(report) {
     lines.push("- Status: " + (selectedEGMDetail.status || "-"));
     lines.push("- Live signal: " + (selectedEGMDetail.live_signal || "-"));
     lines.push("- Live signal detail: " + (selectedEGMDetail.live_signal_detail || "-"));
+    lines.push("- Last endpoint: " + ((selectedEGMDetail.last_endpoint_ip || "-") + ":" + (selectedEGMDetail.last_endpoint_port || "-")));
+    lines.push("- Endpoint seen: " + (selectedEGMDetail.last_endpoint_seen_at || "-"));
+    lines.push("- Endpoint drift warning: " + String(selectedEGMDetail.endpoint_drift_warning === true));
+    lines.push("- Endpoint drift IPs: " + ((selectedEGMDetail.endpoint_drift_ips || []).join(", ") || "-"));
     lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
     lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
     lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
@@ -4455,20 +4497,30 @@ function renderEGMTable(status) {
   const focusScoped = filterStatusEGMsByFocus(all);
   const filtered = applyEGMFilter(focusScoped);
   const rows = filtered.sort(compareEGM).map((egm) =>
+    (() => {
+      const configuredAddress = (egm.ip_address || "-") + ":" + (egm.port || "-");
+      const endpointAddress = (egm.last_endpoint_ip || "-") + ":" + (egm.last_endpoint_port || "-");
+      const driftLabel = egm.endpoint_drift_warning === true
+        ? ("warning" + (Array.isArray(egm.endpoint_drift_ips) && egm.endpoint_drift_ips.length ? (" (" + egm.endpoint_drift_ips.join(", ") + ")") : ""))
+        : "none";
+      return "" +
     "<tr>" +
       "<td><strong>" + escapeHTML(egm.id) + "</strong><br><span class=\"minor\">" + escapeHTML((egm.vendor || "") + " " + (egm.cabinet_family || "")).trim() + "</span></td>" +
       "<td>" + egmSourcePill(egm.source) + "</td>" +
       "<td>" + statusPill(egm.status) + "</td>" +
-      "<td>" + escapeHTML((egm.ip_address || "-") + ":" + (egm.port || "-")) + "</td>" +
+      "<td>" + escapeHTML(configuredAddress) + "</td>" +
+      "<td>" + escapeHTML(endpointAddress) + "<br><span class=\"minor\">seen " + escapeHTML(fmtTime(egm.last_endpoint_seen_at)) + "</span></td>" +
+      "<td>" + escapeHTML(driftLabel) + "</td>" +
       "<td>" + escapeHTML(egm.game_title || "-") + "<br><span class=\"minor\">" + escapeHTML(egm.software_version || "") + "</span></td>" +
       "<td>" + escapeHTML(fmtTime(egm.last_seen)) + "<br><span class=\"minor\">" + escapeHTML(fmtAge(egm.last_seen)) + "</span></td>" +
-    "</tr>"
+    "</tr>";
+    })()
   );
   const focusID = currentEGMFocusID();
   $("egm-count").textContent = focusID
     ? ("Focus " + focusID + " | " + filtered.length + " / " + all.length + " EGMs")
     : (filtered.length + " / " + all.length + " EGMs");
-  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"6\">No EGMs match current filter</td></tr>";
+  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"8\">No EGMs match current filter</td></tr>";
   updateSortLabels();
 }
 

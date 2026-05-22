@@ -24,6 +24,7 @@ func TestCommsOnlineUpdatesEngine(t *testing.T) {
 	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
 
 	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-1"><commsOnLine/></g2sBody>`))
+	req.RemoteAddr = "192.168.55.10:9443"
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
@@ -37,12 +38,17 @@ func TestCommsOnlineUpdatesEngine(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		snapshot := eng.Snapshot()
-		if len(snapshot.EGMs) == 1 && snapshot.EGMs[0].Status == model.EGMGreen && !snapshot.EGMs[0].LastSeen.IsZero() {
+		if len(snapshot.EGMs) == 1 &&
+			snapshot.EGMs[0].Status == model.EGMGreen &&
+			!snapshot.EGMs[0].LastSeen.IsZero() &&
+			snapshot.EGMs[0].LastEndpointIP == "192.168.55.10" &&
+			snapshot.EGMs[0].LastEndpointPort == 9443 &&
+			!snapshot.EGMs[0].LastEndpointSeenAt.IsZero() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("expected EGM last seen to update")
+	t.Fatal("expected EGM last seen and endpoint metadata to update")
 }
 
 func TestCommsOnlineDiscoversUnknownEGM(t *testing.T) {
@@ -90,6 +96,7 @@ func TestKeepAliveDiscoversUnknownEGM(t *testing.T) {
 	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
 
 	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-8"><keepAlive/></g2sBody>`))
+	req.RemoteAddr = "10.11.12.13:9555"
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
@@ -108,10 +115,31 @@ func TestKeepAliveDiscoversUnknownEGM(t *testing.T) {
 				if egm.Status != model.EGMGreen {
 					t.Fatalf("expected GREEN status, got %s", egm.Status)
 				}
+				if egm.LastEndpointIP != "10.11.12.13" {
+					t.Fatalf("last_endpoint_ip = %q, want 10.11.12.13", egm.LastEndpointIP)
+				}
+				if egm.LastEndpointPort != 9555 {
+					t.Fatalf("last_endpoint_port = %d, want 9555", egm.LastEndpointPort)
+				}
 				return
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("expected discovered EGM to appear in snapshot")
+}
+
+func TestParseRemoteEndpoint(t *testing.T) {
+	ip, port := parseRemoteEndpoint("203.0.113.40:9000")
+	if ip != "203.0.113.40" || port != 9000 {
+		t.Fatalf("got %q:%d", ip, port)
+	}
+	ip, port = parseRemoteEndpoint("[2001:db8::1]:9443")
+	if ip != "2001:db8::1" || port != 9443 {
+		t.Fatalf("got %q:%d", ip, port)
+	}
+	ip, port = parseRemoteEndpoint("not-a-socket")
+	if ip != "not-a-socket" || port != 0 {
+		t.Fatalf("got %q:%d", ip, port)
+	}
 }

@@ -119,6 +119,104 @@ func TestKeepAliveDiscoversUnknownEGMAndRecordsAudit(t *testing.T) {
 	}
 }
 
+func TestSessionOnlineCapturesLastSeenEndpointMetadata(t *testing.T) {
+	eng := New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443}})
+	now := time.Now()
+	eng.handle(Event{
+		Type:       EventG2SSessionOnline,
+		EGMID:      "EGM-1",
+		At:         now,
+		SourceIP:   "192.168.1.22",
+		SourcePort: 60501,
+	})
+
+	snapshot := eng.Snapshot()
+	egm, ok := snapshotEGMByID(snapshot, "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if egm.LastEndpointIP != "192.168.1.22" {
+		t.Fatalf("last_endpoint_ip = %q, want 192.168.1.22", egm.LastEndpointIP)
+	}
+	if egm.LastEndpointPort != 60501 {
+		t.Fatalf("last_endpoint_port = %d, want 60501", egm.LastEndpointPort)
+	}
+	if !egm.LastEndpointSeenAt.Equal(now) {
+		t.Fatalf("last_endpoint_seen_at mismatch")
+	}
+	if egm.EndpointDrift {
+		t.Fatal("endpoint_drift_warning = true, want false")
+	}
+}
+
+func TestKeepAliveSetsEndpointDriftWhenSameEGMIDMovesAcrossIPs(t *testing.T) {
+	eng := New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443}})
+	now := time.Now()
+	eng.handle(Event{
+		Type:       EventKeepAlive,
+		EGMID:      "EGM-1",
+		At:         now,
+		SourceIP:   "10.10.1.15",
+		SourcePort: 9443,
+	})
+	eng.handle(Event{
+		Type:       EventKeepAlive,
+		EGMID:      "EGM-1",
+		At:         now.Add(time.Minute),
+		SourceIP:   "10.10.1.16",
+		SourcePort: 9443,
+	})
+
+	snapshot := eng.Snapshot()
+	egm, ok := snapshotEGMByID(snapshot, "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if !egm.EndpointDrift {
+		t.Fatal("endpoint_drift_warning = false, want true")
+	}
+	if len(egm.EndpointDriftIPs) != 2 {
+		t.Fatalf("endpoint_drift_ips len = %d, want 2", len(egm.EndpointDriftIPs))
+	}
+	if egm.LastEndpointIP != "10.10.1.16" {
+		t.Fatalf("last_endpoint_ip = %q, want 10.10.1.16", egm.LastEndpointIP)
+	}
+}
+
+func TestEndpointDriftWindowExpiresOldIPs(t *testing.T) {
+	eng := New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443}})
+	now := time.Now()
+	eng.handle(Event{
+		Type:       EventKeepAlive,
+		EGMID:      "EGM-1",
+		At:         now,
+		SourceIP:   "10.0.0.21",
+		SourcePort: 9443,
+	})
+	eng.handle(Event{
+		Type:       EventKeepAlive,
+		EGMID:      "EGM-1",
+		At:         now.Add(endpointDriftWindow + time.Second),
+		SourceIP:   "10.0.0.22",
+		SourcePort: 9443,
+	})
+
+	snapshot := eng.Snapshot()
+	egm, ok := snapshotEGMByID(snapshot, "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if egm.EndpointDrift {
+		t.Fatal("endpoint_drift_warning = true, want false after window expires")
+	}
+	if len(egm.EndpointDriftIPs) != 0 {
+		t.Fatalf("endpoint_drift_ips len = %d, want 0", len(egm.EndpointDriftIPs))
+	}
+	if egm.LastEndpointIP != "10.0.0.22" {
+		t.Fatalf("last_endpoint_ip = %q, want 10.0.0.22", egm.LastEndpointIP)
+	}
+}
+
 func TestAuditSinkRecordsIncidentAndEGMResult(t *testing.T) {
 	audit := &recordingAudit{}
 	eng := NewWithAuditSink("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}}, audit)

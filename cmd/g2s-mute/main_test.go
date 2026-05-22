@@ -97,6 +97,97 @@ func TestStatusHandlerIncludesRuntimeReadiness(t *testing.T) {
 	}
 }
 
+func TestStatusHandlerIncludesEndpointMetadataAndDriftWarning(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		ControllerID: "G2S-MC-ENDPOINT-TEST",
+		Database:     config.Database{Path: "/tmp/g2s-mute.db"},
+		WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
+		Timeouts:     config.Timeouts{EGMHeartbeatIntervalMS: 5000},
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://host-a.example/g2s",
+			ListenerDNSName: "host-a.example",
+			RequiredSANDNS:  []string{"host-a.example"},
+			HostID:          "HOST-TEST-001",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+		G2S: config.G2S{
+			HostURL:      "http://127.0.0.1:8444/g2s",
+			EndpointPath: "/g2s",
+		},
+		EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+	}
+	eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eng.Start(runCtx)
+	now := time.Now()
+	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: now})
+	eng.Submit(engine.Event{
+		Type:       engine.EventKeepAlive,
+		EGMID:      "EGM-01",
+		At:         now.Add(time.Second),
+		SourceIP:   "10.20.30.40",
+		SourcePort: 9443,
+	})
+	eng.Submit(engine.Event{
+		Type:       engine.EventKeepAlive,
+		EGMID:      "EGM-01",
+		At:         now.Add(2 * time.Second),
+		SourceIP:   "10.20.30.41",
+		SourcePort: 9443,
+	})
+	waitForLastEvent(t, eng, string(engine.EventKeepAlive))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	rr := httptest.NewRecorder()
+	statusHandler(eng, auditStore, cfg, runtimeInfo{
+		ConfigPath: "/etc/g2s-mute/config.json",
+		StartedAt:  now.Add(-10 * time.Second),
+	})(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	var body applianceStatus
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	var egm model.EGM
+	found := false
+	for _, row := range body.EGMs {
+		if row.ID == "EGM-01" {
+			egm = row
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected EGM-01 in status payload")
+	}
+	if egm.LastEndpointIP != "10.20.30.41" {
+		t.Fatalf("last_endpoint_ip = %q, want 10.20.30.41", egm.LastEndpointIP)
+	}
+	if egm.LastEndpointPort != 9443 {
+		t.Fatalf("last_endpoint_port = %d, want 9443", egm.LastEndpointPort)
+	}
+	if egm.LastEndpointSeenAt.IsZero() {
+		t.Fatalf("expected last_endpoint_seen_at to be set")
+	}
+	if !egm.EndpointDrift {
+		t.Fatalf("endpoint_drift_warning = false, want true")
+	}
+	if len(egm.EndpointDriftIPs) != 2 {
+		t.Fatalf("endpoint_drift_ips len = %d, want 2", len(egm.EndpointDriftIPs))
+	}
+}
+
 func TestBuildRuntimeStatusIncludesAPIMutationAuthFlag(t *testing.T) {
 	cfg := config.Config{
 		Database: config.Database{Path: "/tmp/controller.db"},

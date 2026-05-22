@@ -3,7 +3,9 @@ package g2s
 import (
 	"encoding/xml"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,17 +43,51 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 	if egmID == "" {
 		egmID = findElement(message, "egmId")
 	}
+	sourceIP, sourcePort := parseRemoteEndpoint(r.RemoteAddr)
 
 	switch {
 	case strings.Contains(message, "commsOnLine") || strings.Contains(message, "commsOnline"):
-		s.engine.Submit(engine.Event{Type: engine.EventG2SSessionOnline, EGMID: egmID, At: time.Now(), Detail: "comms online"})
+		s.engine.Submit(engine.Event{
+			Type:       engine.EventG2SSessionOnline,
+			EGMID:      egmID,
+			At:         time.Now(),
+			Detail:     "comms online",
+			SourceIP:   sourceIP,
+			SourcePort: sourcePort,
+		})
 		writeSOAP(w, "commsOnLineAck", s.hostID, egmID)
 	case strings.Contains(message, "keepAlive"):
-		s.engine.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: egmID, At: time.Now(), Detail: "keepalive"})
+		s.engine.Submit(engine.Event{
+			Type:       engine.EventKeepAlive,
+			EGMID:      egmID,
+			At:         time.Now(),
+			Detail:     "keepalive",
+			SourceIP:   sourceIP,
+			SourcePort: sourcePort,
+		})
 		writeSOAP(w, "keepAliveAck", s.hostID, egmID)
 	default:
 		writeSOAP(w, "g2sAck", s.hostID, egmID)
 	}
+}
+
+func parseRemoteEndpoint(remoteAddr string) (string, int) {
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if remoteAddr == "" {
+		return "", 0
+	}
+	host, portText, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr, 0
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 0 {
+		port = 0
+	}
+	if parsed := net.ParseIP(host); parsed != nil {
+		host = parsed.String()
+	}
+	return strings.TrimSpace(host), port
 }
 
 func writeSOAP(w http.ResponseWriter, name string, hostID string, egmID string) {
