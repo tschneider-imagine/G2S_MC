@@ -62,6 +62,50 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
+    <section class="grid two operator-toolbar-grid">
+      <div class="panel operator-actions-bar">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Operator Actions</h2>
+            <span class="muted-text">Quick controls</span>
+          </div>
+          <span class="muted-text">Use these actions without leaving the current session view.</span>
+        </div>
+        <div class="setup-actions operator-actions-buttons">
+          <button id="operator-actions-refresh-button" type="button">Refresh now</button>
+          <button id="operator-actions-capture-evidence-button" type="button" class="secondary-button">Capture evidence</button>
+          <button id="operator-actions-export-package-button" type="button" class="secondary-button">Export session package</button>
+          <button id="operator-actions-blocker-governance-button" type="button" class="secondary-button">Open Blocker Governance</button>
+        </div>
+      </div>
+      <div class="panel global-view-controls-panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Global View Controls</h2>
+            <span class="muted-text">Client-side only</span>
+          </div>
+          <span id="global-view-summary" class="muted-text">Severity: All | Text: none | Compact mode: off</span>
+        </div>
+        <div class="form-grid global-view-controls">
+          <label>Severity Filter
+            <select id="global-severity-filter">
+              <option value="all">All</option>
+              <option value="alerts">Alerts</option>
+              <option value="warnings">Warnings</option>
+              <option value="healthy">Healthy</option>
+            </select>
+          </label>
+          <label>Text Filter
+            <input id="global-text-filter" type="text" placeholder="EGM, endpoint, audit text">
+          </label>
+          <label class="global-compact-toggle">
+            <span>Compact mode</span>
+            <input id="global-compact-mode-toggle" type="checkbox">
+          </label>
+        </div>
+      </div>
+    </section>
+
     <section class="grid">
       <div class="panel egm-focus-panel">
         <div class="panel-head panel-head-stack">
@@ -336,7 +380,7 @@ const dashboardHTML = `<!doctype html>
             <span id="egm-sort-label" class="muted-text">Sort: EGM ID asc</span>
           </div>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap table-wrap-scroll-safe">
           <table>
             <thead>
               <tr>
@@ -369,7 +413,7 @@ const dashboardHTML = `<!doctype html>
           <button id="endpoint-integrity-filter-button" type="button" class="secondary-button">Show Affected EGMs</button>
         </div>
         <div id="endpoint-integrity-message" class="muted-text">Signals only. Endpoint integrity warnings do not block mute path.</div>
-        <div id="endpoint-integrity-list" class="timeline"></div>
+        <div id="endpoint-integrity-list" class="timeline panel-scroll-safe panel-scroll-safe-integrity"></div>
       </div>
 
       <div class="panel cabinet-run-panel">
@@ -468,6 +512,7 @@ const dashboardHTML = `<!doctype html>
             <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
         </form>
+        <div id="blocker-governance-anchor" class="anchor-target" aria-hidden="true"></div>
         <form id="blocker-policy-form" class="setup-form run-report-form blocker-governance-panel">
           <div class="panel-title-row">
             <strong>Blocker Governance</strong>
@@ -570,7 +615,7 @@ const dashboardHTML = `<!doctype html>
           <span id="egm-history-scope" class="muted-text">Scope: All EGMs</span>
           <span id="egm-history-grouping" class="muted-text">Grouped by EGM ID</span>
         </div>
-        <div id="egm-history" class="timeline"></div>
+        <div id="egm-history" class="timeline panel-scroll-safe panel-scroll-safe-history"></div>
       </div>
 
       <div class="panel">
@@ -621,7 +666,7 @@ const dashboardHTML = `<!doctype html>
           </label>
         </div>
         <div id="operator-audit-summary" class="muted-text operator-audit-summary">No operator audit events loaded yet.</div>
-        <div id="operator-audit-list" class="timeline operator-audit-list"></div>
+        <div id="operator-audit-list" class="timeline operator-audit-list panel-scroll-safe panel-scroll-safe-audit"></div>
       </div>
     </section>
 
@@ -729,6 +774,7 @@ const dashboardCSS = `:root {
   --line: #cad7ce;
   --paper: #f4f7f2;
   --panel: #ffffff;
+  --panel-pad: 18px;
   --green: #208a5b;
   --yellow: #a67a00;
   --red: #b93632;
@@ -887,6 +933,10 @@ h2 { font-size: 18px; }
   padding: 24px 36px 40px;
 }
 
+.operator-toolbar-grid {
+  align-items: stretch;
+}
+
 .status-band {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -998,13 +1048,14 @@ h2 { font-size: 18px; }
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
+  min-width: 0;
 }
 
 .panel-head {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 18px;
+  padding: 16px var(--panel-pad);
   border-bottom: 1px solid var(--line);
   color: var(--muted);
 }
@@ -1023,11 +1074,39 @@ h2 { font-size: 18px; }
 
 .panel-head h2 { color: var(--ink); }
 
+.operator-actions-bar .panel-head,
+.global-view-controls-panel .panel-head {
+  border-bottom: 0;
+}
+
+.operator-actions-buttons,
+.global-view-controls {
+  padding: 0 var(--panel-pad) 16px;
+  margin-top: 0;
+}
+
+.global-view-controls {
+  grid-template-columns: minmax(180px, 0.28fr) minmax(320px, 0.52fr) minmax(180px, 0.2fr);
+}
+
+.global-compact-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+}
+
+.global-compact-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 .focus-controls {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 18px 18px;
+  padding: 14px var(--panel-pad) var(--panel-pad);
 }
 
 .egm-focus-panel .panel-head {
@@ -1078,6 +1157,19 @@ h2 { font-size: 18px; }
 
 .table-wrap {
   overflow-x: auto;
+}
+
+.table-wrap-scroll-safe {
+  overflow: auto;
+  max-height: 420px;
+  border-top: 1px solid var(--line);
+}
+
+.table-wrap-scroll-safe thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f4f8f5;
 }
 
 table {
@@ -1150,8 +1242,27 @@ th {
   background: #e5ece7;
 }
 
+.panel-scroll-safe {
+  max-height: 380px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-top: 1px solid var(--line);
+}
+
+.panel-scroll-safe-integrity {
+  max-height: 320px;
+}
+
+.panel-scroll-safe-audit {
+  max-height: 460px;
+}
+
+.panel-scroll-safe-history {
+  max-height: 420px;
+}
+
 .item {
-  padding: 14px 18px;
+  padding: 14px var(--panel-pad);
   background: var(--panel);
 }
 
@@ -1309,7 +1420,7 @@ th {
   display: grid;
   grid-template-columns: 140px minmax(0, 1fr);
   gap: 14px;
-  padding: 13px 18px;
+  padding: 13px var(--panel-pad);
   background: var(--panel);
 }
 
@@ -1327,7 +1438,7 @@ th {
 }
 
 .setup-form {
-  padding: 18px;
+  padding: var(--panel-pad);
   background: var(--panel);
 }
 
@@ -1605,11 +1716,11 @@ th {
 }
 
 .operator-audit-summary {
-  padding: 0 18px 10px;
+  padding: 0 var(--panel-pad) 10px;
 }
 
 .operator-audit-list {
-  padding: 0 18px 18px;
+  padding: 0 var(--panel-pad) var(--panel-pad);
 }
 
 .operator-audit-entry details {
@@ -2102,9 +2213,40 @@ button:disabled {
 }
 
 .empty {
-  padding: 18px;
+  padding: var(--panel-pad);
   color: var(--muted);
   background: var(--panel);
+}
+
+.anchor-target {
+  display: block;
+  position: relative;
+  top: -8px;
+  visibility: hidden;
+}
+
+body.compact-mode .shell {
+  padding-top: 18px;
+}
+
+body.compact-mode .panel-head {
+  padding: 12px 14px;
+}
+
+body.compact-mode .setup-form,
+body.compact-mode .item,
+body.compact-mode .kv-list div,
+body.compact-mode th,
+body.compact-mode td {
+  padding: 10px 12px;
+}
+
+body.compact-mode .setup-actions {
+  gap: 8px;
+}
+
+body.compact-mode .panel-scroll-safe {
+  max-height: 320px;
 }
 
 @media (max-width: 920px) {
@@ -2146,6 +2288,11 @@ button:disabled {
 
   .operator-action-summary-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .global-view-controls {
+    grid-template-columns: 1fr;
+    padding-top: 0;
   }
 
   .mute-path-summary-grid {
@@ -2191,6 +2338,7 @@ const $ = (id) => document.getElementById(id);
 const unhealthyStates = new Set(["RED", "GREY"]);
 const healthyStates = new Set(["GREEN", "YELLOW"]);
 const heartbeatEventTypes = new Set(["G2S_SESSION_ONLINE", "G2S_KEEPALIVE"]);
+const compactModeStorageKey = "g2s.dashboard.compact_mode";
 
 const clientState = {
   lastGoodStatus: null,
@@ -2213,6 +2361,9 @@ const clientState = {
   operatorAuditActionFilter: "",
   operatorAuditResultFilter: "",
   operatorAuditSearchFilter: "",
+  globalSeverityFilter: "all",
+  globalTextFilter: "",
+  compactMode: false,
   selectedSessionEvidenceID: 0,
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
@@ -2303,6 +2454,158 @@ function currentEGMFocusID() {
 function currentEGMFocusLabel() {
   const focusID = currentEGMFocusID();
   return focusID || "All EGMs";
+}
+
+function normalizeGlobalSeverityFilter(value) {
+  const normalized = String(value || "all").trim().toLowerCase();
+  if (normalized === "alerts" || normalized === "warnings" || normalized === "healthy") {
+    return normalized;
+  }
+  return "all";
+}
+
+function currentGlobalTextFilter() {
+  return String(clientState.globalTextFilter || "").trim().toLowerCase();
+}
+
+function globalSeverityAllows(bucket) {
+  const selected = normalizeGlobalSeverityFilter(clientState.globalSeverityFilter);
+  if (selected === "all") return true;
+  return String(bucket || "").trim().toLowerCase() === selected;
+}
+
+function rowMatchesGlobalText(parts) {
+  const query = currentGlobalTextFilter();
+  if (!query) return true;
+  const joined = (Array.isArray(parts) ? parts : [])
+    .map((item) => String(item || "").toLowerCase())
+    .join(" ");
+  return joined.includes(query);
+}
+
+function egmSeverityBucket(egm) {
+  const status = String(egm?.status || "").toUpperCase();
+  if (status === "RED" || status === "GREY") return "alerts";
+  if (status === "GREEN") return "healthy";
+  if (status === "YELLOW") return "warnings";
+  return "warnings";
+}
+
+function endpointIntegritySeverityBucket(row) {
+  const collisionType = String(row?.collision_type || "").toUpperCase();
+  if (collisionType === "SHARED_ENDPOINT") return "alerts";
+  if (collisionType === "ID_ENDPOINT_DRIFT") return "warnings";
+  return "warnings";
+}
+
+function operatorAuditSeverityBucket(row) {
+  return String(row?.result || "").toLowerCase() === "success" ? "healthy" : "alerts";
+}
+
+function egmMatchesGlobalFilters(egm) {
+  const driftIPs = Array.isArray(egm?.endpoint_drift_ips) ? egm.endpoint_drift_ips.join(" ") : "";
+  const collisionTypes = Array.isArray(egm?.endpoint_collision_types) ? egm.endpoint_collision_types.join(" ") : "";
+  return globalSeverityAllows(egmSeverityBucket(egm)) && rowMatchesGlobalText([
+    egm?.id,
+    egm?.source,
+    egm?.status,
+    egm?.vendor,
+    egm?.cabinet_family,
+    egm?.ip_address,
+    egm?.port,
+    egm?.last_endpoint_ip,
+    egm?.last_endpoint_port,
+    egm?.game_title,
+    egm?.software_version,
+    driftIPs,
+    collisionTypes
+  ]);
+}
+
+function endpointIntegrityMatchesGlobalFilters(row) {
+  const ids = Array.isArray(row?.involved_egm_ids) ? row.involved_egm_ids.join(" ") : "";
+  return globalSeverityAllows(endpointIntegritySeverityBucket(row)) && rowMatchesGlobalText([
+    row?.collision_type,
+    endpointCollisionTypeLabel(row?.collision_type),
+    row?.endpoint,
+    ids
+  ]);
+}
+
+function operatorAuditMatchesGlobalFilters(row) {
+  return globalSeverityAllows(operatorAuditSeverityBucket(row)) && rowMatchesGlobalText([
+    row?.action,
+    row?.result,
+    row?.summary,
+    row?.detail,
+    row?.actor_scope,
+    row?.egm_focus
+  ]);
+}
+
+function compactModeLabel() {
+  return clientState.compactMode ? "on" : "off";
+}
+
+function applyCompactModeClass() {
+  document.body.classList.toggle("compact-mode", clientState.compactMode === true);
+}
+
+function loadCompactModePreference() {
+  try {
+    const value = window.localStorage ? window.localStorage.getItem(compactModeStorageKey) : "";
+    clientState.compactMode = value === "1";
+  } catch (_) {
+    clientState.compactMode = false;
+  }
+  applyCompactModeClass();
+}
+
+function saveCompactModePreference() {
+  try {
+    if (!window.localStorage) return;
+    window.localStorage.setItem(compactModeStorageKey, clientState.compactMode ? "1" : "0");
+  } catch (_) {
+    // Keep compact mode runtime-only when localStorage is unavailable.
+  }
+}
+
+function renderGlobalViewControls() {
+  const severity = normalizeGlobalSeverityFilter(clientState.globalSeverityFilter);
+  const text = String(clientState.globalTextFilter || "").trim();
+  $("global-severity-filter").value = severity;
+  $("global-text-filter").value = text;
+  $("global-compact-mode-toggle").checked = clientState.compactMode === true;
+  const severityLabelMap = { all: "All", alerts: "Alerts", warnings: "Warnings", healthy: "Healthy" };
+  const textLabel = text ? text : "none";
+  $("global-view-summary").textContent = "Severity: " + (severityLabelMap[severity] || "All") +
+    " | Text: " + textLabel +
+    " | Compact mode: " + compactModeLabel();
+}
+
+function refreshGlobalFilteredViews() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  renderGlobalViewControls();
+  renderEGMTable(snapshot?.status || {});
+  renderEndpointIntegrity(snapshot);
+  renderOperatorAuditTimeline(snapshot);
+}
+
+function setCompactMode(enabled) {
+  clientState.compactMode = enabled === true;
+  applyCompactModeClass();
+  saveCompactModePreference();
+  renderGlobalViewControls();
+}
+
+function setGlobalSeverityFilter(value) {
+  clientState.globalSeverityFilter = normalizeGlobalSeverityFilter(value);
+  refreshGlobalFilteredViews();
+}
+
+function setGlobalTextFilter(value) {
+  clientState.globalTextFilter = String(value || "").trim();
+  refreshGlobalFilteredViews();
 }
 
 function withEGMFocusHeader(headers) {
@@ -2568,12 +2871,15 @@ function renderEndpointIntegrity(snapshot) {
   const sharedCount = Number(summary?.shared_endpoint_count || 0);
   const driftCount = Number(summary?.id_endpoint_drift_count || 0);
   const affectedIDs = Array.isArray(summary?.affected_egm_ids) ? summary.affected_egm_ids.map((item) => String(item || "").trim()).filter(Boolean) : [];
-  const rows = normalizeEndpointCollisionRows(status);
+  const allRows = normalizeEndpointCollisionRows(status);
+  const rows = allRows.filter((row) => endpointIntegrityMatchesGlobalFilters(row));
+  const filteredCount = rows.length;
 
   $("endpoint-integrity-state").textContent = total > 0 ? "warning" : "ready";
   $("endpoint-integrity-state").className = "source-pill " + (total > 0 ? "source-mixed" : "source-file");
   $("endpoint-integrity-summary").textContent = total > 0
     ? ("Active warnings: " + String(total) + " | shared endpoint " + String(sharedCount) + " | ID endpoint drift " + String(driftCount) +
+      " | showing " + String(filteredCount) + " row(s)" +
       (affectedIDs.length ? (" | affected EGMs " + affectedIDs.join(", ")) : ""))
     : "No endpoint collisions detected.";
   $("endpoint-integrity-message").textContent = total > 0
@@ -2585,7 +2891,7 @@ function renderEndpointIntegrity(snapshot) {
   filterButton.textContent = integrityFilterActive ? "Show All EGMs" : "Show Affected EGMs";
   filterButton.disabled = total === 0 && !integrityFilterActive;
 
-  renderItems("endpoint-integrity-list", rows, "No endpoint integrity warnings detected.", (item) => {
+  renderItems("endpoint-integrity-list", rows, "No endpoint integrity rows match current global filters.", (item) => {
     const typeLabel = endpointCollisionTypeLabel(item.collision_type);
     const ids = item.involved_egm_ids.length ? item.involved_egm_ids.join(", ") : "-";
     return "<div class=\"item endpoint-integrity-warning\">" +
@@ -5117,13 +5423,18 @@ function syncOperatorAuditFilterControls() {
 
 function renderOperatorAuditTimeline(snapshot) {
   syncOperatorAuditFilterControls();
-  const rows = normalizeOperatorAuditEvents(snapshot?.operatorAudit || []);
+  const sourceRows = normalizeOperatorAuditEvents(snapshot?.operatorAudit || []);
+  const rows = sourceRows.filter((item) => operatorAuditMatchesGlobalFilters(item));
   const parts = [];
   if (clientState.operatorAuditActionFilter) parts.push("action=" + clientState.operatorAuditActionFilter);
   if (clientState.operatorAuditResultFilter) parts.push("result=" + clientState.operatorAuditResultFilter);
   if (clientState.operatorAuditSearchFilter) parts.push("q=" + clientState.operatorAuditSearchFilter);
+  const severityFilter = normalizeGlobalSeverityFilter(clientState.globalSeverityFilter);
+  const globalText = String(clientState.globalTextFilter || "").trim();
+  if (severityFilter !== "all") parts.push("global_severity=" + severityFilter);
+  if (globalText) parts.push("global_q=" + globalText);
   $("operator-audit-summary").textContent = rows.length
-    ? ("Showing " + String(rows.length) + " audit event(s)" + (parts.length ? " (" + parts.join(", ") + ")" : "") + ".")
+    ? ("Showing " + String(rows.length) + " / " + String(sourceRows.length) + " audit event(s)" + (parts.length ? " (" + parts.join(", ") + ")" : "") + ".")
     : ("No audit events found" + (parts.length ? " for current filters." : "."));
   $("operator-audit-state").textContent = rows.length > 0 ? "ready" : "idle";
   $("operator-audit-state").className = "source-pill " + (rows.length > 0 ? "source-file" : "source-mixed");
@@ -5722,7 +6033,8 @@ function updateSortLabels() {
 function renderEGMTable(status) {
   const all = Array.isArray(status?.egms) ? status.egms.slice() : [];
   const focusScoped = filterStatusEGMsByFocus(all);
-  const filtered = applyEGMFilter(focusScoped);
+  const sectionFiltered = applyEGMFilter(focusScoped);
+  const filtered = sectionFiltered.filter((egm) => egmMatchesGlobalFilters(egm));
   const rows = filtered.sort(compareEGM).map((egm) =>
     (() => {
       const configuredAddress = (egm.ip_address || "-") + ":" + (egm.port || "-");
@@ -5750,9 +6062,14 @@ function renderEGMTable(status) {
     })()
   );
   const focusID = currentEGMFocusID();
+  const severityFilter = normalizeGlobalSeverityFilter(clientState.globalSeverityFilter);
+  const globalText = String(clientState.globalTextFilter || "").trim();
+  const globalSuffix = (severityFilter !== "all" || globalText)
+    ? (" | global " + (severityFilter === "all" ? "All" : severityFilter) + (globalText ? (' | q="' + globalText + '"') : ""))
+    : "";
   $("egm-count").textContent = focusID
-    ? ("Focus " + focusID + " | " + filtered.length + " / " + all.length + " EGMs")
-    : (filtered.length + " / " + all.length + " EGMs");
+    ? ("Focus " + focusID + " | " + filtered.length + " / " + all.length + " EGMs" + globalSuffix)
+    : (filtered.length + " / " + all.length + " EGMs" + globalSuffix);
   $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"8\">No EGMs match current filter</td></tr>";
   updateSortLabels();
 }
@@ -6665,6 +6982,14 @@ function syncCabinetSetupFromSnapshot(snapshot) {
   renderCabinetProfileSuggestions(snapshot);
 }
 
+function syncOperatorActionsFromCurrentState() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const hasStatus = !!snapshot?.status;
+  $("operator-actions-refresh-button").disabled = clientState.inFlight === true;
+  $("operator-actions-capture-evidence-button").disabled = !hasStatus || $("session-evidence-save-button").disabled;
+  $("operator-actions-export-package-button").disabled = !hasStatus || $("session-package-export-button").disabled;
+}
+
 function renderStatus(snapshot) {
   const status = snapshot?.status || {};
   const readyz = snapshot?.readyz || {};
@@ -6686,6 +7011,7 @@ function renderStatus(snapshot) {
   $("readyz-http").textContent = readyz.statusCode ? (readyz.statusCode + (readyz.ok ? " OK" : " DEGRADED")) : "-";
   $("readyz-issues").textContent = Array.isArray(readyz.issues) && readyz.issues.length ? readyz.issues.join("; ") : "None";
   $("readiness-warnings").textContent = Array.isArray(readiness.warnings) && readiness.warnings.length ? readiness.warnings.join("; ") : "None";
+  renderGlobalViewControls();
 
   renderCertificateSummary(readiness.certificate_summary || {}, snapshot?.certificates, runtime);
   renderCertificateManager(snapshot);
@@ -6722,6 +7048,7 @@ function renderStatus(snapshot) {
     const impact = certImpactLabel(severity);
     return "<div class=\"item cert-item cert-" + severity + "\"><strong>" + escapeHTML(item.role) + " " + statusPill(state) + "</strong><span>" + escapeHTML(path + expiry) + "</span><br><span>" + escapeHTML(reason) + "</span><br><span class=\"cert-impact cert-impact-" + severity + "\">" + escapeHTML(impact) + "</span></div>";
   });
+  syncOperatorActionsFromCurrentState();
 }
 
 function setAlert(level, title, detail) {
@@ -6869,6 +7196,7 @@ async function pollOnce() {
   if (clientState.inFlight) return;
   clientState.inFlight = true;
   $("refresh-button").disabled = true;
+  syncOperatorActionsFromCurrentState();
 
   const baseline = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   const failures = [];
@@ -6989,6 +7317,7 @@ async function pollOnce() {
   } finally {
     clientState.inFlight = false;
     $("refresh-button").disabled = false;
+    syncOperatorActionsFromCurrentState();
   }
 }
 
@@ -7038,6 +7367,30 @@ function setSort(key) {
 function bindControls() {
   $("refresh-button").addEventListener("click", () => {
     schedulePoll(0);
+  });
+  $("operator-actions-refresh-button").addEventListener("click", () => {
+    schedulePoll(0);
+  });
+  $("operator-actions-capture-evidence-button").addEventListener("click", () => {
+    saveSessionEvidenceToHistory();
+  });
+  $("operator-actions-export-package-button").addEventListener("click", () => {
+    exportSessionPackage();
+  });
+  $("operator-actions-blocker-governance-button").addEventListener("click", () => {
+    const anchor = $("blocker-governance-anchor") || $("blocker-policy-form");
+    if (!anchor) return;
+    anchor.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  $("global-severity-filter").addEventListener("change", (event) => {
+    setGlobalSeverityFilter(event.target.value || "all");
+  });
+  $("global-text-filter").addEventListener("input", (event) => {
+    setGlobalTextFilter(event.target.value || "");
+  });
+  $("global-compact-mode-toggle").addEventListener("change", (event) => {
+    setCompactMode(event.target.checked === true);
   });
 
   $("egm-focus-select").addEventListener("change", (event) => {
@@ -7274,7 +7627,9 @@ function bindControls() {
   });
 }
 
+loadCompactModePreference();
 bindControls();
+renderGlobalViewControls();
 updateSortLabels();
 updateStaleBadge();
 renderEGMFocusControl(emptySnapshot());
@@ -7292,5 +7647,6 @@ renderOperatorDrill(emptySnapshot());
 renderHeartbeatSummary(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());
 renderEGMHistory(emptySnapshot());
+syncOperatorActionsFromCurrentState();
 schedulePoll(0);
 setInterval(updateStaleBadge, 1000);`
