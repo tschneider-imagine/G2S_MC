@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS run_markers (
 
 CREATE TABLE IF NOT EXISTS heartbeat_policy_overrides (
     id INTEGER PRIMARY KEY CHECK (id = 1),
+    interval_ms INTEGER,
     warning_after_missed INTEGER NOT NULL,
     block_after_missed INTEGER NOT NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

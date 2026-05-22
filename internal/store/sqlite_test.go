@@ -241,7 +241,7 @@ func TestHeartbeatPolicyOverrideCRUD(t *testing.T) {
 		t.Fatalf("expected no heartbeat policy override row")
 	}
 
-	if err := store.UpsertHeartbeatPolicyOverride(ctx, 4, 8, "tester"); err != nil {
+	if err := store.UpsertHeartbeatPolicyOverride(ctx, 6000, 4, 8, "tester"); err != nil {
 		t.Fatalf("upsert heartbeat policy override: %v", err)
 	}
 	assertCount(t, store, "heartbeat_policy_overrides", 1)
@@ -253,21 +253,21 @@ func TestHeartbeatPolicyOverrideCRUD(t *testing.T) {
 	if override == nil {
 		t.Fatalf("expected heartbeat policy override row")
 	}
-	if override.WarningAfterMissed != 4 || override.BlockAfterMissed != 8 {
+	if override.IntervalMS != 6000 || override.WarningAfterMissed != 4 || override.BlockAfterMissed != 8 {
 		t.Fatalf("unexpected heartbeat policy override: %+v", override)
 	}
 	if override.UpdatedBy != "tester" {
 		t.Fatalf("updated_by = %q, want tester", override.UpdatedBy)
 	}
 
-	if err := store.UpsertHeartbeatPolicyOverride(ctx, 5, 9, "tester2"); err != nil {
+	if err := store.UpsertHeartbeatPolicyOverride(ctx, 7000, 5, 9, "tester2"); err != nil {
 		t.Fatalf("update heartbeat policy override: %v", err)
 	}
 	override, err = store.GetHeartbeatPolicyOverride(ctx)
 	if err != nil {
 		t.Fatalf("get updated heartbeat policy override: %v", err)
 	}
-	if override.WarningAfterMissed != 5 || override.BlockAfterMissed != 9 {
+	if override.IntervalMS != 7000 || override.WarningAfterMissed != 5 || override.BlockAfterMissed != 9 {
 		t.Fatalf("unexpected updated heartbeat policy override: %+v", override)
 	}
 	if override.UpdatedBy != "tester2" {

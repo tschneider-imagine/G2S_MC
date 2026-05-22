@@ -166,6 +166,9 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"heartbeat-policy-form\"") {
 		t.Fatalf("expected heartbeat policy form")
 	}
+	if !strings.Contains(rr.Body.String(), "id=\"heartbeat-policy-interval\"") {
+		t.Fatalf("expected heartbeat policy interval input")
+	}
 	if !strings.Contains(rr.Body.String(), "id=\"heartbeat-policy-warning-after-missed\"") {
 		t.Fatalf("expected heartbeat policy warning threshold input")
 	}
@@ -243,6 +246,11 @@ func TestDashboardAssets(t *testing.T) {
 		body := rr.Body.String()
 		if path == "/static/dashboard.js" {
 			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "Authorization", "cabinetProfile", "heartbeatPolicy", "saveHeartbeatPolicyOverride", "clearHeartbeatPolicyOverride", "reloadHeartbeatPolicyForm", "currentHeartbeatPolicy", "runWindowIsActive", "certificateImport", "certificateExport", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "validateCertificateManagerForm", "certificateRoleRulesText", "cert-role-export-policy", "allow_private_key_export", "cabinetPreflight", "renderFirstCabinetSession", "buildOperatorReadinessModel", "renderOperatorReadinessModel", "buildMutePathStatus", "renderMutePathStatus", "preflightCheckByID", "lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER", "Replace placeholder first-test EGM IDs before real cabinet deployment", "selectedEGMDetailForSnapshot", "renderSelectedEGMDetail", "live_signal", "live_signal_detail", "last_endpoint_ip", "last_endpoint_port", "last_endpoint_seen_at", "endpoint_drift_warning", "endpoint_drift_ips", "recent_endpoints", "endpoint_warning_text", "Recent Endpoints (newest first)", "first-cabinet-session-state", "mute_path", "runbook_readiness", "mute_path_note", "trusted_mutation_bypass_active", "mutationTokenRequired", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "heartbeat_summary", "heartbeatEventTypes", "isHeartbeatEventType", "heartbeatSummary", "operatorDrillEvidence", "operator_drill", "renderHeartbeatSummary", "run_markers", "session-evidence-state", "action_model", "next_operator_actions", "selected_egm_detail", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "viewSavedSessionEvidence", "exportSavedSessionEvidenceJSON", "exportSavedSessionEvidenceMarkdown", "exportAllSavedSessionEvidence", "deleteSavedSessionEvidence", "session-evidence-export-all-button", "session-evidence-selected", "buildCabinetRunTimeline", "renderCabinetRunTimeline", "timeline-filter-tab", "timeline-count", "timeline-filter-label", "timelineEntryHTML", "renderGroupedTimelineAll", "runMarkers", "run-marker-start-button", "submitRunMarker", "renderRunMarkerControls", "operatorDrill", "renderOperatorDrill", "submitOperatorDrillAction", "operator-drill-comms-online-button", "operator-drill-pause-button", "boundedRunReport", "buildRunReportMarkdown", "run-report-start-marker", "run-report-end-marker", "renderRunReportControls", "exportRunReportJSON", "exportRunReportMarkdown", "sessionEvidence", "egmSourcePill", "data-egm-source=\\\"discovered\\\"", "renderEGMFocusControl", "renderEGMGroupedSummary", "buildEGMGroupedSummaryRows", "renderEGMHistory", "buildCabinetSessionWorkflow", "setEGMFocus", "egmFocusID", "egm_focus", "grouped_summary_scope", "egm_grouped_summary"} {
+				if !strings.Contains(body, marker) {
+					t.Fatalf("%s missing marker %q", path, marker)
+				}
+			}
+			for _, marker := range []string{"heartbeat-policy-interval", "interval_ms", "Interval (ms) must be a whole number greater than zero.", "Heartbeat policy override saved", "Heartbeat policy override cleared"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}

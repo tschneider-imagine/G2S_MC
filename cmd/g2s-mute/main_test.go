@@ -665,11 +665,11 @@ func TestHeartbeatPolicyHandlerCRUD(t *testing.T) {
 	if getBody.PolicySource != "file" {
 		t.Fatalf("GET policy_source = %q", getBody.PolicySource)
 	}
-	if getBody.Effective.WarningAfterMissed != 3 || getBody.Effective.BlockAfterMissed != 6 {
+	if getBody.Effective.IntervalMS != 5000 || getBody.Effective.WarningAfterMissed != 3 || getBody.Effective.BlockAfterMissed != 6 {
 		t.Fatalf("unexpected GET effective policy: %+v", getBody.Effective)
 	}
 
-	raw := []byte(`{"warning_after_missed":4,"block_after_missed":9}`)
+	raw := []byte(`{"interval_ms":7000,"warning_after_missed":4,"block_after_missed":9}`)
 	putReq := httptest.NewRequest(http.MethodPut, "/api/heartbeat-policy", bytes.NewReader(raw))
 	putReq.Header.Set("Content-Type", "application/json")
 	putReq.Header.Set("X-Operator", "tester")
@@ -685,11 +685,14 @@ func TestHeartbeatPolicyHandlerCRUD(t *testing.T) {
 	if putBody.PolicySource != "override" {
 		t.Fatalf("PUT policy_source = %q", putBody.PolicySource)
 	}
-	if putBody.Effective.WarningAfterMissed != 4 || putBody.Effective.BlockAfterMissed != 9 {
+	if putBody.Effective.IntervalMS != 7000 || putBody.Effective.WarningAfterMissed != 4 || putBody.Effective.BlockAfterMissed != 9 {
 		t.Fatalf("unexpected PUT effective policy: %+v", putBody.Effective)
 	}
 	if !putBody.OverridePresent {
 		t.Fatal("expected override_present on PUT")
+	}
+	if putBody.Override == nil || putBody.Override.IntervalMS != 7000 {
+		t.Fatalf("expected override interval 7000, got %+v", putBody.Override)
 	}
 
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/heartbeat-policy", nil)
@@ -704,6 +707,119 @@ func TestHeartbeatPolicyHandlerCRUD(t *testing.T) {
 	}
 	if deleteBody.PolicySource != "file" || deleteBody.OverridePresent {
 		t.Fatalf("unexpected DELETE response: %+v", deleteBody)
+	}
+	if deleteBody.Effective.IntervalMS != 5000 || deleteBody.Effective.WarningAfterMissed != 3 || deleteBody.Effective.BlockAfterMissed != 6 {
+		t.Fatalf("unexpected DELETE effective policy: %+v", deleteBody.Effective)
+	}
+}
+
+func TestHeartbeatPolicyHandlerValidation(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		Timeouts: config.Timeouts{
+			EGMHeartbeatIntervalMS:         5000,
+			EGMHeartbeatWarningAfterMissed: 3,
+			EGMHeartbeatBlockAfterMissed:   6,
+		},
+	}
+	handler := heartbeatPolicyHandler(auditStore, cfg)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "interval must be positive",
+			body: `{"interval_ms":0,"warning_after_missed":3,"block_after_missed":6}`,
+		},
+		{
+			name: "warning must be >=1",
+			body: `{"interval_ms":5000,"warning_after_missed":0,"block_after_missed":6}`,
+		},
+		{
+			name: "block must be >= warning",
+			body: `{"interval_ms":5000,"warning_after_missed":6,"block_after_missed":5}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/api/heartbeat-policy", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHeartbeatPolicyRouteMutationAuthTokenGuard(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		Timeouts: config.Timeouts{
+			EGMHeartbeatIntervalMS:         5000,
+			EGMHeartbeatWarningAfterMissed: 3,
+			EGMHeartbeatBlockAfterMissed:   6,
+		},
+	}
+	handler := requireMutationAuthForMethods(
+		heartbeatPolicyHandler(auditStore, cfg),
+		cfg,
+		http.MethodPut,
+		http.MethodDelete,
+	)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/heartbeat-policy", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	unauthorizedPut := httptest.NewRequest(http.MethodPut, "/api/heartbeat-policy", bytes.NewBufferString(`{"interval_ms":6000,"warning_after_missed":4,"block_after_missed":7}`))
+	unauthorizedPut.Header.Set("Content-Type", "application/json")
+	unauthorizedPutRec := httptest.NewRecorder()
+	handler(unauthorizedPutRec, unauthorizedPut)
+	if !deniedByAuth(unauthorizedPutRec.Code) {
+		t.Fatalf("PUT without token status = %d, want 401/403", unauthorizedPutRec.Code)
+	}
+
+	authorizedPut := httptest.NewRequest(http.MethodPut, "/api/heartbeat-policy", bytes.NewBufferString(`{"interval_ms":6000,"warning_after_missed":4,"block_after_missed":7}`))
+	authorizedPut.Header.Set("Content-Type", "application/json")
+	authorizedPut.Header.Set("Authorization", "Bearer lab-secret")
+	authorizedPutRec := httptest.NewRecorder()
+	handler(authorizedPutRec, authorizedPut)
+	if authorizedPutRec.Code != http.StatusOK {
+		t.Fatalf("PUT with token status = %d: %s", authorizedPutRec.Code, authorizedPutRec.Body.String())
+	}
+
+	unauthorizedDelete := httptest.NewRequest(http.MethodDelete, "/api/heartbeat-policy", nil)
+	unauthorizedDeleteRec := httptest.NewRecorder()
+	handler(unauthorizedDeleteRec, unauthorizedDelete)
+	if !deniedByAuth(unauthorizedDeleteRec.Code) {
+		t.Fatalf("DELETE without token status = %d, want 401/403", unauthorizedDeleteRec.Code)
+	}
+
+	authorizedDelete := httptest.NewRequest(http.MethodDelete, "/api/heartbeat-policy", nil)
+	authorizedDelete.Header.Set("Authorization", "Bearer lab-secret")
+	authorizedDeleteRec := httptest.NewRecorder()
+	handler(authorizedDeleteRec, authorizedDelete)
+	if authorizedDeleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE with token status = %d: %s", authorizedDeleteRec.Code, authorizedDeleteRec.Body.String())
 	}
 }
 

@@ -393,7 +393,7 @@ const dashboardHTML = `<!doctype html>
           </div>
           <span id="heartbeat-policy-message" class="muted-text">Tune warning and escalation thresholds for heartbeat gap handling.</span>
           <div class="form-grid run-report-grid">
-            <label>Interval (ms)<input id="heartbeat-policy-interval" type="number" disabled></label>
+            <label>Interval (ms)<input id="heartbeat-policy-interval" type="number" min="1"></label>
             <label>Updated<input id="heartbeat-policy-updated" type="text" disabled></label>
             <label>Warning After Missed Beats<input id="heartbeat-policy-warning-after-missed" type="number" min="1"></label>
             <label>Escalate Alert After Missed Beats<input id="heartbeat-policy-block-after-missed" type="number" min="1"></label>
@@ -410,7 +410,7 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="heartbeat-policy-validation-list" class="validation-list"></div>
           <div class="setup-actions evidence-actions">
-            <button id="heartbeat-policy-save-button" type="submit">Save Policy</button>
+            <button id="heartbeat-policy-save-button" type="submit">Save Override</button>
             <button id="heartbeat-policy-clear-button" type="button" class="secondary-button">Clear Override</button>
             <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
@@ -4314,6 +4314,7 @@ function fillHeartbeatPolicyForm(policyResponse) {
 
 function heartbeatPolicyPayloadFromForm() {
   return {
+    interval_ms: Number($("heartbeat-policy-interval").value || 0),
     warning_after_missed: Number($("heartbeat-policy-warning-after-missed").value || 0),
     block_after_missed: Number($("heartbeat-policy-block-after-missed").value || 0)
   };
@@ -4322,6 +4323,9 @@ function heartbeatPolicyPayloadFromForm() {
 function validateHeartbeatPolicyForm(snapshot) {
   const payload = heartbeatPolicyPayloadFromForm();
   const problems = [];
+  if (!Number.isInteger(payload.interval_ms) || payload.interval_ms <= 0) {
+    problems.push("Interval (ms) must be a whole number greater than zero.");
+  }
   if (!Number.isInteger(payload.warning_after_missed) || payload.warning_after_missed <= 0) {
     problems.push("Warning After Missed Beats must be a whole number greater than zero.");
   }
@@ -4331,7 +4335,7 @@ function validateHeartbeatPolicyForm(snapshot) {
   if (payload.block_after_missed > 0 && payload.warning_after_missed > 0 && payload.block_after_missed < payload.warning_after_missed) {
     problems.push("Escalate Alert After Missed Beats must be greater than or equal to Warning After Missed Beats.");
   }
-  const intervalMs = Number(currentHeartbeatPolicy(snapshot).interval_ms || 0);
+  const intervalMs = Number(payload.interval_ms || 0);
   $("heartbeat-policy-warning-gap").textContent = intervalMs > 0 && payload.warning_after_missed > 0 ? fmtDurationMs(intervalMs * payload.warning_after_missed) : "-";
   $("heartbeat-policy-block-gap").textContent = intervalMs > 0 && payload.block_after_missed > 0 ? fmtDurationMs(intervalMs * payload.block_after_missed) : "-";
   $("heartbeat-policy-validation-list").innerHTML = problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
@@ -4347,6 +4351,7 @@ function renderHeartbeatPolicy(snapshot) {
   sourceBadge.className = "source-pill source-" + source;
   $("heartbeat-policy-interval").value = String(effective.interval_ms || 0);
   if (!heartbeatPolicyHasFocus()) {
+    $("heartbeat-policy-interval").value = String(effective.interval_ms || 0);
     $("heartbeat-policy-warning-after-missed").value = String(effective.warning_after_missed || 3);
     $("heartbeat-policy-block-after-missed").value = String(effective.block_after_missed || 6);
   }
@@ -4402,9 +4407,11 @@ async function saveHeartbeatPolicyOverride(event) {
   if (!response.ok) {
     const detail = sanitizeHTTPText(await response.text());
     $("heartbeat-policy-message").textContent = "Save failed: HTTP " + response.status + (detail ? " " + detail : "");
+    setAlert("warning", "Heartbeat policy save failed", "Resolve heartbeat policy validation and retry.");
     return;
   }
   $("heartbeat-policy-message").textContent = "Heartbeat policy saved.";
+  setAlert("info", "Heartbeat policy override saved", "Heartbeat warning behavior updated in this appliance session.");
   schedulePoll(0);
 }
 
@@ -4425,9 +4432,11 @@ async function clearHeartbeatPolicyOverride() {
   if (!response.ok) {
     const detail = sanitizeHTTPText(await response.text());
     $("heartbeat-policy-message").textContent = "Clear failed: HTTP " + response.status + (detail ? " " + detail : "");
+    setAlert("warning", "Heartbeat policy clear failed", "Unable to clear heartbeat policy override.");
     return;
   }
   $("heartbeat-policy-message").textContent = "Heartbeat policy override cleared.";
+  setAlert("info", "Heartbeat policy override cleared", "Heartbeat behavior reverted to file policy.");
   schedulePoll(0);
 }
 
@@ -5542,6 +5551,9 @@ function bindControls() {
     });
   });
   $("heartbeat-policy-warning-after-missed").addEventListener("input", () => {
+    renderHeartbeatPolicy(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
+  $("heartbeat-policy-interval").addEventListener("input", () => {
     renderHeartbeatPolicy(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   });
   $("heartbeat-policy-block-after-missed").addEventListener("input", () => {

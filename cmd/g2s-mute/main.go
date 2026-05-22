@@ -307,6 +307,7 @@ type heartbeatPolicyResponse struct {
 }
 
 type heartbeatPolicyOverrideView struct {
+	IntervalMS         int       `json:"interval_ms"`
 	WarningAfterMissed int       `json:"warning_after_missed"`
 	BlockAfterMissed   int       `json:"block_after_missed"`
 	UpdatedAt          time.Time `json:"updated_at"`
@@ -796,11 +797,16 @@ func heartbeatPolicyHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 			writeJSON(w, buildHeartbeatPolicyResponse(policy), nil)
 		case http.MethodPut:
 			var payload struct {
+				IntervalMS         int `json:"interval_ms"`
 				WarningAfterMissed int `json:"warning_after_missed"`
 				BlockAfterMissed   int `json:"block_after_missed"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			if payload.IntervalMS <= 0 {
+				http.Error(w, "interval_ms must be greater than zero", http.StatusBadRequest)
 				return
 			}
 			if payload.WarningAfterMissed <= 0 {
@@ -815,7 +821,7 @@ func heartbeatPolicyHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 			if updatedBy == "" {
 				updatedBy = "lab-api"
 			}
-			if err := store.UpsertHeartbeatPolicyOverride(r.Context(), payload.WarningAfterMissed, payload.BlockAfterMissed, updatedBy); err != nil {
+			if err := store.UpsertHeartbeatPolicyOverride(r.Context(), payload.IntervalMS, payload.WarningAfterMissed, payload.BlockAfterMissed, updatedBy); err != nil {
 				writeJSON(w, nil, err)
 				return
 			}
@@ -870,6 +876,7 @@ func buildHeartbeatPolicyResponse(policy resolvedHeartbeatPolicy) heartbeatPolic
 	}
 	if policy.Override != nil {
 		response.Override = &heartbeatPolicyOverrideView{
+			IntervalMS:         policy.Override.IntervalMS,
 			WarningAfterMissed: policy.Override.WarningAfterMissed,
 			BlockAfterMissed:   policy.Override.BlockAfterMissed,
 			UpdatedAt:          policy.Override.UpdatedAt,
@@ -937,6 +944,9 @@ func resolveHeartbeatPolicy(ctx context.Context, store *store.SQLiteStore, fileT
 	}
 
 	resolved.Override = override
+	if override.IntervalMS > 0 {
+		resolved.Effective.IntervalMS = override.IntervalMS
+	}
 	resolved.Effective.WarningAfterMissed = override.WarningAfterMissed
 	resolved.Effective.BlockAfterMissed = override.BlockAfterMissed
 	resolved.PolicySource = "override"

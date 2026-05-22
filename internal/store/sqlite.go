@@ -26,6 +26,7 @@ type CabinetProfileOverride struct {
 }
 
 type HeartbeatPolicyOverride struct {
+	IntervalMS         int
 	WarningAfterMissed int
 	BlockAfterMissed   int
 	UpdatedAt          time.Time
@@ -69,6 +70,41 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, InitMigration)
+	if err != nil {
+		return err
+	}
+	return s.ensureHeartbeatPolicyOverrideSchema(ctx)
+}
+
+func (s *SQLiteStore) ensureHeartbeatPolicyOverrideSchema(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(heartbeat_policy_overrides)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasInterval := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(strings.TrimSpace(name), "interval_ms") {
+			hasInterval = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasInterval {
+		return nil
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE heartbeat_policy_overrides ADD COLUMN interval_ms INTEGER`)
 	return err
 }
 
@@ -474,16 +510,17 @@ func (s *SQLiteStore) ClearCabinetProfileOverride(ctx context.Context) error {
 func (s *SQLiteStore) GetHeartbeatPolicyOverride(ctx context.Context) (*HeartbeatPolicyOverride, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT warning_after_missed, block_after_missed, updated_at, COALESCE(updated_by, '')
+		`SELECT COALESCE(interval_ms, 0), warning_after_missed, block_after_missed, updated_at, COALESCE(updated_by, '')
 		   FROM heartbeat_policy_overrides
 		  WHERE id = 1`,
 	)
 
+	var intervalMS int
 	var warningAfterMissed int
 	var blockAfterMissed int
 	var updatedAt time.Time
 	var updatedBy string
-	if err := row.Scan(&warningAfterMissed, &blockAfterMissed, &updatedAt, &updatedBy); err != nil {
+	if err := row.Scan(&intervalMS, &warningAfterMissed, &blockAfterMissed, &updatedAt, &updatedBy); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -491,6 +528,7 @@ func (s *SQLiteStore) GetHeartbeatPolicyOverride(ctx context.Context) (*Heartbea
 	}
 
 	return &HeartbeatPolicyOverride{
+		IntervalMS:         intervalMS,
 		WarningAfterMissed: warningAfterMissed,
 		BlockAfterMissed:   blockAfterMissed,
 		UpdatedAt:          updatedAt,
@@ -498,17 +536,19 @@ func (s *SQLiteStore) GetHeartbeatPolicyOverride(ctx context.Context) (*Heartbea
 	}, nil
 }
 
-func (s *SQLiteStore) UpsertHeartbeatPolicyOverride(ctx context.Context, warningAfterMissed int, blockAfterMissed int, updatedBy string) error {
+func (s *SQLiteStore) UpsertHeartbeatPolicyOverride(ctx context.Context, intervalMS int, warningAfterMissed int, blockAfterMissed int, updatedBy string) error {
 	_, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO heartbeat_policy_overrides (
-		    id, warning_after_missed, block_after_missed, updated_at, updated_by
-		 ) VALUES (1, ?, ?, CURRENT_TIMESTAMP, ?)
+		    id, interval_ms, warning_after_missed, block_after_missed, updated_at, updated_by
+		 ) VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP, ?)
 		 ON CONFLICT(id) DO UPDATE SET
+		    interval_ms = excluded.interval_ms,
 		    warning_after_missed = excluded.warning_after_missed,
 		    block_after_missed = excluded.block_after_missed,
 		    updated_at = CURRENT_TIMESTAMP,
 		    updated_by = excluded.updated_by`,
+		intervalMS,
 		warningAfterMissed,
 		blockAfterMissed,
 		updatedBy,
