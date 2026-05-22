@@ -687,6 +687,84 @@ func TestOperatorAuditEventPruning(t *testing.T) {
 	assertCount(t, store, "operator_audit_events", operatorAuditRetentionLimit)
 }
 
+func TestEndpointIntegrityAlertStateAckSnoozeAndExpiration(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	alertID := "eia-test-001"
+
+	if err := store.UpsertEndpointIntegrityAlertAck(ctx, alertID, now, "token", "operator-a"); err != nil {
+		t.Fatalf("upsert alert ack: %v", err)
+	}
+	if err := store.UpsertEndpointIntegrityAlertSnooze(ctx, alertID, now.Add(10*time.Minute), "known maintenance window", "operator-b"); err != nil {
+		t.Fatalf("upsert alert snooze: %v", err)
+	}
+
+	assertCount(t, store, "endpoint_integrity_alert_states", 1)
+	rows, err := store.ListEndpointIntegrityAlertStates(ctx)
+	if err != nil {
+		t.Fatalf("list alert states: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("list len = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.AlertID != alertID {
+		t.Fatalf("alert_id = %q, want %q", row.AlertID, alertID)
+	}
+	if row.AckedAt == nil {
+		t.Fatalf("acked_at is nil, want value")
+	}
+	if row.AckedByScope != "token" {
+		t.Fatalf("acked_by_scope = %q, want token", row.AckedByScope)
+	}
+	if row.SnoozedUntil == nil {
+		t.Fatalf("snoozed_until is nil, want value")
+	}
+	if row.SnoozeReason != "known maintenance window" {
+		t.Fatalf("snooze_reason = %q", row.SnoozeReason)
+	}
+
+	cleared, err := store.ClearExpiredEndpointIntegrityAlertSnoozes(ctx, now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("clear expired snoozes (before expiry): %v", err)
+	}
+	if cleared != 0 {
+		t.Fatalf("cleared rows before expiry = %d, want 0", cleared)
+	}
+
+	cleared, err = store.ClearExpiredEndpointIntegrityAlertSnoozes(ctx, now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("clear expired snoozes: %v", err)
+	}
+	if cleared != 1 {
+		t.Fatalf("cleared rows = %d, want 1", cleared)
+	}
+
+	rows, err = store.ListEndpointIntegrityAlertStates(ctx)
+	if err != nil {
+		t.Fatalf("list alert states after expiry clear: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("list len after clear = %d, want 1", len(rows))
+	}
+	row = rows[0]
+	if row.SnoozedUntil != nil {
+		t.Fatalf("snoozed_until = %v, want nil", row.SnoozedUntil)
+	}
+	if row.SnoozeReason != "" {
+		t.Fatalf("snooze_reason = %q, want empty", row.SnoozeReason)
+	}
+	if row.AckedAt == nil {
+		t.Fatalf("acked_at was unexpectedly cleared")
+	}
+}
+
 func assertCount(t *testing.T, store *SQLiteStore, table string, want int) {
 	t.Helper()
 	got, err := store.Count(context.Background(), table)

@@ -125,6 +125,15 @@ func main() {
 	}))
 	mux.HandleFunc("/api/incidents", incidentsHandler(auditStore))
 	mux.HandleFunc("/api/egms/history", egmHistoryHandler(auditStore))
+	mux.HandleFunc("/api/endpoint-integrity/alerts", endpointIntegrityAlertsHandler(eng, auditStore, cfg))
+	mux.HandleFunc(
+		"/api/endpoint-integrity/alerts/",
+		requireMutationAuthForMethods(
+			endpointIntegrityAlertActionHandler(eng, auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
 	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))

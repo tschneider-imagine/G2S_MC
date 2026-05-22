@@ -55,6 +55,16 @@ type BlockerPolicyEscalationEvent struct {
 	UpdatedBy  string
 }
 
+type EndpointIntegrityAlertState struct {
+	AlertID      string
+	AckedAt      *time.Time
+	AckedByScope string
+	SnoozedUntil *time.Time
+	SnoozeReason string
+	UpdatedAt    time.Time
+	UpdatedBy    string
+}
+
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
 	if path == "" {
 		return nil, fmt.Errorf("database path is required")
@@ -764,6 +774,123 @@ func (s *SQLiteStore) ListBlockerPolicyEscalationEvents(ctx context.Context, lim
 	return events, rows.Err()
 }
 
+func (s *SQLiteStore) ListEndpointIntegrityAlertStates(ctx context.Context) ([]EndpointIntegrityAlertState, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT alert_id, acked_at, COALESCE(acked_by_scope, ''), snoozed_until, COALESCE(snooze_reason, ''), updated_at, COALESCE(updated_by, '')
+		 FROM endpoint_integrity_alert_states
+		 ORDER BY alert_id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	states := []EndpointIntegrityAlertState{}
+	for rows.Next() {
+		var state EndpointIntegrityAlertState
+		var ackedAt sql.NullTime
+		var snoozedUntil sql.NullTime
+		if err := rows.Scan(
+			&state.AlertID,
+			&ackedAt,
+			&state.AckedByScope,
+			&snoozedUntil,
+			&state.SnoozeReason,
+			&state.UpdatedAt,
+			&state.UpdatedBy,
+		); err != nil {
+			return nil, err
+		}
+		if ackedAt.Valid {
+			value := ackedAt.Time
+			state.AckedAt = &value
+		}
+		if snoozedUntil.Valid {
+			value := snoozedUntil.Time
+			state.SnoozedUntil = &value
+		}
+		states = append(states, state)
+	}
+	return states, rows.Err()
+}
+
+func (s *SQLiteStore) UpsertEndpointIntegrityAlertAck(ctx context.Context, alertID string, ackedAt time.Time, ackedByScope string, updatedBy string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO endpoint_integrity_alert_states (
+		    alert_id, acked_at, acked_by_scope, updated_at, updated_by
+		 ) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(alert_id) DO UPDATE SET
+		    acked_at = excluded.acked_at,
+		    acked_by_scope = excluded.acked_by_scope,
+		    updated_at = CURRENT_TIMESTAMP,
+		    updated_by = excluded.updated_by`,
+		alertID,
+		ackedAt,
+		ackedByScope,
+		updatedBy,
+	)
+	return err
+}
+
+func (s *SQLiteStore) UpsertEndpointIntegrityAlertSnooze(ctx context.Context, alertID string, snoozedUntil time.Time, snoozeReason string, updatedBy string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO endpoint_integrity_alert_states (
+		    alert_id, snoozed_until, snooze_reason, updated_at, updated_by
+		 ) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(alert_id) DO UPDATE SET
+		    snoozed_until = excluded.snoozed_until,
+		    snooze_reason = excluded.snooze_reason,
+		    updated_at = CURRENT_TIMESTAMP,
+		    updated_by = excluded.updated_by`,
+		alertID,
+		snoozedUntil,
+		strings.TrimSpace(snoozeReason),
+		updatedBy,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ClearEndpointIntegrityAlertSnooze(ctx context.Context, alertID string, updatedBy string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO endpoint_integrity_alert_states (
+		    alert_id, snoozed_until, snooze_reason, updated_at, updated_by
+		 ) VALUES (?, NULL, '', CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(alert_id) DO UPDATE SET
+		    snoozed_until = NULL,
+		    snooze_reason = '',
+		    updated_at = CURRENT_TIMESTAMP,
+		    updated_by = excluded.updated_by`,
+		alertID,
+		updatedBy,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ClearExpiredEndpointIntegrityAlertSnoozes(ctx context.Context, reference time.Time) (int64, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE endpoint_integrity_alert_states
+		    SET snoozed_until = NULL,
+		        snooze_reason = '',
+		        updated_at = CURRENT_TIMESTAMP
+		  WHERE snoozed_until IS NOT NULL
+		    AND snoozed_until <= ?`,
+		reference,
+	)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *SQLiteStore) GetSessionWorkflowProgress(ctx context.Context) (*model.SessionWorkflowProgress, error) {
 	row := s.db.QueryRowContext(
 		ctx,
@@ -1075,7 +1202,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides", "blocker_policy_escalation_events":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides", "blocker_policy_escalation_events", "endpoint_integrity_alert_states":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}

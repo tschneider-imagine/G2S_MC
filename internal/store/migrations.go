@@ -150,4 +150,14 @@ CREATE TABLE IF NOT EXISTS operator_audit_events (
     summary TEXT NOT NULL,
     detail TEXT
 );
+
+CREATE TABLE IF NOT EXISTS endpoint_integrity_alert_states (
+    alert_id TEXT PRIMARY KEY,
+    acked_at DATETIME,
+    acked_by_scope TEXT,
+    snoozed_until DATETIME,
+    snooze_reason TEXT,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
+);
 `

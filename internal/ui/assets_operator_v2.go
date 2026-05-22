@@ -411,9 +411,34 @@ const dashboardHTML = `<!doctype html>
         </div>
         <div class="setup-actions">
           <button id="endpoint-integrity-filter-button" type="button" class="secondary-button">Show Affected EGMs</button>
+          <button id="endpoint-integrity-refresh-button" type="button" class="secondary-button">Refresh Alerts</button>
+          <label class="endpoint-integrity-custom-snooze-label">Custom Snooze (minutes)<input id="endpoint-integrity-custom-minutes" type="number" min="1" value="30"></label>
         </div>
+        <div id="endpoint-integrity-counts" class="muted-text">Active 0 | Suppressed 0</div>
         <div id="endpoint-integrity-message" class="muted-text">Signals only. Endpoint integrity warnings do not block mute path.</div>
-        <div id="endpoint-integrity-list" class="timeline panel-scroll-safe panel-scroll-safe-integrity"></div>
+        <div class="endpoint-integrity-sections">
+          <div class="endpoint-integrity-section">
+            <div class="endpoint-integrity-section-head">
+              <strong>Active Alerts</strong>
+              <span id="endpoint-integrity-active-count" class="source-pill source-mixed">0</span>
+            </div>
+            <div id="endpoint-integrity-list" class="timeline panel-scroll-safe panel-scroll-safe-integrity"></div>
+          </div>
+          <div class="endpoint-integrity-section">
+            <div class="endpoint-integrity-section-head">
+              <strong>Acknowledged</strong>
+              <span id="endpoint-integrity-acked-count" class="source-pill source-file">0</span>
+            </div>
+            <div id="endpoint-integrity-acked-list" class="timeline panel-scroll-safe panel-scroll-safe-integrity"></div>
+          </div>
+          <div class="endpoint-integrity-section">
+            <div class="endpoint-integrity-section-head">
+              <strong>Snoozed</strong>
+              <span id="endpoint-integrity-snoozed-count" class="source-pill source-override">0</span>
+            </div>
+            <div id="endpoint-integrity-snoozed-list" class="timeline panel-scroll-safe panel-scroll-safe-integrity"></div>
+          </div>
+        </div>
       </div>
 
       <div class="panel cabinet-run-panel">
@@ -1802,6 +1827,38 @@ th {
   border-color: rgba(245, 158, 11, 0.35);
 }
 
+.endpoint-integrity-sections {
+  display: grid;
+  gap: 10px;
+}
+
+.endpoint-integrity-section {
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.endpoint-integrity-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.endpoint-integrity-custom-snooze-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.endpoint-integrity-custom-snooze-label input {
+  width: 90px;
+  min-height: 30px;
+}
+
 .endpoint-integrity-warning {
   border-left: 3px solid #f59e0b;
   padding-left: 0.5rem;
@@ -1816,6 +1873,19 @@ th {
 
 .endpoint-integrity-warning-meta {
   color: var(--muted);
+  font-size: 12px;
+}
+
+.endpoint-integrity-warning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.endpoint-integrity-warning-actions button {
+  min-height: 28px;
+  padding: 0 10px;
   font-size: 12px;
 }
 
@@ -2353,6 +2423,7 @@ const dashboardJS = `const endpoints = {
   blockerPolicySuggestions: "/api/blocker-policy/suggestions",
   blockerPolicyApprove: "/api/blocker-policy/approve",
   blockerPolicyRevoke: "/api/blocker-policy/revoke",
+  endpointIntegrityAlerts: "/api/endpoint-integrity/alerts",
   cabinetPreflight: "/api/cabinet-preflight",
   certificateBackups: "/api/certificates/backups",
   certificateRestore: "/api/certificates/restore",
@@ -2397,7 +2468,8 @@ const clientState = {
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
   workflowProgressLoaded: false,
-  workflowProgressBaseline: null
+  workflowProgressBaseline: null,
+  endpointIntegrityActionInFlight: false
 };
 
 function currentRuntime() {
@@ -2444,7 +2516,8 @@ function emptySnapshot() {
     heartbeatPolicy: null,
     blockerPolicy: null,
     blockerPolicySuggestions: null,
-    cabinetPreflight: null
+    cabinetPreflight: null,
+    endpointIntegrityAlerts: null
   };
 }
 
@@ -2472,7 +2545,8 @@ function copySnapshot(snapshot) {
     heartbeatPolicy: snapshot.heartbeatPolicy || null,
     blockerPolicy: snapshot.blockerPolicy || null,
     blockerPolicySuggestions: snapshot.blockerPolicySuggestions || null,
-    cabinetPreflight: snapshot.cabinetPreflight || null
+    cabinetPreflight: snapshot.cabinetPreflight || null,
+    endpointIntegrityAlerts: snapshot.endpointIntegrityAlerts || null
   };
 }
 
@@ -2563,7 +2637,7 @@ function egmSeverityBucket(egm) {
 }
 
 function endpointIntegritySeverityBucket(row) {
-  const collisionType = String(row?.collision_type || "").toUpperCase();
+  const collisionType = String(row?.type || row?.collision_type || "").toUpperCase();
   if (collisionType === "SHARED_ENDPOINT") return "alerts";
   if (collisionType === "ID_ENDPOINT_DRIFT") return "warnings";
   return "warnings";
@@ -2594,10 +2668,15 @@ function egmMatchesGlobalFilters(egm) {
 }
 
 function endpointIntegrityMatchesGlobalFilters(row) {
-  const ids = Array.isArray(row?.involved_egm_ids) ? row.involved_egm_ids.join(" ") : "";
+  const ids = Array.isArray(row?.egm_ids)
+    ? row.egm_ids.join(" ")
+    : Array.isArray(row?.involved_egm_ids)
+      ? row.involved_egm_ids.join(" ")
+      : "";
   return globalSeverityAllows(endpointIntegritySeverityBucket(row)) && rowMatchesGlobalText([
-    row?.collision_type,
-    endpointCollisionTypeLabel(row?.collision_type),
+    row?.type || row?.collision_type,
+    endpointCollisionTypeLabel(row?.type || row?.collision_type),
+    row?.severity,
     row?.endpoint,
     ids
   ]);
@@ -2938,41 +3017,309 @@ function normalizeEndpointCollisionRows(status) {
     });
 }
 
+function normalizeEndpointIntegrityAlertsResponse(raw) {
+  const payload = raw && typeof raw === "object" ? raw : {};
+  const normalizeAlert = (item) => {
+    const alert = item && typeof item === "object" ? item : {};
+    const ids = Array.isArray(alert.egm_ids)
+      ? alert.egm_ids
+      : Array.isArray(alert.involved_egm_ids)
+        ? alert.involved_egm_ids
+        : [];
+    return {
+      id: String(alert.id || "").trim(),
+      type: String(alert.type || alert.collision_type || "").toUpperCase(),
+      egm_ids: ids.map((value) => String(value || "").trim()).filter(Boolean),
+      endpoint: String(alert.endpoint || "").trim(),
+      first_seen_at: String(alert.first_seen_at || "").trim(),
+      last_seen_at: String(alert.last_seen_at || "").trim(),
+      severity: String(alert.severity || "").toUpperCase(),
+      acked_at: String(alert.acked_at || "").trim(),
+      acked_by_scope: String(alert.acked_by_scope || "").trim(),
+      snoozed_until: String(alert.snoozed_until || "").trim(),
+      snooze_reason: String(alert.snooze_reason || "").trim()
+    };
+  };
+  const alerts = Array.isArray(payload.alerts) ? payload.alerts.map(normalizeAlert) : [];
+  const activeAlerts = Array.isArray(payload.active_alerts) ? payload.active_alerts.map(normalizeAlert) : [];
+  const ackedAlerts = Array.isArray(payload.acked_alerts) ? payload.acked_alerts.map(normalizeAlert) : [];
+  const snoozedAlerts = Array.isArray(payload.snoozed_alerts) ? payload.snoozed_alerts.map(normalizeAlert) : [];
+  const summary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+  return {
+    generated_at: String(payload.generated_at || "").trim(),
+    summary: {
+      total: Number(summary.total || alerts.length || 0),
+      active_count: Number(summary.active_count || activeAlerts.length || 0),
+      acked_count: Number(summary.acked_count || ackedAlerts.length || 0),
+      snoozed_count: Number(summary.snoozed_count || snoozedAlerts.length || 0),
+      suppressed_count: Number(summary.suppressed_count || (ackedAlerts.length + snoozedAlerts.length))
+    },
+    alerts: alerts,
+    active_alerts: activeAlerts,
+    acked_alerts: ackedAlerts,
+    snoozed_alerts: snoozedAlerts
+  };
+}
+
+function fallbackEndpointIntegrityAlertsFromStatus(status) {
+  const rows = normalizeEndpointCollisionRows(status).map((row, idx) => ({
+    id: "fallback-" + String(idx + 1),
+    type: String(row?.collision_type || "").toUpperCase(),
+    egm_ids: Array.isArray(row?.involved_egm_ids) ? row.involved_egm_ids.slice() : [],
+    endpoint: String(row?.endpoint || "").trim(),
+    first_seen_at: String(row?.first_seen_at || "").trim(),
+    last_seen_at: String(row?.last_seen_at || "").trim(),
+    severity: String(row?.collision_type || "").toUpperCase() === "SHARED_ENDPOINT" ? "ALERT" : "WARNING",
+    acked_at: "",
+    acked_by_scope: "",
+    snoozed_until: "",
+    snooze_reason: ""
+  }));
+  return {
+    generated_at: "",
+    summary: {
+      total: rows.length,
+      active_count: rows.length,
+      acked_count: 0,
+      snoozed_count: 0,
+      suppressed_count: 0
+    },
+    alerts: rows,
+    active_alerts: rows,
+    acked_alerts: [],
+    snoozed_alerts: []
+  };
+}
+
+function endpointIntegrityAlertsState(snapshot) {
+  const status = snapshot?.status || {};
+  const payload = snapshot?.endpointIntegrityAlerts;
+  if (payload && typeof payload === "object" && Array.isArray(payload.alerts)) {
+    return payload;
+  }
+  return fallbackEndpointIntegrityAlertsFromStatus(status);
+}
+
+function endpointIntegrityAlertSections(alertPayload, referenceTime) {
+  const payload = alertPayload && typeof alertPayload === "object" ? alertPayload : {};
+  const alerts = Array.isArray(payload.alerts) ? payload.alerts.slice() : [];
+  const hasStructuredSections =
+    Array.isArray(payload.active_alerts) ||
+    Array.isArray(payload.acked_alerts) ||
+    Array.isArray(payload.snoozed_alerts);
+  if (hasStructuredSections) {
+    return {
+      active: Array.isArray(payload.active_alerts) ? payload.active_alerts.slice() : [],
+      acked: Array.isArray(payload.acked_alerts) ? payload.acked_alerts.slice() : [],
+      snoozed: Array.isArray(payload.snoozed_alerts) ? payload.snoozed_alerts.slice() : []
+    };
+  }
+  const nowMS = numericTime(referenceTime || new Date().toISOString());
+  const active = [];
+  const acked = [];
+  const snoozed = [];
+  alerts.forEach((alert) => {
+    const snoozedUntilMS = numericTime(alert?.snoozed_until);
+    const ackedAtMS = numericTime(alert?.acked_at);
+    if (snoozedUntilMS > nowMS) {
+      snoozed.push(alert);
+      return;
+    }
+    if (ackedAtMS > 0) {
+      acked.push(alert);
+      return;
+    }
+    active.push(alert);
+  });
+  return { active, acked, snoozed };
+}
+
+function selectedEndpointIntegrityCustomSnoozeMinutes() {
+  const input = $("endpoint-integrity-custom-minutes");
+  const value = Number((input && input.value) || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return 30;
+  }
+  return Math.floor(value);
+}
+
+function endpointIntegrityAlertActionButtons(alert, state) {
+  const id = escapeHTML(alert.id);
+  const disabledAttr = clientState.endpointIntegrityActionInFlight ? " disabled" : "";
+  if (state === "snoozed") {
+    return "<div class=\"endpoint-integrity-warning-actions\">" +
+      "<button type=\"button\" class=\"secondary-button endpoint-integrity-action-button\" data-endpoint-alert-action=\"unsnooze\" data-endpoint-alert-id=\"" + id + "\"" + disabledAttr + ">Unsnooze</button>" +
+      "</div>";
+  }
+  return "<div class=\"endpoint-integrity-warning-actions\">" +
+    (state === "active"
+      ? "<button type=\"button\" class=\"secondary-button endpoint-integrity-action-button\" data-endpoint-alert-action=\"ack\" data-endpoint-alert-id=\"" + id + "\"" + disabledAttr + ">Ack</button>"
+      : "") +
+    "<button type=\"button\" class=\"secondary-button endpoint-integrity-action-button\" data-endpoint-alert-action=\"snooze\" data-endpoint-alert-minutes=\"15\" data-endpoint-alert-id=\"" + id + "\"" + disabledAttr + ">Snooze 15m</button>" +
+    "<button type=\"button\" class=\"secondary-button endpoint-integrity-action-button\" data-endpoint-alert-action=\"snooze\" data-endpoint-alert-minutes=\"60\" data-endpoint-alert-id=\"" + id + "\"" + disabledAttr + ">Snooze 1h</button>" +
+    "<button type=\"button\" class=\"secondary-button endpoint-integrity-action-button\" data-endpoint-alert-action=\"snooze_custom\" data-endpoint-alert-id=\"" + id + "\"" + disabledAttr + ">Snooze Custom</button>" +
+    "</div>";
+}
+
+function endpointIntegrityAlertRowHTML(alert, state) {
+  const typeLabel = endpointCollisionTypeLabel(alert.type);
+  const ids = Array.isArray(alert.egm_ids) && alert.egm_ids.length ? alert.egm_ids.join(", ") : "-";
+  const severity = String(alert.severity || "").trim() || (endpointIntegritySeverityBucket(alert) === "alerts" ? "ALERT" : "WARNING");
+  const ackMeta = alert.acked_at ? (" | acked " + fmtTime(alert.acked_at) + (alert.acked_by_scope ? (" by " + alert.acked_by_scope) : "")) : "";
+  const snoozeMeta = alert.snoozed_until ? (" | snoozed until " + fmtTime(alert.snoozed_until) + " (" + fmtAge(alert.snoozed_until) + ")" + (alert.snooze_reason ? " | reason " + alert.snooze_reason : "")) : "";
+  return "<div class=\"item endpoint-integrity-warning\">" +
+    "<div class=\"endpoint-integrity-warning-head\"><strong>" + escapeHTML(typeLabel) + "</strong><span class=\"timeline-egm-chip\">" + escapeHTML(alert.endpoint || "-") + "</span></div>" +
+    "<div class=\"endpoint-integrity-warning-meta\">Severity: " + escapeHTML(severity) + " | EGMs: " + escapeHTML(ids) + " | first seen " + escapeHTML(fmtTime(alert.first_seen_at)) + " | last seen " + escapeHTML(fmtTime(alert.last_seen_at)) + " (" + escapeHTML(fmtAge(alert.last_seen_at)) + ")" + escapeHTML(ackMeta + snoozeMeta) + "</div>" +
+    endpointIntegrityAlertActionButtons(alert, state) +
+    "</div>";
+}
+
 function renderEndpointIntegrity(snapshot) {
   const status = snapshot?.status || {};
-  const summary = status?.endpoint_collision_summary || {};
-  const total = Number(summary?.total || 0);
-  const sharedCount = Number(summary?.shared_endpoint_count || 0);
-  const driftCount = Number(summary?.id_endpoint_drift_count || 0);
-  const affectedIDs = Array.isArray(summary?.affected_egm_ids) ? summary.affected_egm_ids.map((item) => String(item || "").trim()).filter(Boolean) : [];
-  const allRows = normalizeEndpointCollisionRows(status);
-  const rows = allRows.filter((row) => endpointIntegrityMatchesGlobalFilters(row));
-  const filteredCount = rows.length;
+  const collisionSummary = status?.endpoint_collision_summary || {};
+  const alertPayload = endpointIntegrityAlertsState(snapshot);
+  const sections = endpointIntegrityAlertSections(alertPayload, new Date().toISOString());
+  const allAlerts = Array.isArray(alertPayload?.alerts) ? alertPayload.alerts.slice() : [];
+  const activeRows = sections.active.filter((row) => endpointIntegrityMatchesGlobalFilters(row));
+  const ackedRows = sections.acked.filter((row) => endpointIntegrityMatchesGlobalFilters(row));
+  const snoozedRows = sections.snoozed.filter((row) => endpointIntegrityMatchesGlobalFilters(row));
+  const filteredTotal = activeRows.length + ackedRows.length + snoozedRows.length;
+  const total = Number(alertPayload?.summary?.total || allAlerts.length || 0);
+  const activeCount = Number(alertPayload?.summary?.active_count || sections.active.length || 0);
+  const ackedCount = Number(alertPayload?.summary?.acked_count || sections.acked.length || 0);
+  const snoozedCount = Number(alertPayload?.summary?.snoozed_count || sections.snoozed.length || 0);
+  const suppressedCount = Number(alertPayload?.summary?.suppressed_count || (ackedCount + snoozedCount));
+  const sharedCount = Number(collisionSummary?.shared_endpoint_count || 0);
+  const driftCount = Number(collisionSummary?.id_endpoint_drift_count || 0);
+  const affectedIDs = Array.isArray(collisionSummary?.affected_egm_ids) ? collisionSummary.affected_egm_ids.map((item) => String(item || "").trim()).filter(Boolean) : [];
 
-  $("endpoint-integrity-state").textContent = total > 0 ? "warning" : "ready";
-  $("endpoint-integrity-state").className = "source-pill " + (total > 0 ? "source-mixed" : "source-file");
+  $("endpoint-integrity-state").textContent = activeCount > 0 ? "warning" : "ready";
+  $("endpoint-integrity-state").className = "source-pill " + (activeCount > 0 ? "source-mixed" : "source-file");
   $("endpoint-integrity-summary").textContent = total > 0
-    ? ("Active warnings: " + String(total) + " | shared endpoint " + String(sharedCount) + " | ID endpoint drift " + String(driftCount) +
-      " | showing " + String(filteredCount) + " row(s)" +
+    ? ("Detected: " + String(total) + " | active " + String(activeCount) + " | suppressed " + String(suppressedCount) +
+      " | shared endpoint " + String(sharedCount) + " | ID endpoint drift " + String(driftCount) +
+      " | showing " + String(filteredTotal) + " row(s)" +
       (affectedIDs.length ? (" | affected EGMs " + affectedIDs.join(", ")) : ""))
     : "No endpoint collisions detected.";
   $("endpoint-integrity-message").textContent = total > 0
-    ? "Signals only. Review endpoint collisions and verify expected cabinet network identity."
+    ? "Signals only. Acknowledge or snooze to manage operator noise; endpoint integrity warnings do not block mute path."
     : "Signals only. Endpoint integrity warnings do not block mute path.";
+  $("endpoint-integrity-counts").textContent = "Active " + String(activeCount) + " | Acknowledged " + String(ackedCount) + " | Snoozed " + String(snoozedCount) + " | Suppressed " + String(suppressedCount);
+  $("endpoint-integrity-active-count").textContent = String(activeCount);
+  $("endpoint-integrity-acked-count").textContent = String(ackedCount);
+  $("endpoint-integrity-snoozed-count").textContent = String(snoozedCount);
+  $("endpoint-integrity-refresh-button").disabled = clientState.inFlight || clientState.endpointIntegrityActionInFlight;
 
   const filterButton = $("endpoint-integrity-filter-button");
   const integrityFilterActive = clientState.egmFilter === "endpoint_integrity";
   filterButton.textContent = integrityFilterActive ? "Show All EGMs" : "Show Affected EGMs";
   filterButton.disabled = total === 0 && !integrityFilterActive;
 
-  renderItems("endpoint-integrity-list", rows, "No endpoint integrity rows match current global filters.", (item) => {
-    const typeLabel = endpointCollisionTypeLabel(item.collision_type);
-    const ids = item.involved_egm_ids.length ? item.involved_egm_ids.join(", ") : "-";
-    return "<div class=\"item endpoint-integrity-warning\">" +
-      "<div class=\"endpoint-integrity-warning-head\"><strong>" + escapeHTML(typeLabel) + "</strong><span class=\"timeline-egm-chip\">" + escapeHTML(item.endpoint || "-") + "</span></div>" +
-      "<div class=\"endpoint-integrity-warning-meta\">EGMs: " + escapeHTML(ids) + " | first seen " + escapeHTML(fmtTime(item.first_seen_at)) + " | last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ")</div>" +
-      "</div>";
-  });
+  renderItems("endpoint-integrity-list", activeRows, "No active endpoint integrity rows match current global filters.", (item) => endpointIntegrityAlertRowHTML(item, "active"));
+  renderItems("endpoint-integrity-acked-list", ackedRows, "No acknowledged endpoint integrity rows match current global filters.", (item) => endpointIntegrityAlertRowHTML(item, "acked"));
+  renderItems("endpoint-integrity-snoozed-list", snoozedRows, "No snoozed endpoint integrity rows match current global filters.", (item) => endpointIntegrityAlertRowHTML(item, "snoozed"));
+}
+
+async function reloadEndpointIntegrityAlerts() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  try {
+    $("endpoint-integrity-message").textContent = "Refreshing endpoint integrity alerts.";
+    const response = await fetchJSON(endpoints.endpointIntegrityAlerts);
+    snapshot.endpointIntegrityAlerts = normalizeEndpointIntegrityAlertsResponse(response);
+    clientState.displaySnapshot = snapshot;
+    renderEndpointIntegrity(snapshot);
+    $("endpoint-integrity-message").textContent = "Endpoint integrity alerts refreshed.";
+  } catch (err) {
+    $("endpoint-integrity-message").textContent = err && err.message ? err.message : "Endpoint integrity alert refresh failed.";
+  }
+}
+
+async function postEndpointIntegrityAlertAction(alertID, action, payload) {
+  const tokenRequired = mutationTokenRequired();
+  const token = getSetupToken() || getCertToken();
+  if (tokenRequired && !token) {
+    $("endpoint-integrity-message").textContent = "Enter an API token before endpoint integrity alert actions.";
+    return;
+  }
+  const normalizedID = String(alertID || "").trim();
+  if (!normalizedID) {
+    $("endpoint-integrity-message").textContent = "Alert id is required.";
+    return;
+  }
+  const normalizedAction = String(action || "").trim();
+  if (!normalizedAction) {
+    $("endpoint-integrity-message").textContent = "Alert action is required.";
+    return;
+  }
+
+  const headers = {};
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  if (payload != null) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  let finalMessage = "";
+  try {
+    clientState.endpointIntegrityActionInFlight = true;
+    renderEndpointIntegrity(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    $("endpoint-integrity-message").textContent = "Applying endpoint integrity alert action.";
+    const response = await fetch(endpoints.endpointIntegrityAlerts + "/" + encodeURIComponent(normalizedID) + "/" + normalizedAction, {
+      method: "POST",
+      headers: withEGMFocusHeader(headers),
+      body: payload != null ? JSON.stringify(payload) : undefined
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      finalMessage = "Alert action failed: HTTP " + response.status + (detail ? " " + detail : "");
+      return;
+    }
+    const result = normalizeEndpointIntegrityAlertsResponse(await response.json());
+    const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+    snapshot.endpointIntegrityAlerts = result;
+    clientState.displaySnapshot = snapshot;
+    renderEndpointIntegrity(snapshot);
+    finalMessage = normalizedAction === "ack"
+      ? "Endpoint integrity alert acknowledged."
+      : normalizedAction === "snooze"
+        ? "Endpoint integrity alert snoozed."
+        : "Endpoint integrity alert unsnoozed.";
+  } catch (err) {
+    finalMessage = err && err.message ? err.message : "Endpoint integrity alert action failed.";
+  } finally {
+    clientState.endpointIntegrityActionInFlight = false;
+    renderEndpointIntegrity(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    if (finalMessage) {
+      $("endpoint-integrity-message").textContent = finalMessage;
+    }
+  }
+}
+
+async function handleEndpointIntegrityAlertActionFromUI(button) {
+  if (!button) return;
+  const alertID = button.getAttribute("data-endpoint-alert-id") || "";
+  const action = button.getAttribute("data-endpoint-alert-action") || "";
+  if (!alertID || !action) return;
+  if (action === "ack" || action === "unsnooze") {
+    await postEndpointIntegrityAlertAction(alertID, action, null);
+    return;
+  }
+  if (action === "snooze") {
+    const minutes = Number(button.getAttribute("data-endpoint-alert-minutes") || 0);
+    await postEndpointIntegrityAlertAction(alertID, "snooze", {
+      minutes: Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : 15,
+      snooze_reason: "operator_snooze"
+    });
+    return;
+  }
+  if (action === "snooze_custom") {
+    const minutes = selectedEndpointIntegrityCustomSnoozeMinutes();
+    await postEndpointIntegrityAlertAction(alertID, "snooze", {
+      minutes: minutes,
+      snooze_reason: "operator_custom_" + String(minutes) + "m"
+    });
+  }
 }
 
 function firstTestEGMIDSet(snapshot) {
@@ -7356,10 +7703,11 @@ async function pollOnce() {
       fetchJSON(endpoints.heartbeatPolicy),
       fetchJSON(endpoints.blockerPolicy),
       fetchJSON(endpoints.blockerPolicySuggestions),
-      fetchJSON(endpoints.cabinetPreflight)
+      fetchJSON(endpoints.cabinetPreflight),
+      fetchJSON(endpoints.endpointIntegrityAlerts)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, blockerPolicySuggestionsResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, blockerPolicySuggestionsResult, cabinetPreflightResult, endpointIntegrityAlertsResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -7397,6 +7745,7 @@ async function pollOnce() {
     if (blockerPolicyResult.status === "fulfilled") snapshot.blockerPolicy = normalizeBlockerPolicyResponse(blockerPolicyResult.value);
     if (blockerPolicySuggestionsResult.status === "fulfilled") snapshot.blockerPolicySuggestions = normalizeBlockerPolicySuggestions(blockerPolicySuggestionsResult.value);
     if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
+    if (endpointIntegrityAlertsResult.status === "fulfilled") snapshot.endpointIntegrityAlerts = normalizeEndpointIntegrityAlertsResponse(endpointIntegrityAlertsResult.value);
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
@@ -7413,6 +7762,7 @@ async function pollOnce() {
     if (blockerPolicyResult.status !== "fulfilled") failures.push("blocker policy unavailable");
     if (blockerPolicySuggestionsResult.status !== "fulfilled") failures.push("blocker policy suggestions unavailable");
     if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
+    if (endpointIntegrityAlertsResult.status !== "fulfilled") failures.push("endpoint integrity alerts unavailable");
 
     clientState.displaySnapshot = snapshot;
     renderStatus(snapshot);
@@ -7542,6 +7892,24 @@ function bindControls() {
       return;
     }
     setFilter("endpoint_integrity");
+  });
+  $("endpoint-integrity-refresh-button").addEventListener("click", () => {
+    reloadEndpointIntegrityAlerts();
+  });
+  $("endpoint-integrity-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".endpoint-integrity-action-button");
+    if (!button) return;
+    handleEndpointIntegrityAlertActionFromUI(button);
+  });
+  $("endpoint-integrity-acked-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".endpoint-integrity-action-button");
+    if (!button) return;
+    handleEndpointIntegrityAlertActionFromUI(button);
+  });
+  $("endpoint-integrity-snoozed-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".endpoint-integrity-action-button");
+    if (!button) return;
+    handleEndpointIntegrityAlertActionFromUI(button);
   });
   $("session-package-export-button").addEventListener("click", exportSessionPackage);
   $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
