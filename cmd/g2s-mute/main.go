@@ -156,6 +156,15 @@ func main() {
 	mux.HandleFunc("/api/run-markers", runMarkersHandler(auditStore, cfg))
 	mux.HandleFunc("/api/operator-drill", operatorDrillHandler(drillManager, cfg))
 	mux.HandleFunc(
+		"/api/blocker-policy",
+		requireMutationAuthForMethods(
+			blockerPolicyHandler(auditStore, cfg),
+			cfg,
+			http.MethodPut,
+			http.MethodDelete,
+		),
+	)
+	mux.HandleFunc(
 		"/api/heartbeat-policy",
 		requireMutationAuthForMethods(
 			heartbeatPolicyHandler(auditStore, cfg),

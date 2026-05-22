@@ -24,15 +24,25 @@ const (
 )
 
 type cabinetPreflightResponse struct {
-	Overall   string                  `json:"overall"`
-	Checks    []cabinetPreflightCheck `json:"checks"`
-	Blockers  []string                `json:"blockers"`
-	Timestamp time.Time               `json:"timestamp"`
+	Overall            string                           `json:"overall"`
+	Checks             []cabinetPreflightCheck          `json:"checks"`
+	Blockers           []string                         `json:"blockers"`
+	Warnings           []string                         `json:"warnings,omitempty"`
+	DowngradedFindings []cabinetPreflightDowngradedItem `json:"downgraded_findings,omitempty"`
+	BlockerPolicy      blockerPolicyResponse            `json:"blocker_policy"`
+	Timestamp          time.Time                        `json:"timestamp"`
 }
 
 type cabinetPreflightCheck struct {
 	ID      string `json:"id"`
 	Result  string `json:"result"`
+	Message string `json:"message"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type cabinetPreflightDowngradedItem struct {
+	ID      string `json:"id"`
+	Marker  string `json:"marker"`
 	Message string `json:"message"`
 	Detail  string `json:"detail,omitempty"`
 }
@@ -50,33 +60,63 @@ func cabinetPreflightHandler(eng *engine.Engine, store *store.SQLiteStore, cfg c
 
 func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo) cabinetPreflightResponse {
 	response := cabinetPreflightResponse{
-		Overall:   preflightPass,
-		Checks:    []cabinetPreflightCheck{},
-		Blockers:  []string{},
-		Timestamp: time.Now().UTC(),
+		Overall:            preflightPass,
+		Checks:             []cabinetPreflightCheck{},
+		Blockers:           []string{},
+		Warnings:           []string{},
+		DowngradedFindings: []cabinetPreflightDowngradedItem{},
+		Timestamp:          time.Now().UTC(),
 	}
 
-	addCheck := func(check cabinetPreflightCheck, blocker string) {
+	addCheck := func(check cabinetPreflightCheck) {
 		response.Checks = append(response.Checks, check)
-		if check.Result == preflightFail {
-			response.Overall = preflightFail
-			if blocker != "" {
-				response.Blockers = append(response.Blockers, blocker)
-			} else {
-				response.Blockers = append(response.Blockers, check.Message)
-			}
-		}
 	}
+
+	policy, policyErr := resolveBlockerPolicy(ctx, store, cfg.BlockerPolicy)
+	if policyErr != nil {
+		fallbackApproved := append([]string{}, defaultApprovedBlockerIDs...)
+		sort.Strings(fallbackApproved)
+		policy = resolvedBlockerPolicy{
+			Effective: config.BlockerPolicy{
+				ApprovedBlockerIDs: fallbackApproved,
+			},
+			File: config.BlockerPolicy{
+				ApprovedBlockerIDs: append([]string{}, fallbackApproved...),
+			},
+			PolicySource: blockerPolicySourceFile,
+		}
+		response.Warnings = append(response.Warnings, "blocker policy unavailable; using default approved blocker IDs")
+	}
+	response.BlockerPolicy = buildBlockerPolicyResponse(policy)
+	approvedBlockerIDs := blockerPolicyIDSet(policy.Effective.ApprovedBlockerIDs)
 
 	status, statusErr := computeApplianceStatus(ctx, eng, store, cfg, runtime, nil)
 	profile, profileErr := resolveCabinetProfile(ctx, store, cfg.CabinetProfile)
 	certificates, certificatesErr := store.ListCertificateInventory(ctx)
 
-	addCheck(evaluatePreflightReadiness(status, statusErr), "")
-	addCheck(evaluatePreflightProfileCompleteness(status, statusErr, cfg, profile, profileErr), "")
-	addCheck(evaluatePreflightProfileSource(profile, profileErr), "")
-	addCheck(evaluatePreflightModeCertificates(cfg, certificates, certificatesErr), "")
-	addCheck(evaluatePreflightWireIdentitySAN(cfg, profile, profileErr, certificates, certificatesErr), "")
+	addCheck(evaluatePreflightReadiness(status, statusErr))
+	addCheck(evaluatePreflightProfileCompleteness(status, statusErr, cfg, profile, profileErr))
+	addCheck(evaluatePreflightProfileSource(profile, profileErr))
+	addCheck(evaluatePreflightModeCertificates(cfg, certificates, certificatesErr))
+	addCheck(evaluatePreflightWireIdentitySAN(cfg, profile, profileErr, certificates, certificatesErr))
+
+	for _, check := range response.Checks {
+		if check.Result != preflightFail {
+			continue
+		}
+		if _, ok := approvedBlockerIDs[check.ID]; ok {
+			response.Overall = preflightFail
+			response.Blockers = append(response.Blockers, check.Message)
+			continue
+		}
+		response.Warnings = append(response.Warnings, "downgraded_by_blocker_policy id="+check.ID+" message="+check.Message)
+		response.DowngradedFindings = append(response.DowngradedFindings, cabinetPreflightDowngradedItem{
+			ID:      check.ID,
+			Marker:  blockerPolicyDowngradeMarker,
+			Message: check.Message,
+			Detail:  check.Detail,
+		})
+	}
 
 	return response
 }

@@ -35,6 +35,12 @@ type HeartbeatPolicyOverride struct {
 	UpdatedBy          string
 }
 
+type BlockerPolicyOverride struct {
+	ApprovedBlockerIDs []string
+	UpdatedAt          time.Time
+	UpdatedBy          string
+}
+
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
 	if path == "" {
 		return nil, fmt.Errorf("database path is required")
@@ -563,6 +569,61 @@ func (s *SQLiteStore) ClearHeartbeatPolicyOverride(ctx context.Context) error {
 	return err
 }
 
+func (s *SQLiteStore) GetBlockerPolicyOverride(ctx context.Context) (*BlockerPolicyOverride, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT approved_blocker_ids_json, updated_at, COALESCE(updated_by, '')
+		   FROM blocker_policy_overrides
+		  WHERE id = 1`,
+	)
+
+	var approvedJSON string
+	var updatedAt time.Time
+	var updatedBy string
+	if err := row.Scan(&approvedJSON, &updatedAt, &updatedBy); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	approvedIDs := []string{}
+	if err := decodeJSONStringSlice(approvedJSON, &approvedIDs); err != nil {
+		return nil, fmt.Errorf("decode approved_blocker_ids_json: %w", err)
+	}
+
+	return &BlockerPolicyOverride{
+		ApprovedBlockerIDs: approvedIDs,
+		UpdatedAt:          updatedAt,
+		UpdatedBy:          updatedBy,
+	}, nil
+}
+
+func (s *SQLiteStore) UpsertBlockerPolicyOverride(ctx context.Context, approvedBlockerIDs []string, updatedBy string) error {
+	approvedJSON, err := encodeJSONStringSlice(approvedBlockerIDs)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(
+		ctx,
+		`INSERT INTO blocker_policy_overrides (
+		    id, approved_blocker_ids_json, updated_at, updated_by
+		 ) VALUES (1, ?, CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		    approved_blocker_ids_json = excluded.approved_blocker_ids_json,
+		    updated_at = CURRENT_TIMESTAMP,
+		    updated_by = excluded.updated_by`,
+		approvedJSON,
+		updatedBy,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ClearBlockerPolicyOverride(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM blocker_policy_overrides WHERE id = 1`)
+	return err
+}
+
 func (s *SQLiteStore) GetSessionWorkflowProgress(ctx context.Context) (*model.SessionWorkflowProgress, error) {
 	row := s.db.QueryRowContext(
 		ctx,
@@ -874,7 +935,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}

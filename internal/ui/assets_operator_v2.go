@@ -468,6 +468,32 @@ const dashboardHTML = `<!doctype html>
             <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
         </form>
+        <form id="blocker-policy-form" class="setup-form run-report-form blocker-governance-panel">
+          <div class="panel-title-row">
+            <strong>Blocker Governance</strong>
+            <span id="blocker-policy-source" class="source-pill source-file">file</span>
+          </div>
+          <span id="blocker-policy-message" class="muted-text">Only approved blocker IDs can block runbook readiness.</span>
+          <div class="form-grid run-report-grid">
+            <label>Updated<input id="blocker-policy-updated" type="text" disabled></label>
+            <label>Approved Blocker IDs (comma/newline)<textarea id="blocker-policy-approved-ids" rows="4" placeholder="service_readiness&#10;cabinet_profile"></textarea></label>
+          </div>
+          <div id="blocker-policy-validation-list" class="validation-list"></div>
+          <div class="setup-actions evidence-actions">
+            <button id="blocker-policy-save-button" type="submit">Save Override</button>
+            <button id="blocker-policy-clear-button" type="button" class="secondary-button">Clear Override</button>
+            <button id="blocker-policy-reload-button" type="button" class="secondary-button">Reload</button>
+          </div>
+          <div id="blocker-policy-summary" class="muted-text blocker-governance-summary">Waiting for blocker governance telemetry.</div>
+          <div class="first-cabinet-session-blockers-wrap">
+            <p class="label">Active Approved Blockers</p>
+            <div id="blocker-policy-active-blockers" class="timeline blocker-governance-list"></div>
+          </div>
+          <div class="first-cabinet-session-blockers-wrap">
+            <p class="label">Downgraded to Warning by Policy</p>
+            <div id="blocker-policy-downgraded-list" class="timeline blocker-governance-list"></div>
+          </div>
+        </form>
         <form id="operator-drill-form" class="setup-form operator-drill-form">
           <div class="panel-title-row">
             <strong>Operator Drill</strong>
@@ -558,6 +584,8 @@ const dashboardHTML = `<!doctype html>
               <option value="cabinet_profile.clear">cabinet_profile.clear</option>
               <option value="heartbeat_policy.save">heartbeat_policy.save</option>
               <option value="heartbeat_policy.clear">heartbeat_policy.clear</option>
+              <option value="blocker_policy.save">blocker_policy.save</option>
+              <option value="blocker_policy.clear">blocker_policy.clear</option>
               <option value="certificate.preview">certificate.preview</option>
               <option value="certificate.import">certificate.import</option>
               <option value="certificate.restore">certificate.restore</option>
@@ -1402,6 +1430,23 @@ th {
   border-top: 1px solid var(--line);
 }
 
+.blocker-governance-panel {
+  border-top: 1px solid var(--line);
+}
+
+.blocker-governance-summary {
+  padding: 0 2px;
+}
+
+.blocker-governance-list {
+  padding: 0;
+}
+
+.blocker-governance-item {
+  display: grid;
+  gap: 4px;
+}
+
 .operator-drill-form {
   display: grid;
   gap: 12px;
@@ -2112,6 +2157,7 @@ const dashboardJS = `const endpoints = {
   cabinetProfile: "/api/cabinet-profile",
   cabinetProfileSuggestions: "/api/cabinet-profile/suggestions",
   heartbeatPolicy: "/api/heartbeat-policy",
+  blockerPolicy: "/api/blocker-policy",
   cabinetPreflight: "/api/cabinet-preflight",
   certificateBackups: "/api/certificates/backups",
   certificateRestore: "/api/certificates/restore",
@@ -2195,6 +2241,7 @@ function emptySnapshot() {
     cabinetProfile: null,
     cabinetProfileSuggestions: null,
     heartbeatPolicy: null,
+    blockerPolicy: null,
     cabinetPreflight: null
   };
 }
@@ -2221,6 +2268,7 @@ function copySnapshot(snapshot) {
     cabinetProfile: snapshot.cabinetProfile || null,
     cabinetProfileSuggestions: snapshot.cabinetProfileSuggestions || null,
     heartbeatPolicy: snapshot.heartbeatPolicy || null,
+    blockerPolicy: snapshot.blockerPolicy || null,
     cabinetPreflight: snapshot.cabinetPreflight || null
   };
 }
@@ -2926,11 +2974,34 @@ function appendUniqueBlocker(blockers, message) {
   }
 }
 
+function approvedBlockerIDSetFromPreflight(preflight) {
+  const approved = new Set();
+  const ids = Array.isArray(preflight?.blocker_policy?.effective?.approved_blocker_ids)
+    ? preflight.blocker_policy.effective.approved_blocker_ids
+    : [];
+  ids.forEach((id) => {
+    const value = String(id || "").trim();
+    if (!value) return;
+    approved.add(value);
+  });
+  return approved;
+}
+
 function appendFriendlyPreflightBlockers(preflight, blockers) {
   const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
+  const approvedIDs = approvedBlockerIDSetFromPreflight(preflight);
+  if (approvedIDs.size === 0) {
+    const rawOnly = Array.isArray(preflight?.blockers) ? preflight.blockers : [];
+    rawOnly.forEach((item) => appendUniqueBlocker(blockers, String(item || "").trim()));
+    return;
+  }
   let mappedAny = false;
   checks.forEach((check) => {
     if (!check || check.result !== "FAIL") return;
+    const checkID = String(check.id || "").trim();
+    if (checkID && !approvedIDs.has(checkID)) {
+      return;
+    }
     switch (check.id) {
       case "cabinet_profile":
         appendUniqueBlocker(blockers, "Cabinet profile is incomplete");
@@ -2981,24 +3052,10 @@ function buildFirstCabinetSessionState(snapshot) {
   const blockers = [];
   const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], currentHeartbeatPolicy(snapshot), new Date().toISOString());
 
-  if (!readyz || readyz.ok === false || readyzState === "DEGRADED") {
-    appendUniqueBlocker(blockers, "Readiness is degraded");
-  }
-  if (!preflight) {
-    appendUniqueBlocker(blockers, "Preflight API unavailable");
-  } else if (preflight.overall !== "PASS") {
+  if (preflight && preflight.overall !== "PASS") {
     appendFriendlyPreflightBlockers(preflight, blockers);
   }
-  if (!profile.wire_host_url || !profile.host_id || firstEGMIDs.length === 0) {
-    appendUniqueBlocker(blockers, "Cabinet profile is incomplete");
-  }
-  if (certCounts.blocking > 0) {
-    appendUniqueBlocker(blockers, "Required certificate is missing");
-  }
-  if (authRequired && !getSetupToken() && !getCertToken()) {
-    appendUniqueBlocker(blockers, "API token is required for protected setup actions");
-  }
-  const readyForSession = blockers.length === 0 && readyzState !== "UNAVAILABLE" && preflightState === "PASS";
+  const readyForSession = blockers.length === 0;
   const overallState = readyForSession ? "LAB_READY" : "BLOCKED";
   return {
     overallState: overallState,
@@ -3405,6 +3462,13 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
       pushUniqueString(nextActions, "Review failed preflight checks and resolve blocking items.");
     }
   }
+  const downgradedFindings = Array.isArray(preflight?.downgraded_findings) ? preflight.downgraded_findings : [];
+  downgradedFindings.forEach((finding) => {
+    const id = String(finding?.id || "").trim();
+    if (!id) return;
+    pushUniqueString(labWarning, "Preflight finding downgraded by blocker policy: " + id + ".");
+    pushUniqueString(nextActions, "Review downgraded preflight finding " + id + " before production deployment.");
+  });
   const preflightProfileCheck = preflightCheckByID(preflight, "cabinet_profile");
   const placeholderFirstTestWarning = String(preflightProfileCheck?.detail || "").indexOf("lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER") >= 0;
   if (placeholderFirstTestWarning) {
@@ -5133,6 +5197,203 @@ function syncHeartbeatPolicyFromSnapshot(snapshot) {
   renderHeartbeatPolicy(snapshot);
 }
 
+function blockerPolicyHasFocus() {
+  const form = $("blocker-policy-form");
+  return !!(form && form.contains(document.activeElement));
+}
+
+function normalizeBlockerPolicyResponse(payload) {
+  const effectiveIDs = Array.isArray(payload?.effective?.approved_blocker_ids)
+    ? payload.effective.approved_blocker_ids
+    : [];
+  const normalizedEffective = [];
+  effectiveIDs.forEach((item) => {
+    const id = String(item || "").trim();
+    if (!id) return;
+    if (normalizedEffective.indexOf(id) >= 0) return;
+    normalizedEffective.push(id);
+  });
+  normalizedEffective.sort((a, b) => a.localeCompare(b));
+
+  const overrideIDs = Array.isArray(payload?.override?.approved_blocker_ids)
+    ? payload.override.approved_blocker_ids
+    : [];
+  const normalizedOverride = [];
+  overrideIDs.forEach((item) => {
+    const id = String(item || "").trim();
+    if (!id) return;
+    if (normalizedOverride.indexOf(id) >= 0) return;
+    normalizedOverride.push(id);
+  });
+  normalizedOverride.sort((a, b) => a.localeCompare(b));
+
+  return {
+    effective: { approved_blocker_ids: normalizedEffective },
+    policy_source: String(payload?.policy_source || "file").trim() || "file",
+    policy_last_updated_at: String(payload?.policy_last_updated_at || "").trim(),
+    override_present: payload?.override_present === true,
+    override: payload?.override
+      ? {
+          approved_blocker_ids: normalizedOverride,
+          updated_at: String(payload.override.updated_at || "").trim(),
+          updated_by: String(payload.override.updated_by || "").trim()
+        }
+      : null
+  };
+}
+
+function blockerPolicyIDsFromForm() {
+  const raw = String($("blocker-policy-approved-ids").value || "");
+  const split = raw.split(/[\s,]+/);
+  const values = [];
+  split.forEach((item) => {
+    const id = String(item || "").trim();
+    if (!id) return;
+    if (values.indexOf(id) >= 0) return;
+    values.push(id);
+  });
+  values.sort((a, b) => a.localeCompare(b));
+  return values;
+}
+
+function validateBlockerPolicyForm() {
+  const ids = blockerPolicyIDsFromForm();
+  const problems = [];
+  const pattern = /^[a-z0-9_]+$/;
+  ids.forEach((id) => {
+    if (!pattern.test(id)) {
+      problems.push("Approved blocker IDs must match ^[a-z0-9_]+$: " + id);
+    }
+  });
+  $("blocker-policy-validation-list").innerHTML = problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
+  return { approved_blocker_ids: ids, problems: problems };
+}
+
+function renderBlockerGovernance(snapshot) {
+  const preflight = snapshot?.cabinetPreflight || null;
+  const fallbackPolicy = preflight?.blocker_policy || null;
+  const policy = normalizeBlockerPolicyResponse(snapshot?.blockerPolicy || fallbackPolicy || {});
+  const tokenRequired = setupActionsRequireToken();
+  const tokenPresent = !!getSetupToken() || !!getCertToken();
+
+  const sourceBadge = $("blocker-policy-source");
+  sourceBadge.textContent = policy.policy_source || "file";
+  sourceBadge.className = "source-pill source-" + (policy.policy_source || "file");
+
+  $("blocker-policy-updated").value = policy.policy_last_updated_at ? fmtTime(policy.policy_last_updated_at) : "file baseline";
+
+  if (!blockerPolicyHasFocus()) {
+    $("blocker-policy-approved-ids").value = (policy.effective.approved_blocker_ids || []).join("\n");
+  }
+
+  const validation = validateBlockerPolicyForm();
+  $("blocker-policy-save-button").disabled = validation.problems.length > 0 || (tokenRequired && !tokenPresent);
+  $("blocker-policy-clear-button").disabled = !policy.override_present || (tokenRequired && !tokenPresent);
+
+  const activeBlockers = Array.isArray(preflight?.blockers) ? preflight.blockers.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  renderItems("blocker-policy-active-blockers", activeBlockers, "No active approved blockers.", (item) =>
+    "<div class=\"item blocker-governance-item\"><strong>BLOCKER</strong><span>" + escapeHTML(item) + "</span></div>"
+  );
+
+  const downgraded = Array.isArray(preflight?.downgraded_findings) ? preflight.downgraded_findings : [];
+  const downgradedRows = downgraded.map((item) => ({
+    id: String(item?.id || "").trim(),
+    marker: String(item?.marker || "").trim(),
+    message: String(item?.message || "").trim(),
+    detail: String(item?.detail || "").trim()
+  }));
+  renderItems("blocker-policy-downgraded-list", downgradedRows, "No downgraded findings.", (item) =>
+    "<div class=\"item blocker-governance-item\">" +
+      "<strong>" + escapeHTML(item.id || "-") + "</strong>" +
+      "<span>" + escapeHTML(item.message || "-") + "</span>" +
+      "<span class=\"muted-text\">" + escapeHTML((item.marker || "DOWNGRADED_BY_BLOCKER_POLICY") + (item.detail ? (" | " + item.detail) : "")) + "</span>" +
+    "</div>"
+  );
+
+  const summaryParts = [
+    "approved IDs " + String((policy.effective.approved_blocker_ids || []).length),
+    "active blockers " + String(activeBlockers.length),
+    "downgraded findings " + String(downgradedRows.length)
+  ];
+  $("blocker-policy-summary").textContent = "Governance summary: " + summaryParts.join(" | ");
+  $("blocker-policy-message").textContent = tokenRequired && !tokenPresent
+    ? "Enter a setup or certificate API token before changing blocker governance."
+    : "Only approved blocker IDs can block runbook readiness.";
+}
+
+function syncBlockerPolicyFromSnapshot(snapshot) {
+  renderBlockerGovernance(snapshot);
+}
+
+async function reloadBlockerPolicyForm() {
+  const response = await fetch(endpoints.blockerPolicy, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Blocker policy reload failed: HTTP " + response.status);
+  }
+  const payload = normalizeBlockerPolicyResponse(await response.json());
+  const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  snapshot.blockerPolicy = payload;
+  clientState.displaySnapshot = snapshot;
+  syncBlockerPolicyFromSnapshot(snapshot);
+}
+
+async function saveBlockerPolicyOverride(event) {
+  event.preventDefault();
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before saving blocker governance.";
+    return;
+  }
+  const validation = validateBlockerPolicyForm();
+  if (validation.problems.length > 0) {
+    $("blocker-policy-message").textContent = "Resolve blocker governance validation issues before saving.";
+    return;
+  }
+  const headers = { "Content-Type": "application/json" };
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  const response = await fetch(endpoints.blockerPolicy, {
+    method: "PUT",
+    headers: withEGMFocusHeader(headers),
+    body: JSON.stringify({ approved_blocker_ids: validation.approved_blocker_ids })
+  });
+  if (!response.ok) {
+    const detail = sanitizeHTTPText(await response.text());
+    $("blocker-policy-message").textContent = "Save failed: HTTP " + response.status + (detail ? " " + detail : "");
+    setAlert("warning", "Blocker governance save failed", "Unable to save approved blocker IDs.");
+    return;
+  }
+  $("blocker-policy-message").textContent = "Blocker governance saved.";
+  setAlert("info", "Blocker governance override saved", "Runbook blocking is now restricted to approved blocker IDs.");
+  schedulePoll(0);
+}
+
+async function clearBlockerPolicyOverride() {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before clearing blocker governance.";
+    return;
+  }
+  const headers = {};
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  const response = await fetch(endpoints.blockerPolicy, {
+    method: "DELETE",
+    headers: withEGMFocusHeader(headers)
+  });
+  if (!response.ok) {
+    const detail = sanitizeHTTPText(await response.text());
+    $("blocker-policy-message").textContent = "Clear failed: HTTP " + response.status + (detail ? " " + detail : "");
+    setAlert("warning", "Blocker governance clear failed", "Unable to clear blocker governance override.");
+    return;
+  }
+  $("blocker-policy-message").textContent = "Blocker governance override cleared.";
+  setAlert("info", "Blocker governance override cleared", "Blocker governance reverted to file policy.");
+  schedulePoll(0);
+}
+
 async function reloadHeartbeatPolicyForm() {
   const response = await fetch(endpoints.heartbeatPolicy, { cache: "no-store" });
   if (!response.ok) {
@@ -6272,6 +6533,7 @@ function renderStatus(snapshot) {
   renderSessionEvidence(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
   syncHeartbeatPolicyFromSnapshot(snapshot);
+  syncBlockerPolicyFromSnapshot(snapshot);
   renderOperatorDrill(snapshot);
   renderEGMFocusControl(snapshot);
   renderEGMGroupedSummary(snapshot);
@@ -6468,10 +6730,11 @@ async function pollOnce() {
       fetchJSON(endpoints.cabinetProfile),
       fetchJSON(endpoints.cabinetProfileSuggestions),
       fetchJSON(endpoints.heartbeatPolicy),
+      fetchJSON(endpoints.blockerPolicy),
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -6506,6 +6769,7 @@ async function pollOnce() {
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
     if (cabinetProfileSuggestionsResult.status === "fulfilled") snapshot.cabinetProfileSuggestions = normalizeCabinetProfileSuggestions(cabinetProfileSuggestionsResult.value);
     if (heartbeatPolicyResult.status === "fulfilled") snapshot.heartbeatPolicy = heartbeatPolicyResult.value;
+    if (blockerPolicyResult.status === "fulfilled") snapshot.blockerPolicy = normalizeBlockerPolicyResponse(blockerPolicyResult.value);
     if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
@@ -6520,6 +6784,7 @@ async function pollOnce() {
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
     if (cabinetProfileSuggestionsResult.status !== "fulfilled") failures.push("cabinet profile suggestions unavailable");
     if (heartbeatPolicyResult.status !== "fulfilled") failures.push("heartbeat policy unavailable");
+    if (blockerPolicyResult.status !== "fulfilled") failures.push("blocker policy unavailable");
     if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
 
     clientState.displaySnapshot = snapshot;
@@ -6715,6 +6980,16 @@ function bindControls() {
   $("heartbeat-policy-block-after-missed").addEventListener("input", () => {
     renderHeartbeatPolicy(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   });
+  $("blocker-policy-form").addEventListener("submit", saveBlockerPolicyOverride);
+  $("blocker-policy-clear-button").addEventListener("click", clearBlockerPolicyOverride);
+  $("blocker-policy-reload-button").addEventListener("click", () => {
+    reloadBlockerPolicyForm().catch((err) => {
+      $("blocker-policy-message").textContent = err && err.message ? err.message : "Blocker policy reload failed.";
+    });
+  });
+  $("blocker-policy-approved-ids").addEventListener("input", () => {
+    renderBlockerGovernance(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+  });
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-preview-button").addEventListener("click", previewCertificateMaterial);
@@ -6827,6 +7102,7 @@ renderSessionEvidence(emptySnapshot());
 renderRunMarkerControls(emptySnapshot());
 renderRunReportControls(emptySnapshot());
 renderHeartbeatPolicy(emptySnapshot());
+renderBlockerGovernance(emptySnapshot());
 renderOperatorDrill(emptySnapshot());
 renderHeartbeatSummary(emptySnapshot());
 renderCabinetRunTimeline(emptySnapshot());

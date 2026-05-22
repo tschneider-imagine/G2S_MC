@@ -26,6 +26,47 @@ func TestValidateAllowsEmptyRoster(t *testing.T) {
 	}
 }
 
+func TestValidateBlockerPolicyRules(t *testing.T) {
+	base := Config{
+		ControllerID: "controller",
+		Database:     Database{Path: "controller.db"},
+		WebUI:        WebUI{BindAddress: "127.0.0.1:8444"},
+		G2S:          G2S{HostID: "HOST-1", HostURL: "http://127.0.0.1:8444/g2s", EndpointPath: "/g2s"},
+		CabinetProfile: CabinetProfile{
+			WireHostURL:     "https://host.example/g2s",
+			ListenerDNSName: "host.example",
+			RequiredSANDNS:  []string{"host.example"},
+			HostID:          "HOST-1",
+			FirstTestEGMIDs: []string{"EGM-1"},
+		},
+		HardwareIO: HardwareIO{VoltageDropThresholdMS: 250},
+	}
+
+	valid := base
+	valid.BlockerPolicy = BlockerPolicy{
+		ApprovedBlockerIDs: []string{"service_readiness", "cabinet_profile"},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("expected blocker policy to validate: %v", err)
+	}
+
+	invalidFormat := base
+	invalidFormat.BlockerPolicy = BlockerPolicy{
+		ApprovedBlockerIDs: []string{"CABINET_PROFILE"},
+	}
+	if err := invalidFormat.Validate(); err == nil {
+		t.Fatalf("expected invalid blocker policy ID format to fail validation")
+	}
+
+	duplicate := base
+	duplicate.BlockerPolicy = BlockerPolicy{
+		ApprovedBlockerIDs: []string{"service_readiness", "service_readiness"},
+	}
+	if err := duplicate.Validate(); err == nil {
+		t.Fatalf("expected duplicate blocker policy IDs to fail validation")
+	}
+}
+
 func TestValidateAcceptsMinimalConfig(t *testing.T) {
 	cfg := Config{
 		ControllerID: "controller",

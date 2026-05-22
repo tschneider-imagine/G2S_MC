@@ -287,6 +287,68 @@ func TestHeartbeatPolicyOverrideCRUD(t *testing.T) {
 	}
 }
 
+func TestBlockerPolicyOverrideCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	override, err := store.GetBlockerPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get empty blocker policy override: %v", err)
+	}
+	if override != nil {
+		t.Fatalf("expected no blocker policy override row")
+	}
+
+	if err := store.UpsertBlockerPolicyOverride(ctx, []string{"service_readiness", "cabinet_profile"}, "tester"); err != nil {
+		t.Fatalf("upsert blocker policy override: %v", err)
+	}
+	assertCount(t, store, "blocker_policy_overrides", 1)
+
+	override, err = store.GetBlockerPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get blocker policy override: %v", err)
+	}
+	if override == nil {
+		t.Fatalf("expected blocker policy override row")
+	}
+	if len(override.ApprovedBlockerIDs) != 2 {
+		t.Fatalf("approved_blocker_ids len = %d, want 2", len(override.ApprovedBlockerIDs))
+	}
+	if override.UpdatedBy != "tester" {
+		t.Fatalf("updated_by = %q, want tester", override.UpdatedBy)
+	}
+
+	if err := store.UpsertBlockerPolicyOverride(ctx, []string{"service_readiness"}, "tester2"); err != nil {
+		t.Fatalf("update blocker policy override: %v", err)
+	}
+	override, err = store.GetBlockerPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get updated blocker policy override: %v", err)
+	}
+	if len(override.ApprovedBlockerIDs) != 1 || override.ApprovedBlockerIDs[0] != "service_readiness" {
+		t.Fatalf("unexpected updated approved_blocker_ids: %+v", override.ApprovedBlockerIDs)
+	}
+	if override.UpdatedBy != "tester2" {
+		t.Fatalf("updated_by = %q, want tester2", override.UpdatedBy)
+	}
+
+	if err := store.ClearBlockerPolicyOverride(ctx); err != nil {
+		t.Fatalf("clear blocker policy override: %v", err)
+	}
+	assertCount(t, store, "blocker_policy_overrides", 0)
+	override, err = store.GetBlockerPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get cleared blocker policy override: %v", err)
+	}
+	if override != nil {
+		t.Fatalf("expected cleared blocker policy override to be nil")
+	}
+}
+
 func TestSessionWorkflowProgressCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")
