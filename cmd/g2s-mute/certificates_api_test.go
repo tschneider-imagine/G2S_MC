@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
+	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -107,6 +108,13 @@ func TestValidateCertificateImportPayload(t *testing.T) {
 }
 
 func TestCertificatePreviewHandlerValidationScenarios(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
 	tempDir := t.TempDir()
 	cfg := config.Config{
 		Crypto: config.Crypto{
@@ -117,7 +125,7 @@ func TestCertificatePreviewHandlerValidationScenarios(t *testing.T) {
 			WebServerKeyPath:  filepath.Join(tempDir, "server.key"),
 		},
 	}
-	handler := certificatePreviewHandler(cfg)
+	handler := certificatePreviewHandler(auditStore, cfg)
 
 	validCertPEM, validKeyPEM := generateTestCertificateAndKey(t, "preview-valid.local", 90*24*time.Hour)
 	_, mismatchedKeyPEM := generateTestCertificateAndKey(t, "preview-mismatch.local", 90*24*time.Hour)
@@ -249,9 +257,27 @@ func TestCertificatePreviewHandlerValidationScenarios(t *testing.T) {
 			}
 		})
 	}
+
+	previewEvents, err := auditStore.ListOperatorAuditEvents(ctx, model.OperatorAuditQuery{
+		Limit:  20,
+		Action: "certificate.preview",
+	})
+	if err != nil {
+		t.Fatalf("list preview audit events: %v", err)
+	}
+	if len(previewEvents) < len(tests) {
+		t.Fatalf("expected at least %d preview audit events, got %d", len(tests), len(previewEvents))
+	}
 }
 
 func TestCertificatePreviewHandlerReadOnlyAuthModel(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
 	tempDir := t.TempDir()
 	cfg := config.Config{
 		API: config.API{AuthToken: "lab-secret"},
@@ -259,7 +285,7 @@ func TestCertificatePreviewHandlerReadOnlyAuthModel(t *testing.T) {
 			G2SCAPath: filepath.Join(tempDir, "ca.crt"),
 		},
 	}
-	handler := certificatePreviewHandler(cfg)
+	handler := certificatePreviewHandler(auditStore, cfg)
 	certificatePEM, _ := generateTestCertificateAndKey(t, "preview-auth.local", 90*24*time.Hour)
 	payload, err := json.Marshal(certificateImportRequest{
 		Role:           "g2s_ca_cert",
@@ -435,6 +461,20 @@ func TestCertificateRestoreHandlerSuccessAndMissingBackup(t *testing.T) {
 	handler(missingRec, missingReq)
 	if missingRec.Code != http.StatusNotFound {
 		t.Fatalf("missing backup status = %d, want %d", missingRec.Code, http.StatusNotFound)
+	}
+
+	restoreEvents, err := auditStore.ListOperatorAuditEvents(ctx, model.OperatorAuditQuery{
+		Limit:  10,
+		Action: "certificate.restore",
+	})
+	if err != nil {
+		t.Fatalf("list restore audit events: %v", err)
+	}
+	if len(restoreEvents) < 2 {
+		t.Fatalf("expected at least 2 restore audit events, got %d", len(restoreEvents))
+	}
+	if restoreEvents[0].Result != "fail" {
+		t.Fatalf("expected latest restore event to be fail, got %+v", restoreEvents[0])
 	}
 }
 
@@ -637,6 +677,17 @@ func TestCertificateImportHandlerPersistsMaterialsAndRefreshesInventory(t *testi
 	status := certificateStatusByRole(inventory, "g2s_client_cert")
 	if !strings.HasPrefix(status, "VALID") && !strings.HasPrefix(status, "EXPIRING_SOON") {
 		t.Fatalf("unexpected g2s_client_cert status: %q", status)
+	}
+
+	importEvents, err := auditStore.ListOperatorAuditEvents(ctx, model.OperatorAuditQuery{
+		Limit:  5,
+		Action: "certificate.import",
+	})
+	if err != nil {
+		t.Fatalf("list import audit events: %v", err)
+	}
+	if len(importEvents) == 0 || importEvents[0].Result != "success" {
+		t.Fatalf("expected certificate.import success audit event, got %+v", importEvents)
 	}
 }
 

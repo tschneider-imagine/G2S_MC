@@ -517,6 +517,48 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Operator Audit Timeline</h2>
+            <span id="operator-audit-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="operator-audit-message" class="muted-text">Sensitive operator actions are recorded here.</span>
+        </div>
+        <div class="form-grid operator-audit-filters">
+          <label>Action
+            <select id="operator-audit-action-filter">
+              <option value="">All actions</option>
+              <option value="cabinet_profile.save">cabinet_profile.save</option>
+              <option value="cabinet_profile.clear">cabinet_profile.clear</option>
+              <option value="heartbeat_policy.save">heartbeat_policy.save</option>
+              <option value="heartbeat_policy.clear">heartbeat_policy.clear</option>
+              <option value="certificate.preview">certificate.preview</option>
+              <option value="certificate.import">certificate.import</option>
+              <option value="certificate.restore">certificate.restore</option>
+              <option value="session_workflow.save">session_workflow.save</option>
+              <option value="session_workflow.clear">session_workflow.clear</option>
+              <option value="session_evidence.delete">session_evidence.delete</option>
+              <option value="session_evidence.export_all">session_evidence.export_all</option>
+            </select>
+          </label>
+          <label>Result
+            <select id="operator-audit-result-filter">
+              <option value="">All results</option>
+              <option value="success">success</option>
+              <option value="fail">fail</option>
+            </select>
+          </label>
+          <label>Search
+            <input id="operator-audit-search-filter" type="text" placeholder="summary or detail">
+          </label>
+        </div>
+        <div id="operator-audit-summary" class="muted-text operator-audit-summary">No operator audit events loaded yet.</div>
+        <div id="operator-audit-list" class="timeline operator-audit-list"></div>
+      </div>
+    </section>
+
     <section class="grid two">
       <div class="panel">
         <div class="panel-head panel-head-stack">
@@ -1470,6 +1512,67 @@ th {
   align-items: center;
 }
 
+.operator-audit-filters {
+  grid-template-columns: minmax(200px, 0.35fr) minmax(140px, 0.2fr) minmax(280px, 0.45fr);
+  padding: 14px 18px 10px;
+}
+
+.operator-audit-summary {
+  padding: 0 18px 10px;
+}
+
+.operator-audit-list {
+  padding: 0 18px 18px;
+}
+
+.operator-audit-entry details {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fbfdfb;
+}
+
+.operator-audit-entry summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.operator-audit-entry summary::-webkit-details-marker {
+  display: none;
+}
+
+.operator-audit-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.operator-audit-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.operator-audit-detail {
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.operator-audit-pill-success {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.operator-audit-pill-fail {
+  color: var(--red);
+  font-weight: 700;
+}
+
 .token-help {
   display: flex;
   flex-wrap: wrap;
@@ -1956,6 +2059,7 @@ const dashboardJS = `const endpoints = {
   runMarkers: "/api/run-markers?limit=30",
   operatorDrill: "/api/operator-drill",
   certificates: "/api/certificates",
+  operatorAudit: "/api/operator-audit",
   sessionEvidence: "/api/session-evidence?limit=20",
   sessionEvidenceExportAll: "/api/session-evidence/export-all",
   sessionWorkflow: "/api/session-workflow",
@@ -1993,6 +2097,9 @@ const clientState = {
   certPreviewFingerprint: "",
   certPreviewResult: null,
   certBackupsByRole: {},
+  operatorAuditActionFilter: "",
+  operatorAuditResultFilter: "",
+  operatorAuditSearchFilter: "",
   selectedSessionEvidenceID: 0,
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
@@ -2036,6 +2143,7 @@ function emptySnapshot() {
     runMarkers: [],
     operatorDrill: null,
     certificates: [],
+    operatorAudit: [],
     sessionEvidence: [],
     sessionWorkflow: null,
     cabinetProfile: null,
@@ -2061,6 +2169,7 @@ function copySnapshot(snapshot) {
     runMarkers: Array.isArray(snapshot.runMarkers) ? snapshot.runMarkers.slice() : [],
     operatorDrill: snapshot.operatorDrill || null,
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
+    operatorAudit: Array.isArray(snapshot.operatorAudit) ? snapshot.operatorAudit.slice() : [],
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
     sessionWorkflow: snapshot.sessionWorkflow || null,
     cabinetProfile: snapshot.cabinetProfile || null,
@@ -2077,6 +2186,15 @@ function currentEGMFocusID() {
 function currentEGMFocusLabel() {
   const focusID = currentEGMFocusID();
   return focusID || "All EGMs";
+}
+
+function withEGMFocusHeader(headers) {
+  const base = headers && typeof headers === "object" ? Object.assign({}, headers) : {};
+  const focusID = currentEGMFocusID();
+  if (focusID) {
+    base["X-EGM-Focus"] = focusID;
+  }
+  return base;
 }
 
 function uniqueEGMIDsFromSnapshot(snapshot) {
@@ -2945,7 +3063,7 @@ function workflowProgressAuthHeaders() {
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
-  return headers;
+  return withEGMFocusHeader(headers);
 }
 
 function renderWorkflowProgressStepCheckboxes(progress) {
@@ -3776,7 +3894,12 @@ function exportAllSavedSessionEvidence() {
     setAlert("warning", "Export All failed", "No saved captures are available for export.");
     return;
   }
-  fetch(endpoints.sessionEvidenceExportAll, { cache: "no-store" })
+  const exportHeaders = {};
+  const exportToken = getSetupToken() || getCertToken();
+  if (exportToken) {
+    exportHeaders.Authorization = "Bearer " + exportToken;
+  }
+  fetch(endpoints.sessionEvidenceExportAll, { cache: "no-store", headers: withEGMFocusHeader(exportHeaders) })
     .then(async (response) => {
       if (!response.ok) {
         const detail = sanitizeHTTPText(await response.text());
@@ -3828,7 +3951,7 @@ async function deleteSavedSessionEvidence(id) {
     }
     const response = await fetch("/api/session-evidence/" + encodeURIComponent(String(numericID)), {
       method: "DELETE",
-      headers: headers
+      headers: withEGMFocusHeader(headers)
     });
     if (!response.ok) {
       const detail = sanitizeHTTPText(await response.text());
@@ -4695,6 +4818,74 @@ function renderEGMHistory(snapshot) {
   $("egm-history").innerHTML = html;
 }
 
+function operatorAuditEndpointURL() {
+  const params = new URLSearchParams();
+  params.set("limit", "200");
+  const action = String(clientState.operatorAuditActionFilter || "").trim();
+  const result = String(clientState.operatorAuditResultFilter || "").trim();
+  const search = String(clientState.operatorAuditSearchFilter || "").trim();
+  if (action) params.set("action", action);
+  if (result) params.set("result", result);
+  if (search) params.set("q", search);
+  return endpoints.operatorAudit + "?" + params.toString();
+}
+
+function normalizeOperatorAuditEvents(rows) {
+  return (Array.isArray(rows) ? rows : []).map((item) => ({
+    id: Number(item?.id || 0),
+    timestamp: item?.timestamp || "",
+    action: String(item?.action || "").trim(),
+    result: String(item?.result || "").toLowerCase(),
+    actor_scope: String(item?.actor_scope || "").trim(),
+    egm_focus: String(item?.egm_focus || "").trim(),
+    summary: String(item?.summary || "").trim(),
+    detail: String(item?.detail || "").trim()
+  })).filter((item) => item.id > 0 && item.action);
+}
+
+function operatorAuditResultClass(result) {
+  return String(result || "").toLowerCase() === "success" ? "operator-audit-pill-success" : "operator-audit-pill-fail";
+}
+
+function syncOperatorAuditFilterControls() {
+  $("operator-audit-action-filter").value = clientState.operatorAuditActionFilter || "";
+  $("operator-audit-result-filter").value = clientState.operatorAuditResultFilter || "";
+  $("operator-audit-search-filter").value = clientState.operatorAuditSearchFilter || "";
+}
+
+function renderOperatorAuditTimeline(snapshot) {
+  syncOperatorAuditFilterControls();
+  const rows = normalizeOperatorAuditEvents(snapshot?.operatorAudit || []);
+  const parts = [];
+  if (clientState.operatorAuditActionFilter) parts.push("action=" + clientState.operatorAuditActionFilter);
+  if (clientState.operatorAuditResultFilter) parts.push("result=" + clientState.operatorAuditResultFilter);
+  if (clientState.operatorAuditSearchFilter) parts.push("q=" + clientState.operatorAuditSearchFilter);
+  $("operator-audit-summary").textContent = rows.length
+    ? ("Showing " + String(rows.length) + " audit event(s)" + (parts.length ? " (" + parts.join(", ") + ")" : "") + ".")
+    : ("No audit events found" + (parts.length ? " for current filters." : "."));
+  $("operator-audit-state").textContent = rows.length > 0 ? "ready" : "idle";
+  $("operator-audit-state").className = "source-pill " + (rows.length > 0 ? "source-file" : "source-mixed");
+  $("operator-audit-message").textContent = "Sensitive operator actions are recorded here.";
+  renderItems("operator-audit-list", rows, "No operator audit events yet.", (item) => {
+    const resultText = item.result || "fail";
+    const meta = [
+      "actor_scope=" + (item.actor_scope || "-"),
+      "egm_focus=" + (item.egm_focus || "all"),
+      "id=" + String(item.id)
+    ];
+    return "<div class=\"item operator-audit-entry\">" +
+      "<details>" +
+      "<summary>" +
+      "<div class=\"operator-audit-head\"><strong>" + escapeHTML(item.action) + "</strong><span class=\"" + operatorAuditResultClass(resultText) + "\">" + escapeHTML(resultText) + "</span></div>" +
+      "<div class=\"operator-audit-meta\">" + escapeHTML(fmtTime(item.timestamp) + " | " + meta.join(" | ")) + "</div>" +
+      "<div class=\"operator-audit-meta\">" + escapeHTML(item.summary || "-") + "</div>" +
+      "</summary>" +
+      "<div class=\"operator-audit-detail\">" + escapeHTML(item.detail || "No additional detail.") + "</div>" +
+      "</details>" +
+      "</div>";
+  });
+}
+
 function heartbeatPolicyHasFocus() {
   const form = $("heartbeat-policy-form");
   return !!(form && form.contains(document.activeElement));
@@ -4798,7 +4989,7 @@ async function saveHeartbeatPolicyOverride(event) {
   }
   const response = await fetch(endpoints.heartbeatPolicy, {
     method: "PUT",
-    headers: headers,
+    headers: withEGMFocusHeader(headers),
     body: JSON.stringify(validation.payload)
   });
   if (!response.ok) {
@@ -4824,7 +5015,7 @@ async function clearHeartbeatPolicyOverride() {
   }
   const response = await fetch(endpoints.heartbeatPolicy, {
     method: "DELETE",
-    headers: headers
+    headers: withEGMFocusHeader(headers)
   });
   if (!response.ok) {
     const detail = sanitizeHTTPText(await response.text());
@@ -5137,7 +5328,7 @@ function setupAuthHeaders() {
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
-  return headers;
+  return withEGMFocusHeader(headers);
 }
 
 function setSetupState(level, message) {
@@ -5309,7 +5500,7 @@ function certAuthHeaders() {
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
-  return headers;
+  return withEGMFocusHeader(headers);
 }
 
 function certificatePreviewFingerprint(role, certificatePEM, privateKeyPEM, requiresKey) {
@@ -5907,6 +6098,7 @@ function renderStatus(snapshot) {
     "<div class=\"item\"><strong>#" + escapeHTML(item.id) + " " + escapeHTML(item.trigger_type) + "</strong><span>" + escapeHTML(fmtTime(item.created_at)) + " " + escapeHTML(item.trigger_source || "") + "</span></div>"
   );
   renderEGMHistory(snapshot);
+  renderOperatorAuditTimeline(snapshot);
   renderItems("state-history", snapshot?.stateHistory, "No state history yet", (item) =>
     "<div class=\"item\"><strong>" + escapeHTML(item.old_state) + " -> " + escapeHTML(item.new_state) + "</strong><span>" + escapeHTML(item.reason) + " at " + escapeHTML(fmtTime(item.created_at)) + "</span></div>"
   );
@@ -6082,6 +6274,7 @@ async function pollOnce() {
       fetchJSON(endpoints.runMarkers),
       fetchJSON(endpoints.operatorDrill),
       fetchJSON(endpoints.certificates),
+      fetchJSON(operatorAuditEndpointURL()),
       fetchJSON(endpoints.sessionEvidence),
       fetchJSON(endpoints.sessionWorkflow),
       fetchJSON(endpoints.cabinetProfile),
@@ -6090,7 +6283,7 @@ async function pollOnce() {
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -6119,6 +6312,7 @@ async function pollOnce() {
     if (runMarkersResult.status === "fulfilled") snapshot.runMarkers = runMarkersResult.value;
     if (operatorDrillResult.status === "fulfilled") snapshot.operatorDrill = operatorDrillResult.value;
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
+    if (operatorAuditResult.status === "fulfilled") snapshot.operatorAudit = operatorAuditResult.value;
     if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
     if (sessionWorkflowResult.status === "fulfilled") snapshot.sessionWorkflow = normalizeSessionWorkflowProgress(sessionWorkflowResult.value);
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
@@ -6132,6 +6326,7 @@ async function pollOnce() {
     if (runMarkersResult.status !== "fulfilled") failures.push("run markers unavailable");
     if (operatorDrillResult.status !== "fulfilled") failures.push("operator drill unavailable");
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
+    if (operatorAuditResult.status !== "fulfilled") failures.push("operator audit unavailable");
     if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
     if (sessionWorkflowResult.status !== "fulfilled") failures.push("session workflow unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
@@ -6372,6 +6567,19 @@ function bindControls() {
     });
   });
 
+  $("operator-audit-action-filter").addEventListener("change", () => {
+    clientState.operatorAuditActionFilter = String($("operator-audit-action-filter").value || "").trim();
+    schedulePoll(0);
+  });
+  $("operator-audit-result-filter").addEventListener("change", () => {
+    clientState.operatorAuditResultFilter = String($("operator-audit-result-filter").value || "").trim();
+    schedulePoll(0);
+  });
+  $("operator-audit-search-filter").addEventListener("input", () => {
+    clientState.operatorAuditSearchFilter = String($("operator-audit-search-filter").value || "").trim();
+    schedulePoll(0);
+  });
+
   $("cabinet-setup-form").addEventListener("submit", saveCabinetProfileOverride);
   $("setup-reset-button").addEventListener("click", clearCabinetProfileOverride);
   $("setup-use-observed-egms-button").addEventListener("click", useObservedEGMSuggestions);
@@ -6415,6 +6623,7 @@ updateStaleBadge();
 renderEGMFocusControl(emptySnapshot());
 renderEGMGroupedSummary(emptySnapshot());
 renderSelectedEGMDetail(emptySnapshot());
+renderOperatorAuditTimeline(emptySnapshot());
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
 renderSessionEvidence(emptySnapshot());

@@ -128,12 +128,13 @@ func main() {
 	mux.HandleFunc("/api/compliance", complianceHandler(auditStore))
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
+	mux.HandleFunc("/api/operator-audit", operatorAuditHandler(auditStore))
 	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
-	mux.HandleFunc("/api/session-evidence/export-all", sessionEvidenceExportAllHandler(auditStore))
+	mux.HandleFunc("/api/session-evidence/export-all", sessionEvidenceExportAllHandler(auditStore, cfg))
 	mux.HandleFunc(
 		"/api/session-evidence/",
 		requireMutationAuthForMethods(
-			sessionEvidenceByIDHandler(auditStore),
+			sessionEvidenceByIDHandler(auditStore, cfg),
 			cfg,
 			http.MethodDelete,
 		),
@@ -141,7 +142,7 @@ func main() {
 	mux.HandleFunc(
 		"/api/session-workflow",
 		requireMutationAuthForMethods(
-			sessionWorkflowHandler(auditStore),
+			sessionWorkflowHandler(auditStore, cfg),
 			cfg,
 			http.MethodPut,
 			http.MethodDelete,
@@ -160,7 +161,7 @@ func main() {
 	)
 	mux.HandleFunc("/api/certificates/backups", certificateBackupsHandler(cfg))
 	mux.HandleFunc("/api/certificates/restore", certificateRestoreHandler(auditStore, cfg))
-	mux.HandleFunc("/api/certificates/preview", certificatePreviewHandler(cfg))
+	mux.HandleFunc("/api/certificates/preview", certificatePreviewHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/import", certificateImportHandler(auditStore, cfg))
 	mux.HandleFunc("/api/certificates/export", certificateExportHandler(cfg))
 	mux.HandleFunc(
@@ -692,22 +693,27 @@ func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 			writeJSON(w, records, err)
 		case http.MethodDelete:
 			if !requireMutationAuth(w, r, cfg) {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "fail", "Session evidence delete rejected", "mutation authorization failed")
 				return
 			}
 			id, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("id")), 10, 64)
 			if err != nil || id <= 0 {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "fail", "Session evidence delete rejected", "valid id query parameter is required")
 				http.Error(w, "valid id query parameter is required", http.StatusBadRequest)
 				return
 			}
 			deleted, err := store.DeleteSessionEvidenceByID(r.Context(), id)
 			if err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "fail", "Session evidence delete failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
 			if !deleted {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "fail", "Session evidence delete failed", "session evidence record not found")
 				http.Error(w, "session evidence record not found", http.StatusNotFound)
 				return
 			}
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "success", "Session evidence deleted", fmt.Sprintf("id=%d", id))
 			writeJSON(w, map[string]any{"deleted_id": id}, nil)
 		case http.MethodPost:
 			if !requireMutationAuth(w, r, cfg) {
@@ -762,7 +768,7 @@ func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 	}
 }
 
-func sessionEvidenceByIDHandler(store *store.SQLiteStore) http.HandlerFunc {
+func sessionEvidenceByIDHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -771,23 +777,27 @@ func sessionEvidenceByIDHandler(store *store.SQLiteStore) http.HandlerFunc {
 
 		id, err := sessionEvidenceIDFromPath(r.URL.Path)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "fail", "Session evidence delete rejected", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		deleted, err := store.DeleteSessionEvidenceByID(r.Context(), id)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "fail", "Session evidence delete failed", err.Error())
 			writeJSON(w, nil, err)
 			return
 		}
 		if !deleted {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "fail", "Session evidence delete failed", "session evidence record not found")
 			http.Error(w, "session evidence record not found", http.StatusNotFound)
 			return
 		}
+		recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.delete", "success", "Session evidence deleted", fmt.Sprintf("id=%d", id))
 		writeJSON(w, map[string]any{"deleted_id": id}, nil)
 	}
 }
 
-func sessionEvidenceExportAllHandler(store *store.SQLiteStore) http.HandlerFunc {
+func sessionEvidenceExportAllHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -796,6 +806,7 @@ func sessionEvidenceExportAllHandler(store *store.SQLiteStore) http.HandlerFunc 
 
 		records, err := store.ListAllSessionEvidence(r.Context())
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.export_all", "fail", "Session evidence export-all failed", err.Error())
 			writeJSON(w, nil, err)
 			return
 		}
@@ -804,8 +815,11 @@ func sessionEvidenceExportAllHandler(store *store.SQLiteStore) http.HandlerFunc 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
 		if err := json.NewEncoder(w).Encode(archive); err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.export_all", "fail", "Session evidence export-all failed", err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
+		recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_evidence.export_all", "success", "Session evidence export-all completed", fmt.Sprintf("captures=%d", len(records)))
 	}
 }
 
@@ -876,10 +890,12 @@ func cabinetProfileHandler(store *store.SQLiteStore, cfg config.Config) http.Han
 		case http.MethodPut:
 			var profile config.CabinetProfile
 			if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "cabinet_profile.save", "fail", "Cabinet profile save rejected", "invalid JSON body")
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
 				return
 			}
 			if err := config.ValidateCabinetProfile(profile); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "cabinet_profile.save", "fail", "Cabinet profile save rejected", err.Error())
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -888,25 +904,40 @@ func cabinetProfileHandler(store *store.SQLiteStore, cfg config.Config) http.Han
 				updatedBy = "lab-api"
 			}
 			if err := store.UpsertCabinetProfileOverride(r.Context(), profile, updatedBy); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "cabinet_profile.save", "fail", "Cabinet profile save failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
 			resolved, err := resolveCabinetProfile(r.Context(), store, cfg.CabinetProfile)
 			if err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "cabinet_profile.save", "fail", "Cabinet profile save failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
+			recordOperatorAuditEvent(
+				r.Context(),
+				store,
+				r,
+				cfg,
+				"cabinet_profile.save",
+				"success",
+				"Cabinet profile override saved",
+				fmt.Sprintf("host_id=%s wire_host_url=%s first_test_egm_ids=%d", resolved.Effective.HostID, resolved.Effective.WireHostURL, len(resolved.Effective.FirstTestEGMIDs)),
+			)
 			writeJSON(w, buildCabinetProfileResponse(resolved), nil)
 		case http.MethodDelete:
 			if err := store.ClearCabinetProfileOverride(r.Context()); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "cabinet_profile.clear", "fail", "Cabinet profile override clear failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
 			resolved, err := resolveCabinetProfile(r.Context(), store, cfg.CabinetProfile)
 			if err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "cabinet_profile.clear", "fail", "Cabinet profile override clear failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "cabinet_profile.clear", "success", "Cabinet profile override cleared", "profile_source="+resolved.ProfileSource)
 			writeJSON(w, buildCabinetProfileResponse(resolved), nil)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -932,7 +963,7 @@ func cabinetProfileSuggestionsHandler(eng *engine.Engine, store *store.SQLiteSto
 	}
 }
 
-func sessionWorkflowHandler(store *store.SQLiteStore) http.HandlerFunc {
+func sessionWorkflowHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -947,29 +978,45 @@ func sessionWorkflowHandler(store *store.SQLiteStore) http.HandlerFunc {
 			decoder := json.NewDecoder(r.Body)
 			decoder.DisallowUnknownFields()
 			if err := decoder.Decode(&payload); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_workflow.save", "fail", "Session workflow save rejected", "invalid JSON body")
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
 				return
 			}
 			normalized, err := validateSessionWorkflowRequest(payload)
 			if err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_workflow.save", "fail", "Session workflow save rejected", err.Error())
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			if err := store.UpsertSessionWorkflowProgress(r.Context(), normalized.CurrentPhase, normalized.CompletedSteps, normalized.OperatorNotes); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_workflow.save", "fail", "Session workflow save failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
 			progress, err := store.GetSessionWorkflowProgress(r.Context())
 			if err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_workflow.save", "fail", "Session workflow save failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
+			recordOperatorAuditEvent(
+				r.Context(),
+				store,
+				r,
+				cfg,
+				"session_workflow.save",
+				"success",
+				"Session workflow progress saved",
+				fmt.Sprintf("current_phase=%s completed_steps=%d", normalized.CurrentPhase, len(normalized.CompletedSteps)),
+			)
 			writeJSON(w, buildSessionWorkflowResponse(progress), nil)
 		case http.MethodDelete:
 			if err := store.ClearSessionWorkflowProgress(r.Context()); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_workflow.clear", "fail", "Session workflow progress clear failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "session_workflow.clear", "success", "Session workflow progress cleared", "")
 			writeJSON(w, buildSessionWorkflowResponse(nil), nil)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -994,18 +1041,22 @@ func heartbeatPolicyHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 				BlockAfterMissed   int `json:"block_after_missed"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.save", "fail", "Heartbeat policy save rejected", "invalid JSON body")
 				http.Error(w, "invalid JSON body", http.StatusBadRequest)
 				return
 			}
 			if payload.IntervalMS <= 0 {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.save", "fail", "Heartbeat policy save rejected", "interval_ms must be greater than zero")
 				http.Error(w, "interval_ms must be greater than zero", http.StatusBadRequest)
 				return
 			}
 			if payload.WarningAfterMissed <= 0 {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.save", "fail", "Heartbeat policy save rejected", "warning_after_missed must be greater than zero")
 				http.Error(w, "warning_after_missed must be greater than zero", http.StatusBadRequest)
 				return
 			}
 			if payload.BlockAfterMissed < payload.WarningAfterMissed {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.save", "fail", "Heartbeat policy save rejected", "block_after_missed must be greater than or equal to warning_after_missed")
 				http.Error(w, "block_after_missed must be greater than or equal to warning_after_missed", http.StatusBadRequest)
 				return
 			}
@@ -1014,25 +1065,40 @@ func heartbeatPolicyHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 				updatedBy = "lab-api"
 			}
 			if err := store.UpsertHeartbeatPolicyOverride(r.Context(), payload.IntervalMS, payload.WarningAfterMissed, payload.BlockAfterMissed, updatedBy); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.save", "fail", "Heartbeat policy save failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
 			resolved, err := resolveHeartbeatPolicy(r.Context(), store, cfg.Timeouts)
 			if err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.save", "fail", "Heartbeat policy save failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
+			recordOperatorAuditEvent(
+				r.Context(),
+				store,
+				r,
+				cfg,
+				"heartbeat_policy.save",
+				"success",
+				"Heartbeat policy override saved",
+				fmt.Sprintf("interval_ms=%d warning_after_missed=%d block_after_missed=%d", resolved.Effective.IntervalMS, resolved.Effective.WarningAfterMissed, resolved.Effective.BlockAfterMissed),
+			)
 			writeJSON(w, buildHeartbeatPolicyResponse(resolved), nil)
 		case http.MethodDelete:
 			if err := store.ClearHeartbeatPolicyOverride(r.Context()); err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.clear", "fail", "Heartbeat policy override clear failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
 			resolved, err := resolveHeartbeatPolicy(r.Context(), store, cfg.Timeouts)
 			if err != nil {
+				recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.clear", "fail", "Heartbeat policy override clear failed", err.Error())
 				writeJSON(w, nil, err)
 				return
 			}
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, "heartbeat_policy.clear", "success", "Heartbeat policy override cleared", "policy_source="+resolved.PolicySource)
 			writeJSON(w, buildHeartbeatPolicyResponse(resolved), nil)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

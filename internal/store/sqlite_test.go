@@ -461,6 +461,109 @@ func TestRunMarkerCRUD(t *testing.T) {
 	}
 }
 
+func TestOperatorAuditEventRecordListAndFilters(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	base := time.Now().UTC().Truncate(time.Second)
+	rows := []model.OperatorAuditEvent{
+		{
+			Timestamp:  base.Add(-2 * time.Minute),
+			Action:     "cabinet_profile.save",
+			Result:     "success",
+			ActorScope: "token",
+			EGMFocus:   "EGM-02",
+			Summary:    "Cabinet profile saved",
+			Detail:     "host_id updated",
+		},
+		{
+			Timestamp:  base.Add(-1 * time.Minute),
+			Action:     "certificate.import",
+			Result:     "fail",
+			ActorScope: "trusted",
+			Summary:    "Certificate import failed",
+			Detail:     "invalid certificate pem",
+		},
+		{
+			Timestamp:  base,
+			Action:     "heartbeat_policy.clear",
+			Result:     "success",
+			ActorScope: "local",
+			Summary:    "Heartbeat policy override cleared",
+			Detail:     "reverted to file policy",
+		},
+	}
+	for _, row := range rows {
+		if _, err := store.RecordOperatorAuditEvent(ctx, row); err != nil {
+			t.Fatalf("record operator audit event: %v", err)
+		}
+	}
+	assertCount(t, store, "operator_audit_events", 3)
+
+	listed, err := store.ListOperatorAuditEvents(ctx, model.OperatorAuditQuery{Limit: 2})
+	if err != nil {
+		t.Fatalf("list operator audit events: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("list len = %d, want 2", len(listed))
+	}
+	if listed[0].Action != "heartbeat_policy.clear" || listed[1].Action != "certificate.import" {
+		t.Fatalf("unexpected list ordering/actions: %+v", listed)
+	}
+
+	filteredAction, err := store.ListOperatorAuditEvents(ctx, model.OperatorAuditQuery{Limit: 10, Action: "cabinet_profile.save"})
+	if err != nil {
+		t.Fatalf("list action filter: %v", err)
+	}
+	if len(filteredAction) != 1 || filteredAction[0].EGMFocus != "EGM-02" {
+		t.Fatalf("unexpected action-filtered rows: %+v", filteredAction)
+	}
+
+	filteredResult, err := store.ListOperatorAuditEvents(ctx, model.OperatorAuditQuery{Limit: 10, Result: "fail"})
+	if err != nil {
+		t.Fatalf("list result filter: %v", err)
+	}
+	if len(filteredResult) != 1 || filteredResult[0].Action != "certificate.import" {
+		t.Fatalf("unexpected result-filtered rows: %+v", filteredResult)
+	}
+
+	filteredSearch, err := store.ListOperatorAuditEvents(ctx, model.OperatorAuditQuery{Limit: 10, Search: "invalid certificate"})
+	if err != nil {
+		t.Fatalf("list search filter: %v", err)
+	}
+	if len(filteredSearch) != 1 || filteredSearch[0].Result != "fail" {
+		t.Fatalf("unexpected search-filtered rows: %+v", filteredSearch)
+	}
+}
+
+func TestOperatorAuditEventPruning(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	total := operatorAuditRetentionLimit + 7
+	for i := 0; i < total; i++ {
+		if _, err := store.RecordOperatorAuditEvent(ctx, model.OperatorAuditEvent{
+			Timestamp:  time.Now().UTC().Add(time.Duration(i) * time.Second),
+			Action:     "heartbeat_policy.save",
+			Result:     "success",
+			ActorScope: "local",
+			Summary:    "row " + time.Now().UTC().Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("record event %d: %v", i, err)
+		}
+	}
+
+	assertCount(t, store, "operator_audit_events", operatorAuditRetentionLimit)
+}
+
 func assertCount(t *testing.T, store *SQLiteStore, table string, want int) {
 	t.Helper()
 	got, err := store.Count(context.Background(), table)

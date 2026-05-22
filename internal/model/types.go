@@ -125,6 +125,24 @@ type SessionEvidenceRecord struct {
 	PayloadJSON    string    `json:"payload_json"`
 }
 
+type OperatorAuditEvent struct {
+	ID         int64     `json:"id"`
+	Timestamp  time.Time `json:"timestamp"`
+	Action     string    `json:"action"`
+	Result     string    `json:"result"`
+	ActorScope string    `json:"actor_scope"`
+	EGMFocus   string    `json:"egm_focus,omitempty"`
+	Summary    string    `json:"summary"`
+	Detail     string    `json:"detail,omitempty"`
+}
+
+type OperatorAuditQuery struct {
+	Limit  int
+	Action string
+	Result string
+	Search string
+}
+
 type RunMarker struct {
 	ID          int64     `json:"id"`
 	CreatedAt   time.Time `json:"created_at"`

@@ -109,14 +109,17 @@ var (
 
 func certificateImportHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		const auditAction = "certificate.import"
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if !requireMutationAuth(w, r, cfg) {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate import rejected", "mutation authorization failed")
 			return
 		}
 		if !certificateMaterialRequestAllowed(r, cfg) {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate import rejected", "request not from loopback or trusted private network")
 			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
 			return
 		}
@@ -125,18 +128,21 @@ func certificateImportHandler(store *store.SQLiteStore, cfg config.Config) http.
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate import rejected", "invalid JSON body: "+err.Error())
 			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		role, err := resolveCertificateRole(request.Role, cfg.Crypto)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate import rejected", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		parsedCert, err := validateCertificateImportPayload(role, request)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate import rejected", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -144,12 +150,14 @@ func certificateImportHandler(store *store.SQLiteStore, cfg config.Config) http.
 		importedAt := time.Now().UTC()
 		backups, err := persistImportedCertificate(role, request.CertificatePEM, request.PrivateKeyPEM, importedAt)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate import failed", err.Error())
 			writeJSON(w, nil, err)
 			return
 		}
 
 		inventory, err := refreshCertificateInventory(r.Context(), store, cfg, importedAt)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate import failed", err.Error())
 			writeJSON(w, nil, err)
 			return
 		}
@@ -163,6 +171,16 @@ func certificateImportHandler(store *store.SQLiteStore, cfg config.Config) http.
 			CertificateStatus:  certificateStatusByRole(inventory, role.Role),
 			ImportedAt:         importedAt,
 		}
+		recordOperatorAuditEvent(
+			r.Context(),
+			store,
+			r,
+			cfg,
+			auditAction,
+			"success",
+			"Certificate import succeeded",
+			fmt.Sprintf("role=%s subject=%s backups=%d", role.Role, parsedCert.Subject.String(), len(backups)),
+		)
 		writeJSON(w, response, nil)
 	}
 }
@@ -234,13 +252,15 @@ func certificateExportHandler(cfg config.Config) http.HandlerFunc {
 	}
 }
 
-func certificatePreviewHandler(cfg config.Config) http.HandlerFunc {
+func certificatePreviewHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		const auditAction = "certificate.preview"
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if !certificateMaterialRequestAllowed(r, cfg) {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate preview rejected", "request not from loopback or trusted private network")
 			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
 			return
 		}
@@ -249,17 +269,25 @@ func certificatePreviewHandler(cfg config.Config) http.HandlerFunc {
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate preview rejected", "invalid JSON body: "+err.Error())
 			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		role, err := resolveCertificateRole(request.Role, cfg.Crypto)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate preview rejected", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		writeJSON(w, buildCertificatePreviewResponse(role, request), nil)
+		preview := buildCertificatePreviewResponse(role, request)
+		if preview.ParseOK {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "success", "Certificate preview passed", "role="+role.Role)
+		} else {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate preview found validation errors", strings.Join(preview.Errors, "; "))
+		}
+		writeJSON(w, preview, nil)
 	}
 }
 
@@ -293,14 +321,17 @@ func certificateBackupsHandler(cfg config.Config) http.HandlerFunc {
 
 func certificateRestoreHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		const auditAction = "certificate.restore"
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if !requireMutationAuth(w, r, cfg) {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate restore rejected", "mutation authorization failed")
 			return
 		}
 		if !certificateMaterialRequestAllowed(r, cfg) {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate restore rejected", "request not from loopback or trusted private network")
 			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
 			return
 		}
@@ -309,21 +340,25 @@ func certificateRestoreHandler(store *store.SQLiteStore, cfg config.Config) http
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate restore rejected", "invalid JSON body: "+err.Error())
 			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		role, err := resolveCertificateRole(request.Role, cfg.Crypto)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate restore rejected", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		backupID := strings.TrimSpace(request.BackupID)
 		if backupID == "" {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate restore rejected", "backup_id is required")
 			http.Error(w, "backup_id is required", http.StatusBadRequest)
 			return
 		}
 
 		if err := restoreCertificateBackup(role, backupID); err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate restore failed", err.Error())
 			switch {
 			case errors.Is(err, errCertificateBackupNotFound):
 				http.Error(w, err.Error(), http.StatusNotFound)
@@ -338,9 +373,11 @@ func certificateRestoreHandler(store *store.SQLiteStore, cfg config.Config) http
 		restoredAt := time.Now().UTC()
 		inventory, err := refreshCertificateInventory(r.Context(), store, cfg, restoredAt)
 		if err != nil {
+			recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "fail", "Certificate restore failed", err.Error())
 			writeJSON(w, nil, err)
 			return
 		}
+		recordOperatorAuditEvent(r.Context(), store, r, cfg, auditAction, "success", "Certificate restore succeeded", "role="+role.Role+" backup_id="+backupID)
 		writeJSON(w, certificateRestoreResponse{
 			Role:                 role.Role,
 			BackupID:             backupID,

@@ -118,4 +118,15 @@ CREATE TABLE IF NOT EXISTS session_workflow_progress (
     operator_notes TEXT,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS operator_audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    action TEXT NOT NULL,
+    result TEXT NOT NULL,
+    actor_scope TEXT NOT NULL,
+    egm_focus TEXT,
+    summary TEXT NOT NULL,
+    detail TEXT
+);
 `

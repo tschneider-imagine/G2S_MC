@@ -923,7 +923,7 @@ func TestSessionWorkflowHandlerCRUDAndValidation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = auditStore.Close() })
 
-	handler := sessionWorkflowHandler(auditStore)
+	handler := sessionWorkflowHandler(auditStore, config.Config{})
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/session-workflow", nil)
 	getRec := httptest.NewRecorder()
@@ -1010,7 +1010,7 @@ func TestSessionWorkflowRouteMutationAuthTokenGuard(t *testing.T) {
 		API: config.API{AuthToken: "lab-secret"},
 	}
 	handler := requireMutationAuthForMethods(
-		sessionWorkflowHandler(auditStore),
+		sessionWorkflowHandler(auditStore, cfg),
 		cfg,
 		http.MethodPut,
 		http.MethodDelete,
@@ -1072,7 +1072,7 @@ func TestSessionWorkflowRouteAllowsTrustedPrivateNetworkWithoutToken(t *testing.
 		},
 	}
 	handler := requireMutationAuthForMethods(
-		sessionWorkflowHandler(auditStore),
+		sessionWorkflowHandler(auditStore, cfg),
 		cfg,
 		http.MethodPut,
 		http.MethodDelete,
@@ -1355,7 +1355,7 @@ func TestSessionEvidenceByIDDeleteRouteAndAuth(t *testing.T) {
 
 	cfg := config.Config{API: config.API{AuthToken: "lab-secret"}}
 	handler := requireMutationAuthForMethods(
-		sessionEvidenceByIDHandler(auditStore),
+		sessionEvidenceByIDHandler(auditStore, cfg),
 		cfg,
 		http.MethodDelete,
 	)
@@ -1432,7 +1432,7 @@ func TestSessionEvidenceExportAllHandlerShapeAndNoAuthRequirement(t *testing.T) 
 		}
 	}
 
-	handler := sessionEvidenceExportAllHandler(auditStore)
+	handler := sessionEvidenceExportAllHandler(auditStore, config.Config{})
 	req := httptest.NewRequest(http.MethodGet, "/api/session-evidence/export-all", nil)
 	rec := httptest.NewRecorder()
 	handler(rec, req)

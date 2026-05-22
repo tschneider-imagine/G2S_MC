@@ -19,6 +19,8 @@ type SQLiteStore struct {
 	db *sql.DB
 }
 
+const operatorAuditRetentionLimit = 2000
+
 type CabinetProfileOverride struct {
 	Profile   config.CabinetProfile
 	UpdatedAt time.Time
@@ -728,6 +730,93 @@ func (s *SQLiteStore) ListAllSessionEvidence(ctx context.Context) ([]model.Sessi
 	return records, rows.Err()
 }
 
+func (s *SQLiteStore) RecordOperatorAuditEvent(ctx context.Context, event model.OperatorAuditEvent) (int64, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO operator_audit_events (
+			created_at, action, result, actor_scope, egm_focus, summary, detail
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		event.Timestamp,
+		event.Action,
+		event.Result,
+		event.ActorScope,
+		strings.TrimSpace(event.EGMFocus),
+		event.Summary,
+		event.Detail,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM operator_audit_events
+		  WHERE id NOT IN (
+		      SELECT id FROM operator_audit_events
+		      ORDER BY id DESC
+		      LIMIT ?
+		  )`,
+		operatorAuditRetentionLimit,
+	); err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (s *SQLiteStore) ListOperatorAuditEvents(ctx context.Context, query model.OperatorAuditQuery) ([]model.OperatorAuditEvent, error) {
+	limit := normalizeLimit(query.Limit)
+	where := []string{}
+	args := []any{}
+
+	if action := strings.TrimSpace(query.Action); action != "" {
+		where = append(where, "action = ?")
+		args = append(args, action)
+	}
+	if result := strings.ToLower(strings.TrimSpace(query.Result)); result != "" {
+		where = append(where, "result = ?")
+		args = append(args, result)
+	}
+	if search := strings.TrimSpace(query.Search); search != "" {
+		searchLike := "%" + search + "%"
+		where = append(where, `(action LIKE ? OR result LIKE ? OR actor_scope LIKE ? OR COALESCE(egm_focus, '') LIKE ? OR summary LIKE ? OR COALESCE(detail, '') LIKE ?)`)
+		args = append(args, searchLike, searchLike, searchLike, searchLike, searchLike, searchLike)
+	}
+
+	sqlBuilder := strings.Builder{}
+	sqlBuilder.WriteString(`SELECT id, created_at, action, result, actor_scope, COALESCE(egm_focus, ''), summary, COALESCE(detail, '')
+		  FROM operator_audit_events`)
+	if len(where) > 0 {
+		sqlBuilder.WriteString(" WHERE ")
+		sqlBuilder.WriteString(strings.Join(where, " AND "))
+	}
+	sqlBuilder.WriteString(" ORDER BY id DESC LIMIT ?")
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, sqlBuilder.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []model.OperatorAuditEvent{}
+	for rows.Next() {
+		var event model.OperatorAuditEvent
+		if err := rows.Scan(
+			&event.ID,
+			&event.Timestamp,
+			&event.Action,
+			&event.Result,
+			&event.ActorScope,
+			&event.EGMFocus,
+			&event.Summary,
+			&event.Detail,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 func (s *SQLiteStore) RecordRunMarker(ctx context.Context, marker model.RunMarker) (int64, error) {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -785,7 +874,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}
