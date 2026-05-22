@@ -186,6 +186,15 @@ func TestStatusHandlerIncludesEndpointMetadataAndDriftWarning(t *testing.T) {
 	if len(egm.EndpointDriftIPs) != 2 {
 		t.Fatalf("endpoint_drift_ips len = %d, want 2", len(egm.EndpointDriftIPs))
 	}
+	if len(egm.RecentEndpoints) != 2 {
+		t.Fatalf("recent_endpoints len = %d, want 2", len(egm.RecentEndpoints))
+	}
+	if egm.RecentEndpoints[0].IPAddress != "10.20.30.41" {
+		t.Fatalf("recent_endpoints[0].ip = %q, want 10.20.30.41", egm.RecentEndpoints[0].IPAddress)
+	}
+	if egm.RecentEndpoints[0].SeenCount != 1 {
+		t.Fatalf("recent_endpoints[0].seen_count = %d, want 1", egm.RecentEndpoints[0].SeenCount)
+	}
 }
 
 func TestBuildRuntimeStatusIncludesAPIMutationAuthFlag(t *testing.T) {

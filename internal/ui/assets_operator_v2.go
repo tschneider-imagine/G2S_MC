@@ -2005,6 +2005,7 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
         last_endpoint_seen_at: "",
         endpoint_drift_warning: false,
         endpoint_drift_ips: [],
+        recent_endpoints: [],
         total_events: 0,
         non_heartbeat_events: 0,
         heartbeat_records: [],
@@ -2031,6 +2032,7 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
     }
     row.endpoint_drift_warning = egm?.endpoint_drift_warning === true;
     row.endpoint_drift_ips = Array.isArray(egm?.endpoint_drift_ips) ? egm.endpoint_drift_ips.slice() : [];
+    row.recent_endpoints = Array.isArray(egm?.recent_endpoints) ? egm.recent_endpoints.slice() : [];
   });
 
   historyList.forEach((record) => {
@@ -2069,6 +2071,7 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
         last_endpoint_seen_at: row.last_endpoint_seen_at || "",
         endpoint_drift_warning: row.endpoint_drift_warning === true,
         endpoint_drift_ips: Array.isArray(row.endpoint_drift_ips) ? row.endpoint_drift_ips.slice() : [],
+        recent_endpoints: Array.isArray(row.recent_endpoints) ? row.recent_endpoints.slice() : [],
         total_events: row.total_events,
         non_heartbeat_events: row.non_heartbeat_events,
         heartbeat_events: heartbeat.total,
@@ -2146,6 +2149,8 @@ function selectedEGMDetailForSnapshot(snapshot) {
       last_endpoint_seen_at: "",
       endpoint_drift_warning: false,
       endpoint_drift_ips: [],
+      recent_endpoints: [],
+      endpoint_warning_text: "",
       live_signal: "UNKNOWN",
       live_signal_detail: "",
       in_first_test_set: false,
@@ -2156,6 +2161,12 @@ function selectedEGMDetailForSnapshot(snapshot) {
     };
   }
   const liveObserved = selected.total_events > 0 || numericTime(selected.last_seen_at) > 0;
+  const recentEndpoints = Array.isArray(selected.recent_endpoints)
+    ? selected.recent_endpoints.slice().sort((a, b) => numericTime(b?.last_seen_at) - numericTime(a?.last_seen_at))
+    : [];
+  const endpointWarningText = recentEndpoints.length > 1
+    ? "Operator signal: multiple endpoints observed recently for this EGM ID."
+    : "";
   const liveSignalDetail = selected.heartbeat_events > 0
     ? "commsOnLine/keepAlive traffic observed."
     : (liveObserved ? "EGM telemetry observed." : "No EGM telemetry observed yet.");
@@ -2172,6 +2183,8 @@ function selectedEGMDetailForSnapshot(snapshot) {
     last_endpoint_seen_at: selected.last_endpoint_seen_at || "",
     endpoint_drift_warning: selected.endpoint_drift_warning === true,
     endpoint_drift_ips: Array.isArray(selected.endpoint_drift_ips) ? selected.endpoint_drift_ips.slice() : [],
+    recent_endpoints: recentEndpoints,
+    endpoint_warning_text: endpointWarningText,
     live_signal: liveObserved ? "OBSERVED" : "NOT_OBSERVED",
     live_signal_detail: liveSignalDetail,
     in_first_test_set: firstTestIDs.has(selected.egm_id),
@@ -2190,12 +2203,26 @@ function renderSelectedEGMDetail(snapshot) {
     return;
   }
   renderItems("selected-egm-detail", [detail], "", (item) =>
+    (() => {
+      const recentRows = (Array.isArray(item.recent_endpoints) ? item.recent_endpoints : [])
+        .map((entry) => (entry?.ip || "-") + ":" + (entry?.port || "-") + " | seen " + String(entry?.seen_count || 0) +
+          " | first " + fmtTime(entry?.first_seen_at || "") +
+          " | last " + fmtTime(entry?.last_seen_at || "") +
+          " (" + fmtAge(entry?.last_seen_at || "") + ")");
+      const recentHTML = recentRows.length
+        ? recentRows.map((line) => "<li>" + escapeHTML(line) + "</li>").join("")
+        : "<li>No endpoint observations yet.</li>";
+      return "" +
     "<div class=\"item timeline-entry\">" +
       "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id) + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id) + "</span>" + egmSourcePill(item.source) + statusPill(item.status) + "</div></div>" +
       "<span>live signal " + escapeHTML(item.live_signal || "-") + " | last seen " + escapeHTML(fmtTime(item.last_seen_at)) + " (" + escapeHTML(fmtAge(item.last_seen_at)) + ") | heartbeat " + escapeHTML(item.heartbeat_label || "-") + " | last keepAlive " + escapeHTML(fmtTime(item.heartbeat_last_keepalive_at)) + "</span>" +
       "<span>endpoint " + escapeHTML((item.last_endpoint_ip || "-") + ":" + (item.last_endpoint_port || "-")) + " | endpoint seen " + escapeHTML(fmtTime(item.last_endpoint_seen_at)) + " | endpoint drift " + escapeHTML(item.endpoint_drift_warning ? "warning" : "none") + (item.endpoint_drift_warning && item.endpoint_drift_ips?.length ? (" (" + escapeHTML(item.endpoint_drift_ips.join(", ")) + ")") : "") + "</span>" +
+      "<span>Recent Endpoints (newest first)</span>" +
+      "<ul class=\"operator-readiness-items\">" + recentHTML + "</ul>" +
+      (item.endpoint_warning_text ? ("<span>" + escapeHTML(item.endpoint_warning_text) + "</span>") : "") +
       "<span>first-test set: " + escapeHTML(item.in_first_test_set ? "yes" : "no") + " | " + escapeHTML(item.message || "") + "</span>" +
-    "</div>"
+    "</div>";
+    })()
   );
 }
 

@@ -43,7 +43,8 @@ func TestCommsOnlineUpdatesEngine(t *testing.T) {
 			!snapshot.EGMs[0].LastSeen.IsZero() &&
 			snapshot.EGMs[0].LastEndpointIP == "192.168.55.10" &&
 			snapshot.EGMs[0].LastEndpointPort == 9443 &&
-			!snapshot.EGMs[0].LastEndpointSeenAt.IsZero() {
+			!snapshot.EGMs[0].LastEndpointSeenAt.IsZero() &&
+			len(snapshot.EGMs[0].RecentEndpoints) == 1 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -120,6 +121,9 @@ func TestKeepAliveDiscoversUnknownEGM(t *testing.T) {
 				}
 				if egm.LastEndpointPort != 9555 {
 					t.Fatalf("last_endpoint_port = %d, want 9555", egm.LastEndpointPort)
+				}
+				if len(egm.RecentEndpoints) != 1 {
+					t.Fatalf("recent_endpoints len = %d, want 1", len(egm.RecentEndpoints))
 				}
 				return
 			}

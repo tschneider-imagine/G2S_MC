@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -147,6 +148,12 @@ func TestSessionOnlineCapturesLastSeenEndpointMetadata(t *testing.T) {
 	if egm.EndpointDrift {
 		t.Fatal("endpoint_drift_warning = true, want false")
 	}
+	if len(egm.RecentEndpoints) != 1 {
+		t.Fatalf("recent_endpoints len = %d, want 1", len(egm.RecentEndpoints))
+	}
+	if egm.RecentEndpoints[0].IPAddress != "192.168.1.22" || egm.RecentEndpoints[0].Port != 60501 {
+		t.Fatalf("unexpected recent endpoint %+v", egm.RecentEndpoints[0])
+	}
 }
 
 func TestKeepAliveSetsEndpointDriftWhenSameEGMIDMovesAcrossIPs(t *testing.T) {
@@ -214,6 +221,70 @@ func TestEndpointDriftWindowExpiresOldIPs(t *testing.T) {
 	}
 	if egm.LastEndpointIP != "10.0.0.22" {
 		t.Fatalf("last_endpoint_ip = %q, want 10.0.0.22", egm.LastEndpointIP)
+	}
+}
+
+func TestRecentEndpointHistoryAggregatesAndMovesToFront(t *testing.T) {
+	eng := New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443}})
+	now := time.Now()
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now, SourceIP: "10.0.0.21", SourcePort: 9443})
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now.Add(time.Second), SourceIP: "10.0.0.22", SourcePort: 9444})
+	eng.handle(Event{Type: EventKeepAlive, EGMID: "EGM-1", At: now.Add(2 * time.Second), SourceIP: "10.0.0.21", SourcePort: 9443})
+
+	egm, ok := snapshotEGMByID(eng.Snapshot(), "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if len(egm.RecentEndpoints) != 2 {
+		t.Fatalf("recent_endpoints len = %d, want 2", len(egm.RecentEndpoints))
+	}
+	first := egm.RecentEndpoints[0]
+	second := egm.RecentEndpoints[1]
+	if first.IPAddress != "10.0.0.21" || first.Port != 9443 {
+		t.Fatalf("recent_endpoints[0] = %+v, want 10.0.0.21:9443", first)
+	}
+	if first.SeenCount != 2 {
+		t.Fatalf("recent_endpoints[0].seen_count = %d, want 2", first.SeenCount)
+	}
+	if !first.FirstSeenAt.Equal(now) {
+		t.Fatalf("recent_endpoints[0].first_seen_at mismatch")
+	}
+	if !first.LastSeenAt.Equal(now.Add(2 * time.Second)) {
+		t.Fatalf("recent_endpoints[0].last_seen_at mismatch")
+	}
+	if second.IPAddress != "10.0.0.22" || second.Port != 9444 || second.SeenCount != 1 {
+		t.Fatalf("recent_endpoints[1] = %+v, want single 10.0.0.22:9444", second)
+	}
+}
+
+func TestRecentEndpointHistoryBoundedToLimit(t *testing.T) {
+	eng := New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "10.0.0.11", Port: 9443}})
+	base := time.Now()
+	for i := 0; i < recentEndpointHistory+2; i++ {
+		ip := fmt.Sprintf("10.20.30.%d", i+1)
+		eng.handle(Event{
+			Type:       EventKeepAlive,
+			EGMID:      "EGM-1",
+			At:         base.Add(time.Duration(i) * time.Second),
+			SourceIP:   ip,
+			SourcePort: 9000 + i,
+		})
+	}
+
+	egm, ok := snapshotEGMByID(eng.Snapshot(), "EGM-1")
+	if !ok {
+		t.Fatalf("expected EGM-1 in snapshot")
+	}
+	if len(egm.RecentEndpoints) != recentEndpointHistory {
+		t.Fatalf("recent_endpoints len = %d, want %d", len(egm.RecentEndpoints), recentEndpointHistory)
+	}
+	latest := egm.RecentEndpoints[0]
+	if latest.Port != 9000+recentEndpointHistory+1 {
+		t.Fatalf("latest port = %d, want %d", latest.Port, 9000+recentEndpointHistory+1)
+	}
+	oldest := egm.RecentEndpoints[len(egm.RecentEndpoints)-1]
+	if oldest.Port != 9000+2 {
+		t.Fatalf("oldest retained port = %d, want %d", oldest.Port, 9000+2)
 	}
 }
 

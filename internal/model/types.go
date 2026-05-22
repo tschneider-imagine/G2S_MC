@@ -30,23 +30,32 @@ const (
 	EGMSourceDiscovered EGMSource = "DISCOVERED"
 )
 
+type EGMEndpointObservation struct {
+	IPAddress   string    `json:"ip"`
+	Port        int       `json:"port"`
+	FirstSeenAt time.Time `json:"first_seen_at,omitempty"`
+	LastSeenAt  time.Time `json:"last_seen_at,omitempty"`
+	SeenCount   int       `json:"seen_count"`
+}
+
 type EGM struct {
-	ID                 string    `json:"id"`
-	IPAddress          string    `json:"ip_address"`
-	Port               int       `json:"port"`
-	Vendor             string    `json:"vendor,omitempty"`
-	CabinetFamily      string    `json:"cabinet_family,omitempty"`
-	GameTitle          string    `json:"game_title,omitempty"`
-	SoftwareVersion    string    `json:"software_version,omitempty"`
-	Source             EGMSource `json:"source"`
-	Status             EGMHealth `json:"status"`
-	LastError          string    `json:"last_error,omitempty"`
-	LastSeen           time.Time `json:"last_seen,omitempty"`
-	LastEndpointIP     string    `json:"last_endpoint_ip,omitempty"`
-	LastEndpointPort   int       `json:"last_endpoint_port,omitempty"`
-	LastEndpointSeenAt time.Time `json:"last_endpoint_seen_at,omitempty"`
-	EndpointDrift      bool      `json:"endpoint_drift_warning"`
-	EndpointDriftIPs   []string  `json:"endpoint_drift_ips,omitempty"`
+	ID                 string                   `json:"id"`
+	IPAddress          string                   `json:"ip_address"`
+	Port               int                      `json:"port"`
+	Vendor             string                   `json:"vendor,omitempty"`
+	CabinetFamily      string                   `json:"cabinet_family,omitempty"`
+	GameTitle          string                   `json:"game_title,omitempty"`
+	SoftwareVersion    string                   `json:"software_version,omitempty"`
+	Source             EGMSource                `json:"source"`
+	Status             EGMHealth                `json:"status"`
+	LastError          string                   `json:"last_error,omitempty"`
+	LastSeen           time.Time                `json:"last_seen,omitempty"`
+	LastEndpointIP     string                   `json:"last_endpoint_ip,omitempty"`
+	LastEndpointPort   int                      `json:"last_endpoint_port,omitempty"`
+	LastEndpointSeenAt time.Time                `json:"last_endpoint_seen_at,omitempty"`
+	EndpointDrift      bool                     `json:"endpoint_drift_warning"`
+	EndpointDriftIPs   []string                 `json:"endpoint_drift_ips,omitempty"`
+	RecentEndpoints    []EGMEndpointObservation `json:"recent_endpoints,omitempty"`
 }
 
 type Incident struct {

@@ -23,7 +23,10 @@ const (
 	EventDegraded         EventType = "DEGRADED"
 )
 
-const endpointDriftWindow = 5 * time.Minute
+const (
+	endpointDriftWindow   = 5 * time.Minute
+	recentEndpointHistory = 10
+)
 
 type Event struct {
 	Type       EventType
@@ -125,6 +128,12 @@ func (e *Engine) Snapshot() Snapshot {
 
 	egms := make([]model.EGM, 0, len(e.egms))
 	for _, egm := range e.egms {
+		if len(egm.EndpointDriftIPs) > 0 {
+			egm.EndpointDriftIPs = append([]string(nil), egm.EndpointDriftIPs...)
+		}
+		if len(egm.RecentEndpoints) > 0 {
+			egm.RecentEndpoints = append([]model.EGMEndpointObservation(nil), egm.RecentEndpoints...)
+		}
 		egms = append(egms, egm)
 	}
 
@@ -225,6 +234,7 @@ func (e *Engine) observeEndpoint(egm *model.EGM, event Event) {
 	}
 	if sourceIP != "" || sourcePort > 0 {
 		egm.LastEndpointSeenAt = event.At
+		egm.RecentEndpoints = updateRecentEndpoints(egm.RecentEndpoints, sourceIP, sourcePort, event.At, recentEndpointHistory)
 	}
 	if sourceIP == "" {
 		return
@@ -258,6 +268,52 @@ func (e *Engine) observeEndpoint(egm *model.EGM, event Event) {
 	} else {
 		egm.EndpointDriftIPs = nil
 	}
+}
+
+func updateRecentEndpoints(history []model.EGMEndpointObservation, ip string, port int, at time.Time, limit int) []model.EGMEndpointObservation {
+	if limit <= 0 || at.IsZero() {
+		return history
+	}
+	ip = strings.TrimSpace(ip)
+	if ip == "" && port <= 0 {
+		return history
+	}
+	records := make([]model.EGMEndpointObservation, 0, len(history)+1)
+	records = append(records, history...)
+	idx := -1
+	for i := range records {
+		if records[i].IPAddress == ip && records[i].Port == port {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		entry := records[idx]
+		if entry.FirstSeenAt.IsZero() || at.Before(entry.FirstSeenAt) {
+			entry.FirstSeenAt = at
+		}
+		if entry.LastSeenAt.IsZero() || at.After(entry.LastSeenAt) {
+			entry.LastSeenAt = at
+		}
+		if entry.SeenCount < 0 {
+			entry.SeenCount = 0
+		}
+		entry.SeenCount++
+		records = append(records[:idx], records[idx+1:]...)
+		records = append([]model.EGMEndpointObservation{entry}, records...)
+	} else {
+		records = append([]model.EGMEndpointObservation{{
+			IPAddress:   ip,
+			Port:        port,
+			FirstSeenAt: at,
+			LastSeenAt:  at,
+			SeenCount:   1,
+		}}, records...)
+	}
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	return records
 }
 
 func (e *Engine) openIncident(event Event) {
