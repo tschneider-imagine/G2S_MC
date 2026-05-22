@@ -631,8 +631,93 @@ func egmHistoryHandler(store *store.SQLiteStore) http.HandlerFunc {
 			Limit: queryLimit(r, 50),
 			EGMID: r.URL.Query().Get("egm_id"),
 		})
+		if err == nil && queryBool(r, "rollup_heartbeat", false) {
+			history = rollupHeartbeatHistory(history)
+		}
 		writeJSON(w, history, err)
 	}
+}
+
+func rollupHeartbeatHistory(history []model.EGMStatusSnapshot) []model.EGMStatusSnapshot {
+	if len(history) == 0 {
+		return history
+	}
+	rolled := make([]model.EGMStatusSnapshot, 0, len(history))
+	for i := 0; i < len(history); {
+		current := history[i]
+		if !isKeepAliveHistoryEvent(current) {
+			rolled = append(rolled, current)
+			i++
+			continue
+		}
+		egmID := current.EGMID
+		newest := current.CreatedAt
+		oldest := current.CreatedAt
+		count := 0
+		for i < len(history) {
+			row := history[i]
+			if !isKeepAliveHistoryEvent(row) || row.EGMID != egmID {
+				break
+			}
+			count++
+			if row.CreatedAt.After(newest) {
+				newest = row.CreatedAt
+			}
+			if row.CreatedAt.Before(oldest) {
+				oldest = row.CreatedAt
+			}
+			i++
+		}
+		bucket := current
+		bucket.CreatedAt = newest
+		bucket.HeartbeatRollup = true
+		bucket.HeartbeatRollupCount = count
+		bucket.HeartbeatRollupFirstSeenAt = &oldest
+		bucket.HeartbeatRollupLastSeenAt = &newest
+		bucket.Detail = heartbeatRollupSummary(count, oldest, newest)
+		rolled = append(rolled, bucket)
+	}
+	return rolled
+}
+
+func isKeepAliveHistoryEvent(snapshot model.EGMStatusSnapshot) bool {
+	return strings.EqualFold(strings.TrimSpace(snapshot.EventType), string(engine.EventKeepAlive))
+}
+
+func heartbeatRollupSummary(count int, firstSeen, lastSeen time.Time) string {
+	if count <= 0 {
+		count = 1
+	}
+	span := lastSeen.Sub(firstSeen)
+	if span < 0 {
+		span = -span
+	}
+	return fmt.Sprintf("keepAlive x%d over %s", count, formatRollupDuration(span))
+}
+
+func formatRollupDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = -duration
+	}
+	rounded := duration.Round(time.Second)
+	seconds := int64(rounded / time.Second)
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	remSeconds := seconds % 60
+	if minutes < 60 {
+		if remSeconds == 0 {
+			return fmt.Sprintf("%dm", minutes)
+		}
+		return fmt.Sprintf("%dm%ds", minutes, remSeconds)
+	}
+	hours := minutes / 60
+	remMinutes := minutes % 60
+	if remMinutes == 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh%dm", hours, remMinutes)
 }
 
 func complianceHandler(store *store.SQLiteStore) http.HandlerFunc {
@@ -1624,4 +1709,18 @@ func queryLimit(r *http.Request, fallback int) int {
 		return fallback
 	}
 	return limit
+}
+
+func queryBool(r *http.Request, key string, fallback bool) bool {
+	raw := strings.TrimSpace(strings.ToLower(r.URL.Query().Get(key)))
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	case "":
+		return fallback
+	default:
+		return fallback
+	}
 }

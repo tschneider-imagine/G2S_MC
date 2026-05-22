@@ -431,8 +431,13 @@ const dashboardHTML = `<!doctype html>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="state">State</button>
               <button type="button" class="timeline-filter-tab" data-timeline-filter="marker">Markers</button>
             </div>
+            <div class="timeline-rollup-controls">
+              <label class="timeline-toggle"><input id="timeline-rollup-heartbeat-toggle" type="checkbox" checked>Roll up heartbeat traffic</label>
+              <label class="timeline-toggle"><input id="timeline-show-raw-heartbeat-toggle" type="checkbox">Show raw heartbeat events</label>
+            </div>
             <span id="timeline-filter-label" class="muted-text">Showing all timeline events</span>
           </div>
+          <span id="timeline-heartbeat-mode-label" class="muted-text">Heartbeat mode: rolled up</span>
           <span id="timeline-grouping-label" class="muted-text">All EGM rows grouped by EGM ID; global rows remain grouped as global.</span>
         </div>
         <form id="run-marker-form" class="setup-form run-marker-form">
@@ -1409,6 +1414,28 @@ th {
   min-width: 0;
 }
 
+.timeline-rollup-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.timeline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.timeline-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
 .kv-list {
   display: grid;
   gap: 1px;
@@ -2309,7 +2336,7 @@ const dashboardJS = `const endpoints = {
   status: "/api/status",
   readyz: "/readyz",
   incidents: "/api/incidents?limit=20",
-  egmHistory: "/api/egms/history?limit=30",
+  egmHistory: "/api/egms/history",
   stateHistory: "/api/state-history?limit=30",
   runMarkers: "/api/run-markers?limit=30",
   operatorDrill: "/api/operator-drill",
@@ -2354,6 +2381,8 @@ const clientState = {
   egmSortDir: "asc",
   egmFilter: "all",
   timelineFilter: "all",
+  timelineRollupHeartbeat: true,
+  timelineShowRawHeartbeat: false,
   certSelectedRole: "g2s_ca_cert",
   certPreviewFingerprint: "",
   certPreviewResult: null,
@@ -2454,6 +2483,48 @@ function currentEGMFocusID() {
 function currentEGMFocusLabel() {
   const focusID = currentEGMFocusID();
   return focusID || "All EGMs";
+}
+
+function effectiveHeartbeatRollupEnabled() {
+  return clientState.timelineRollupHeartbeat === true && clientState.timelineShowRawHeartbeat !== true;
+}
+
+function egmHistoryEndpointURL() {
+  const params = new URLSearchParams();
+  params.set("limit", "30");
+  if (effectiveHeartbeatRollupEnabled()) {
+    params.set("rollup_heartbeat", "true");
+  }
+  return endpoints.egmHistory + "?" + params.toString();
+}
+
+function normalizeHeartbeatRollupCount(row) {
+  const count = Number(row?.heartbeat_rollup_count || 0);
+  if (row?.heartbeat_rollup === true) {
+    return count > 0 ? count : 1;
+  }
+  return 1;
+}
+
+function historyRowFirstSeenAt(row) {
+  const first = row?.heartbeat_rollup_first_seen_at;
+  return first || row?.created_at || "";
+}
+
+function historyRowLastSeenAt(row) {
+  const last = row?.heartbeat_rollup_last_seen_at;
+  return last || row?.created_at || "";
+}
+
+function historyRowDurationMS(row) {
+  const first = numericTime(historyRowFirstSeenAt(row));
+  const last = numericTime(historyRowLastSeenAt(row));
+  if (first <= 0 || last <= 0) return 0;
+  return Math.max(0, last - first);
+}
+
+function historyRowIsKeepAliveRollup(row) {
+  return row?.heartbeat_rollup === true && String(row?.event_type || "").toUpperCase() === "G2S_KEEPALIVE";
 }
 
 function normalizeGlobalSeverityFilter(value) {
@@ -2752,7 +2823,10 @@ function buildEGMGroupedSummaryRows(statusEGMs, historyRecords, policy, referenc
   historyList.forEach((record) => {
     const row = ensure(record?.egm_id);
     if (!row) return;
-    row.total_events += 1;
+    const eventWeight = isHeartbeatEventType(record?.event_type)
+      ? normalizeHeartbeatRollupCount(record)
+      : 1;
+    row.total_events += eventWeight;
     if (isHeartbeatEventType(record?.event_type)) {
       row.heartbeat_records.push(record);
     } else {
@@ -3043,18 +3117,19 @@ function heartbeatSummary(records, policy, referenceTime) {
     .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
   const commsOnline = heartbeats.filter((item) => String(item.event_type || "").toUpperCase() === "G2S_SESSION_ONLINE");
   const keepAlives = heartbeats.filter((item) => String(item.event_type || "").toUpperCase() === "G2S_KEEPALIVE");
-  const lastKeepAlive = keepAlives.length ? keepAlives[keepAlives.length - 1] : null;
+  const keepaliveCount = keepAlives.reduce((total, item) => total + normalizeHeartbeatRollupCount(item), 0);
+  const lastKeepAliveAt = keepAlives.length ? historyRowLastSeenAt(keepAlives[keepAlives.length - 1]) : "";
   const lastObserved = heartbeats.length ? heartbeats[heartbeats.length - 1] : null;
   let maxGapMs = 0;
   for (let i = 1; i < keepAlives.length; i++) {
-    const prev = new Date(keepAlives[i - 1].created_at || 0).getTime();
-    const next = new Date(keepAlives[i].created_at || 0).getTime();
+    const prev = numericTime(historyRowLastSeenAt(keepAlives[i - 1]));
+    const next = numericTime(historyRowFirstSeenAt(keepAlives[i]));
     if (Number.isFinite(prev) && Number.isFinite(next) && next >= prev) {
       maxGapMs = Math.max(maxGapMs, next - prev);
     }
   }
   const refTimeMs = referenceTime ? new Date(referenceTime).getTime() : Date.now();
-  const lastKeepAliveMs = lastKeepAlive ? new Date(lastKeepAlive.created_at || 0).getTime() : 0;
+  const lastKeepAliveMs = lastKeepAliveAt ? new Date(lastKeepAliveAt).getTime() : 0;
   const lastObservedMs = lastObserved ? new Date(lastObserved.created_at || 0).getTime() : 0;
   const sinceLastKeepAliveMs = lastKeepAliveMs && Number.isFinite(refTimeMs) ? Math.max(0, refTimeMs - lastKeepAliveMs) : 0;
   const sinceLastObservedMs = lastObservedMs && Number.isFinite(refTimeMs) ? Math.max(0, refTimeMs - lastObservedMs) : 0;
@@ -3065,17 +3140,17 @@ function heartbeatSummary(records, policy, referenceTime) {
   let message = "No commsOnLine or keepAlive traffic is present in the current window.";
   let severity = "idle";
   if (heartbeats.length > 0) {
-    if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > blockThresholdMs) {
+    if (keepaliveCount === 0 && intervalMs > 0 && sinceLastObservedMs > blockThresholdMs) {
       health = "ESCALATED";
       label = "Keepalive missing";
       message = "commsOnLine was observed, but keepAlive traffic did not follow before the escalation threshold.";
       severity = "critical";
-    } else if (keepAlives.length === 0 && intervalMs > 0 && sinceLastObservedMs > warningThresholdMs) {
+    } else if (keepaliveCount === 0 && intervalMs > 0 && sinceLastObservedMs > warningThresholdMs) {
       health = "WARNING";
       label = "Keepalive delayed";
       message = "commsOnLine was observed, but keepAlive traffic has not started within the warning threshold.";
       severity = "warning";
-    } else if (keepAlives.length === 0) {
+    } else if (keepaliveCount === 0) {
       health = "ONLINE_ONLY";
       label = "Online only";
       message = "commsOnLine was observed, but keepAlive traffic has not started in this window.";
@@ -3107,12 +3182,12 @@ function heartbeatSummary(records, policy, referenceTime) {
     severity: severity,
     label: label,
     message: message,
-    total: heartbeats.length,
+    total: commsOnline.length + keepaliveCount,
     comms_online_count: commsOnline.length,
-    keepalive_count: keepAlives.length,
+    keepalive_count: keepaliveCount,
     first_comms_online_at: commsOnline.length ? commsOnline[0].created_at : "",
     last_observed_at: lastObserved ? lastObserved.created_at : "",
-    last_keepalive_at: lastKeepAlive ? lastKeepAlive.created_at : "",
+    last_keepalive_at: lastKeepAliveAt,
     interval_ms: intervalMs || 0,
     warning_after_missed: warningAfterMissed,
     block_after_missed: blockAfterMissed,
@@ -3133,6 +3208,7 @@ function operatorDrillEvidence(records, drillState) {
   const heartbeatRecords = heartbeatEventsFromHistory(records);
   const drillRecords = heartbeatRecords.filter((item) => isOperatorDrillEvent(item));
   const liveRecords = heartbeatRecords.filter((item) => !isOperatorDrillEvent(item));
+  const weightedCount = (rows) => rows.reduce((total, row) => total + normalizeHeartbeatRollupCount(row), 0);
   let source = "NONE";
   if (drillRecords.length > 0 && liveRecords.length > 0) {
     source = "MIXED";
@@ -3143,9 +3219,9 @@ function operatorDrillEvidence(records, drillState) {
   }
   return {
     source: source,
-    total_events: heartbeatRecords.length,
-    drill_events: drillRecords.length,
-    live_events: liveRecords.length,
+    total_events: weightedCount(heartbeatRecords),
+    drill_events: weightedCount(drillRecords),
+    live_events: weightedCount(liveRecords),
     egm_ids: Array.from(new Set(drillRecords.map((item) => String(item?.egm_id || "").trim()).filter(Boolean))),
     last_drill_event_at: drillRecords.length ? drillRecords[drillRecords.length - 1].created_at : "",
     state: drillState || null
@@ -4892,15 +4968,30 @@ function buildCabinetRunTimeline(snapshot) {
 
   egmHistory.forEach((item) => {
     const heartbeat = isHeartbeatEventType(item.event_type);
+    const keepAliveRollup = historyRowIsKeepAliveRollup(item);
+    const keepAliveCount = normalizeHeartbeatRollupCount(item);
+    const firstSeen = historyRowFirstSeenAt(item);
+    const lastSeen = historyRowLastSeenAt(item);
+    const rollupDuration = historyRowDurationMS(item);
+    const rollupLabel = keepAliveRollup
+      ? ("keepAlive x" + String(keepAliveCount) + " over " + fmtDurationMs(rollupDuration))
+      : "";
     timeline.push({
       kind: heartbeat ? "heartbeat" : "egm",
       egm_id: String(item.egm_id || "").trim(),
       global: false,
       createdAt: item.created_at || "",
       sortTime: item.created_at ? new Date(item.created_at).getTime() : 0,
-      title: String(item.egm_id || "-") + " " + (heartbeat ? String(item.event_type || "heartbeat") : String(item.status || "-")),
-      detail: String(item.event_type || "-") + (item.detail ? " | " + String(item.detail) : ""),
-      meta: heartbeat ? "heartbeat traffic" : (item.last_error ? ("last error: " + String(item.last_error)) : "egm history")
+      title: keepAliveRollup
+        ? (String(item.egm_id || "-") + " " + rollupLabel)
+        : (String(item.egm_id || "-") + " " + (heartbeat ? String(item.event_type || "heartbeat") : String(item.status || "-"))),
+      detail: keepAliveRollup
+        ? ("rolled-up heartbeat bucket | first " + fmtTime(firstSeen) + " | last " + fmtTime(lastSeen))
+        : (String(item.event_type || "-") + (item.detail ? " | " + String(item.detail) : "")),
+      meta: heartbeat
+        ? (keepAliveRollup ? "heartbeat rollup traffic" : "heartbeat traffic")
+        : (item.last_error ? ("last error: " + String(item.last_error)) : "egm history"),
+      rolled_up: keepAliveRollup
     });
   });
 
@@ -4944,7 +5035,11 @@ function applyTimelineFocus(items) {
 
 function applyTimelineFilter(items) {
   if (clientState.timelineFilter === "all") {
-    return items.filter((item) => item.kind !== "heartbeat");
+    return items.filter((item) =>
+      item.kind !== "heartbeat" ||
+      item.rolled_up === true ||
+      clientState.timelineShowRawHeartbeat === true
+    );
   }
   return items.filter((item) => item.kind === clientState.timelineFilter);
 }
@@ -4952,15 +5047,20 @@ function applyTimelineFilter(items) {
 function updateTimelineFilterLabels(total, filtered, heartbeatCount) {
   const focusID = currentEGMFocusID();
   const map = {
-    all: heartbeatCount > 0 ? ("Showing all timeline events with " + heartbeatCount + " heartbeat row(s) collapsed") : "Showing all timeline events",
+    all: heartbeatCount > 0 ? ("Showing all timeline events with " + heartbeatCount + " heartbeat row(s) filtered by timeline mode") : "Showing all timeline events",
     incident: "Showing incident timeline events",
     egm: "Showing EGM timeline events",
-    heartbeat: "Showing raw heartbeat timeline events",
+    heartbeat: effectiveHeartbeatRollupEnabled()
+      ? "Showing rolled-up heartbeat timeline events"
+      : "Showing raw heartbeat timeline events",
     state: "Showing controller state timeline events",
     marker: "Showing operator run markers"
   };
   $("timeline-count").textContent = filtered + " / " + total + " events";
   $("timeline-filter-label").textContent = (focusID ? ("Focus " + focusID + " | ") : "") + (map[clientState.timelineFilter] || map.all);
+  $("timeline-heartbeat-mode-label").textContent = "Heartbeat mode: " +
+    (effectiveHeartbeatRollupEnabled() ? "rolled up" : "raw events") +
+    (clientState.timelineShowRawHeartbeat ? " (show raw enabled)" : "");
   document.querySelectorAll(".timeline-filter-tab").forEach((button) => {
     button.classList.toggle("is-active", (button.dataset.timelineFilter || "all") === clientState.timelineFilter);
   });
@@ -5329,6 +5429,31 @@ function renderEGMHistory(snapshot) {
     }
   });
 
+  const heartbeatRowsForDisplay = (rows) => {
+    const heartbeatRows = (Array.isArray(rows) ? rows : []).filter((item) => isHeartbeatEventType(item?.event_type));
+    if (clientState.timelineShowRawHeartbeat === true) {
+      return heartbeatRows.slice();
+    }
+    return heartbeatRows.filter((item) =>
+      historyRowIsKeepAliveRollup(item) ||
+      String(item?.event_type || "").toUpperCase() === "G2S_SESSION_ONLINE"
+    );
+  };
+
+  const historyRowHTML = (item) => {
+    const rolled = historyRowIsKeepAliveRollup(item);
+    const eventType = String(item?.event_type || "-");
+    const summaryText = rolled
+      ? ("keepAlive x" + String(normalizeHeartbeatRollupCount(item)) + " over " + fmtDurationMs(historyRowDurationMS(item)) +
+        " | first " + fmtTime(historyRowFirstSeenAt(item)) +
+        " | last " + fmtTime(historyRowLastSeenAt(item)))
+      : eventType + (item?.detail ? " | " + String(item.detail) : "");
+    return "<div class=\"item timeline-entry\">" +
+      "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id || "-") + (item.status ? (" " + statusPill(item.status)) : "") + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id || "-") + "</span></div></div>" +
+      "<span>" + escapeHTML(summaryText) + " at " + escapeHTML(fmtTime(item.created_at)) + "</span>" +
+    "</div>";
+  };
+
   if (focusID) {
     const bucket = grouped[focusID] || { egm_id: focusID, records: [], non_heartbeat: [] };
     const heartbeat = heartbeatSummary(bucket.records, currentHeartbeatPolicy(snapshot), new Date().toISOString());
@@ -5343,15 +5468,21 @@ function renderEGMHistory(snapshot) {
         heartbeat_summary: true
       });
     }
+    const heartbeatRows = heartbeatRowsForDisplay(bucket.records)
+      .slice()
+      .sort((a, b) => numericTime(b?.created_at) - numericTime(a?.created_at));
+    heartbeatRows.forEach((record) => rows.push(record));
     bucket.non_heartbeat
       .slice()
       .sort((a, b) => numericTime(b?.created_at) - numericTime(a?.created_at))
       .forEach((record) => rows.push(record));
     renderItems("egm-history", rows, "No EGM history yet", (item) =>
-      "<div class=\"item timeline-entry\">" +
-        "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id || "-") + (item.status ? (" " + statusPill(item.status)) : "") + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id || "-") + "</span></div></div>" +
-        "<span>" + escapeHTML(item.event_type || "-") + " at " + escapeHTML(fmtTime(item.created_at)) + (item.detail ? " | " + escapeHTML(item.detail) : "") + "</span>" +
-      "</div>"
+      item?.heartbeat_summary === true
+        ? ("<div class=\"item timeline-entry\">" +
+          "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id || "-") + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id || "-") + "</span><span class=\"timeline-kind timeline-kind-heartbeat\">heartbeat</span></div></div>" +
+          "<span>" + escapeHTML(item.event_type || "-") + " at " + escapeHTML(fmtTime(item.created_at)) + (item.detail ? " | " + escapeHTML(item.detail) : "") + "</span>" +
+          "</div>")
+        : historyRowHTML(item)
     );
     return;
   }
@@ -5365,6 +5496,9 @@ function renderEGMHistory(snapshot) {
   egmIDs.forEach((egmID) => {
     const bucket = grouped[egmID];
     const heartbeat = heartbeatSummary(bucket.records, currentHeartbeatPolicy(snapshot), new Date().toISOString());
+    const heartbeatRows = heartbeatRowsForDisplay(bucket.records)
+      .slice()
+      .sort((a, b) => numericTime(b?.created_at) - numericTime(a?.created_at));
     const nonHeartbeatRows = bucket.non_heartbeat
       .slice()
       .sort((a, b) => numericTime(b?.created_at) - numericTime(a?.created_at));
@@ -5372,16 +5506,14 @@ function renderEGMHistory(snapshot) {
     if (heartbeat.total > 0) {
       html += "<div class=\"item timeline-entry\"><div class=\"timeline-entry-head\"><strong>" + escapeHTML(egmID) + " heartbeat</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(egmID) + "</span><span class=\"timeline-kind timeline-kind-heartbeat\">heartbeat</span></div></div><span>" + escapeHTML(heartbeat.label) + " at " + escapeHTML(fmtTime(heartbeat.last_keepalive_at || heartbeat.first_comms_online_at || "")) + "</span><span>" + escapeHTML(heartbeat.message) + "</span></div>";
     }
-    if (nonHeartbeatRows.length === 0) {
+    if (heartbeatRows.length > 0) {
+      html += heartbeatRows.map((item) => historyRowHTML(item)).join("");
+    }
+    if (nonHeartbeatRows.length === 0 && heartbeatRows.length === 0) {
       html += "<div class=\"item\"><span>No non-heartbeat rows yet for this EGM.</span></div>";
       return;
     }
-    html += nonHeartbeatRows.map((item) =>
-      "<div class=\"item timeline-entry\">" +
-        "<div class=\"timeline-entry-head\"><strong>" + escapeHTML(item.egm_id || "-") + (item.status ? (" " + statusPill(item.status)) : "") + "</strong><div class=\"timeline-entry-tags\"><span class=\"timeline-egm-chip\">" + escapeHTML(item.egm_id || "-") + "</span></div></div>" +
-        "<span>" + escapeHTML(item.event_type || "-") + " at " + escapeHTML(fmtTime(item.created_at)) + (item.detail ? " | " + escapeHTML(item.detail) : "") + "</span>" +
-      "</div>"
-    ).join("");
+    html += nonHeartbeatRows.map((item) => historyRowHTML(item)).join("");
   });
   $("egm-history").innerHTML = html;
 }
@@ -5966,6 +6098,9 @@ function renderCabinetRunTimeline(snapshot) {
   const filtered = applyTimelineFilter(focusScoped);
   const heartbeatCount = focusScoped.filter((item) => item.kind === "heartbeat").length;
   const focusID = currentEGMFocusID();
+  $("timeline-rollup-heartbeat-toggle").checked = clientState.timelineRollupHeartbeat === true;
+  $("timeline-show-raw-heartbeat-toggle").checked = clientState.timelineShowRawHeartbeat === true;
+  $("timeline-rollup-heartbeat-toggle").disabled = clientState.timelineShowRawHeartbeat === true;
   updateTimelineFilterLabels(focusScoped.length, filtered.length, heartbeatCount);
   $("timeline-grouping-label").textContent = focusID
     ? ("Focused on " + focusID + "; EGM rows are filtered and global rows remain visible.")
@@ -7208,7 +7343,7 @@ async function pollOnce() {
       fetchJSON(endpoints.status),
       fetchReadyz(),
       fetchJSON(endpoints.incidents),
-      fetchJSON(endpoints.egmHistory),
+      fetchJSON(egmHistoryEndpointURL()),
       fetchJSON(endpoints.stateHistory),
       fetchJSON(endpoints.runMarkers),
       fetchJSON(endpoints.operatorDrill),
@@ -7618,6 +7753,16 @@ function bindControls() {
       clientState.timelineFilter = button.dataset.timelineFilter || "all";
       renderCabinetRunTimeline(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
     });
+  });
+  $("timeline-rollup-heartbeat-toggle").addEventListener("change", (event) => {
+    clientState.timelineRollupHeartbeat = event.target.checked === true;
+    renderCabinetRunTimeline(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    schedulePoll(0);
+  });
+  $("timeline-show-raw-heartbeat-toggle").addEventListener("change", (event) => {
+    clientState.timelineShowRawHeartbeat = event.target.checked === true;
+    renderCabinetRunTimeline(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    schedulePoll(0);
   });
 
   document.querySelectorAll(".sort-button").forEach((button) => {

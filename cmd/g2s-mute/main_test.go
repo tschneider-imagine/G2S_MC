@@ -1714,3 +1714,114 @@ func TestOperatorDrillHandlerGETAndPOST(t *testing.T) {
 		t.Fatal("expected auto_heartbeat_paused to be true after pause")
 	}
 }
+
+func TestRollupHeartbeatHistoryCollapsesConsecutiveKeepAliveBuckets(t *testing.T) {
+	base := time.Date(2026, time.May, 22, 12, 0, 0, 0, time.UTC)
+	history := []model.EGMStatusSnapshot{
+		{EGMID: "EGM-02", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(7 * time.Second)},
+		{EGMID: "EGM-02", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(6 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(5 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_SESSION_ONLINE", CreatedAt: base.Add(4 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(3 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(2 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(1 * time.Second)},
+	}
+
+	rolled := rollupHeartbeatHistory(history)
+	if len(rolled) != 4 {
+		t.Fatalf("rolled len = %d, want 4", len(rolled))
+	}
+
+	if !rolled[0].HeartbeatRollup || rolled[0].HeartbeatRollupCount != 2 {
+		t.Fatalf("bucket[0] rollup = %+v, want keepAlive x2", rolled[0])
+	}
+	if rolled[0].HeartbeatRollupFirstSeenAt == nil || !rolled[0].HeartbeatRollupFirstSeenAt.Equal(base.Add(6*time.Second)) {
+		t.Fatalf("bucket[0] first_seen = %v, want %v", rolled[0].HeartbeatRollupFirstSeenAt, base.Add(6*time.Second))
+	}
+	if rolled[0].HeartbeatRollupLastSeenAt == nil || !rolled[0].HeartbeatRollupLastSeenAt.Equal(base.Add(7*time.Second)) {
+		t.Fatalf("bucket[0] last_seen = %v, want %v", rolled[0].HeartbeatRollupLastSeenAt, base.Add(7*time.Second))
+	}
+
+	if !rolled[1].HeartbeatRollup || rolled[1].HeartbeatRollupCount != 1 {
+		t.Fatalf("bucket[1] rollup = %+v, want keepAlive x1", rolled[1])
+	}
+	if rolled[2].EventType != "G2S_SESSION_ONLINE" || rolled[2].HeartbeatRollup {
+		t.Fatalf("bucket[2] = %+v, want non-rollup session event", rolled[2])
+	}
+	if !rolled[3].HeartbeatRollup || rolled[3].HeartbeatRollupCount != 3 {
+		t.Fatalf("bucket[3] rollup = %+v, want keepAlive x3", rolled[3])
+	}
+	if rolled[3].HeartbeatRollupFirstSeenAt == nil || !rolled[3].HeartbeatRollupFirstSeenAt.Equal(base.Add(1*time.Second)) {
+		t.Fatalf("bucket[3] first_seen = %v, want %v", rolled[3].HeartbeatRollupFirstSeenAt, base.Add(1*time.Second))
+	}
+	if rolled[3].HeartbeatRollupLastSeenAt == nil || !rolled[3].HeartbeatRollupLastSeenAt.Equal(base.Add(3*time.Second)) {
+		t.Fatalf("bucket[3] last_seen = %v, want %v", rolled[3].HeartbeatRollupLastSeenAt, base.Add(3*time.Second))
+	}
+}
+
+func TestEGMHistoryHandlerRollupHeartbeatQueryParam(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	base := time.Date(2026, time.May, 22, 13, 0, 0, 0, time.UTC)
+	rows := []model.EGMStatusSnapshot{
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(1 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(2 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(3 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_SESSION_ONLINE", CreatedAt: base.Add(4 * time.Second)},
+		{EGMID: "EGM-01", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(5 * time.Second)},
+		{EGMID: "EGM-02", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(6 * time.Second)},
+		{EGMID: "EGM-02", Status: model.EGMGreen, EventType: "G2S_KEEPALIVE", CreatedAt: base.Add(7 * time.Second)},
+	}
+	for _, row := range rows {
+		if err := auditStore.RecordEGMStatus(ctx, row); err != nil {
+			t.Fatalf("record status: %v", err)
+		}
+	}
+
+	handler := egmHistoryHandler(auditStore)
+
+	rawReq := httptest.NewRequest(http.MethodGet, "/api/egms/history?limit=20", nil)
+	rawRec := httptest.NewRecorder()
+	handler(rawRec, rawReq)
+	if rawRec.Code != http.StatusOK {
+		t.Fatalf("raw status = %d: %s", rawRec.Code, rawRec.Body.String())
+	}
+	var raw []model.EGMStatusSnapshot
+	if err := json.Unmarshal(rawRec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw history: %v", err)
+	}
+	if len(raw) != len(rows) {
+		t.Fatalf("raw len = %d, want %d", len(raw), len(rows))
+	}
+
+	rolledReq := httptest.NewRequest(http.MethodGet, "/api/egms/history?limit=20&rollup_heartbeat=true", nil)
+	rolledRec := httptest.NewRecorder()
+	handler(rolledRec, rolledReq)
+	if rolledRec.Code != http.StatusOK {
+		t.Fatalf("rolled status = %d: %s", rolledRec.Code, rolledRec.Body.String())
+	}
+	var rolled []model.EGMStatusSnapshot
+	if err := json.Unmarshal(rolledRec.Body.Bytes(), &rolled); err != nil {
+		t.Fatalf("decode rolled history: %v", err)
+	}
+	if len(rolled) != 4 {
+		t.Fatalf("rolled len = %d, want 4", len(rolled))
+	}
+	if !rolled[0].HeartbeatRollup || rolled[0].HeartbeatRollupCount != 2 || rolled[0].EGMID != "EGM-02" {
+		t.Fatalf("rolled[0] = %+v, want EGM-02 keepAlive x2 bucket", rolled[0])
+	}
+	if !rolled[1].HeartbeatRollup || rolled[1].HeartbeatRollupCount != 1 || rolled[1].EGMID != "EGM-01" {
+		t.Fatalf("rolled[1] = %+v, want EGM-01 keepAlive x1 bucket", rolled[1])
+	}
+	if rolled[2].EventType != "G2S_SESSION_ONLINE" || rolled[2].HeartbeatRollup {
+		t.Fatalf("rolled[2] = %+v, want non-rollup session row", rolled[2])
+	}
+	if !rolled[3].HeartbeatRollup || rolled[3].HeartbeatRollupCount != 3 || rolled[3].EGMID != "EGM-01" {
+		t.Fatalf("rolled[3] = %+v, want EGM-01 keepAlive x3 bucket", rolled[3])
+	}
+}

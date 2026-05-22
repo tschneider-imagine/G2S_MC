@@ -92,12 +92,16 @@ type Incident struct {
 }
 
 type EGMStatusSnapshot struct {
-	EGMID     string    `json:"egm_id"`
-	Status    EGMHealth `json:"status"`
-	EventType string    `json:"event_type"`
-	Detail    string    `json:"detail,omitempty"`
-	LastError string    `json:"last_error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	EGMID                      string     `json:"egm_id"`
+	Status                     EGMHealth  `json:"status"`
+	EventType                  string     `json:"event_type"`
+	Detail                     string     `json:"detail,omitempty"`
+	LastError                  string     `json:"last_error,omitempty"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	HeartbeatRollup            bool       `json:"heartbeat_rollup,omitempty"`
+	HeartbeatRollupCount       int        `json:"heartbeat_rollup_count,omitempty"`
+	HeartbeatRollupFirstSeenAt *time.Time `json:"heartbeat_rollup_first_seen_at,omitempty"`
+	HeartbeatRollupLastSeenAt  *time.Time `json:"heartbeat_rollup_last_seen_at,omitempty"`
 }
 
 type EGMComplianceLog struct {
