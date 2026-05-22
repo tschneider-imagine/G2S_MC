@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -150,6 +151,7 @@ func main() {
 			http.MethodDelete,
 		),
 	)
+	mux.HandleFunc("/api/cabinet-profile/suggestions", cabinetProfileSuggestionsHandler(eng, auditStore, cfg))
 	mux.HandleFunc("/api/cabinet-preflight", cabinetPreflightHandler(eng, auditStore, cfg, runtimeInfo{
 		ConfigPath:       *configPath,
 		StartedAt:        startedAt,
@@ -328,6 +330,14 @@ type cabinetProfileOverrideView struct {
 	Profile   config.CabinetProfile `json:"profile"`
 	UpdatedAt time.Time             `json:"updated_at"`
 	UpdatedBy string                `json:"updated_by,omitempty"`
+}
+
+type cabinetProfileSuggestionsResponse struct {
+	ObservedEGMIDs             []string `json:"observed_egm_ids"`
+	RecommendedFirstTestEGMIDs []string `json:"recommended_first_test_egm_ids"`
+	PlaceholderDetected        bool     `json:"placeholder_detected"`
+	Reason                     string   `json:"reason"`
+	Messages                   []string `json:"messages"`
 }
 
 func statusHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo) http.HandlerFunc {
@@ -785,6 +795,24 @@ func cabinetProfileHandler(store *store.SQLiteStore, cfg config.Config) http.Han
 	}
 }
 
+func cabinetProfileSuggestionsHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		profile, err := resolveCabinetProfile(r.Context(), store, cfg.CabinetProfile)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+
+		suggestions := buildCabinetProfileSuggestions(eng.Snapshot(), profile.Effective.FirstTestEGMIDs)
+		writeJSON(w, suggestions, nil)
+	}
+}
+
 func heartbeatPolicyHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -952,6 +980,90 @@ func resolveHeartbeatPolicy(ctx context.Context, store *store.SQLiteStore, fileT
 	resolved.PolicySource = "override"
 	resolved.PolicyLastUpdatedAt = &override.UpdatedAt
 	return resolved, nil
+}
+
+func buildCabinetProfileSuggestions(snapshot engine.Snapshot, currentFirstTestEGMIDs []string) cabinetProfileSuggestionsResponse {
+	observed := observedEGMIDsNewestFirst(snapshot)
+	recommended := recommendedFirstTestEGMIDs(observed)
+	placeholderDetected := cabinetProfilePlaceholderDetected(currentFirstTestEGMIDs)
+	response := cabinetProfileSuggestionsResponse{
+		ObservedEGMIDs:             observed,
+		RecommendedFirstTestEGMIDs: recommended,
+		PlaceholderDetected:        placeholderDetected,
+		Messages:                   []string{},
+	}
+
+	if len(observed) == 0 {
+		response.Reason = "No observed EGM traffic is available yet."
+		response.Messages = append(response.Messages, "Start cabinet session traffic (commsOnLine/keepAlive) to generate observed EGM IDs.")
+	} else {
+		response.Reason = fmt.Sprintf("Recommended first-test EGM IDs use the newest observed EGMs (%d of %d).", len(recommended), len(observed))
+		response.Messages = append(response.Messages, "Use Observed EGMs fills the form only; save to persist cabinet profile changes.")
+	}
+
+	if placeholderDetected {
+		response.Messages = append(response.Messages, "Current first-test EGM IDs include placeholder-style values.")
+	}
+	if len(recommended) > 0 {
+		response.Messages = append(response.Messages, "Recommended first-test EGM IDs: "+strings.Join(recommended, ", "))
+	}
+
+	return response
+}
+
+func observedEGMIDsNewestFirst(snapshot engine.Snapshot) []string {
+	type observedEGM struct {
+		id       string
+		lastSeen time.Time
+	}
+
+	lastSeenByID := map[string]time.Time{}
+	for _, egm := range snapshot.EGMs {
+		id := strings.TrimSpace(egm.ID)
+		if id == "" || egm.LastSeen.IsZero() {
+			continue
+		}
+		if previous, ok := lastSeenByID[id]; !ok || egm.LastSeen.After(previous) {
+			lastSeenByID[id] = egm.LastSeen
+		}
+	}
+
+	rows := make([]observedEGM, 0, len(lastSeenByID))
+	for id, lastSeen := range lastSeenByID {
+		rows = append(rows, observedEGM{id: id, lastSeen: lastSeen})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].lastSeen.Equal(rows[j].lastSeen) {
+			return rows[i].id < rows[j].id
+		}
+		return rows[i].lastSeen.After(rows[j].lastSeen)
+	})
+
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.id)
+	}
+	return ids
+}
+
+func recommendedFirstTestEGMIDs(observed []string) []string {
+	if len(observed) == 0 {
+		return []string{}
+	}
+	limit := len(observed)
+	if limit > 3 {
+		limit = 3
+	}
+	return append([]string{}, observed[:limit]...)
+}
+
+func cabinetProfilePlaceholderDetected(ids []string) bool {
+	for _, id := range ids {
+		if looksPlaceholderText(id) {
+			return true
+		}
+	}
+	return false
 }
 
 type cabinetProfileOverrideUsage struct {

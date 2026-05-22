@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -632,6 +633,95 @@ func TestCabinetProfileHandlerCRUD(t *testing.T) {
 	}
 	if deleteBody.ProfileSource != "file" || deleteBody.OverridePresent {
 		t.Fatalf("DELETE response unexpected: %+v", deleteBody)
+	}
+}
+
+func TestCabinetProfileSuggestionsHandlerReturnsObservedRecommendations(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://file.example/g2s",
+			ListenerDNSName: "file.example",
+			RequiredSANDNS:  []string{"file.example"},
+			HostID:          "HOST-FILE",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+		EGMRoster: []config.EGM{
+			{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443},
+			{EGMID: "EGM-02", IPAddress: "127.0.0.1", Port: 9444},
+			{EGMID: "EGM-03", IPAddress: "127.0.0.1", Port: 9445},
+		},
+	}
+	eng := engine.New("G2S-MC-SUGGESTIONS", cfg.EGMRoster)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eng.Start(runCtx)
+	now := time.Now().UTC()
+	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: now})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-02", At: now.Add(1 * time.Second)})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-01", At: now.Add(2 * time.Second)})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-03", At: now.Add(3 * time.Second)})
+	waitForLastEvent(t, eng, string(engine.EventKeepAlive))
+
+	handler := cabinetProfileSuggestionsHandler(eng, auditStore, cfg)
+	req := httptest.NewRequest(http.MethodGet, "/api/cabinet-profile/suggestions", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body cabinetProfileSuggestionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode suggestions response: %v", err)
+	}
+
+	wantObserved := []string{"EGM-03", "EGM-01", "EGM-02"}
+	if !reflect.DeepEqual(body.ObservedEGMIDs, wantObserved) {
+		t.Fatalf("observed_egm_ids = %#v, want %#v", body.ObservedEGMIDs, wantObserved)
+	}
+	if !reflect.DeepEqual(body.RecommendedFirstTestEGMIDs, wantObserved) {
+		t.Fatalf("recommended_first_test_egm_ids = %#v, want %#v", body.RecommendedFirstTestEGMIDs, wantObserved)
+	}
+	if !body.PlaceholderDetected {
+		t.Fatal("placeholder_detected = false, want true")
+	}
+	if body.Reason == "" {
+		t.Fatal("expected non-empty reason")
+	}
+	if len(body.Messages) == 0 {
+		t.Fatal("expected at least one operator message")
+	}
+}
+
+func TestBuildCabinetProfileSuggestionsLimitsRecommendationsToThree(t *testing.T) {
+	base := time.Now().UTC()
+	snapshot := engine.Snapshot{
+		EGMs: []model.EGM{
+			{ID: "EGM-01", LastSeen: base.Add(1 * time.Second)},
+			{ID: "EGM-02", LastSeen: base.Add(2 * time.Second)},
+			{ID: "EGM-03", LastSeen: base.Add(3 * time.Second)},
+			{ID: "EGM-04", LastSeen: base.Add(4 * time.Second)},
+		},
+	}
+
+	got := buildCabinetProfileSuggestions(snapshot, []string{"CAB-101"})
+	wantObserved := []string{"EGM-04", "EGM-03", "EGM-02", "EGM-01"}
+	wantRecommended := []string{"EGM-04", "EGM-03", "EGM-02"}
+	if !reflect.DeepEqual(got.ObservedEGMIDs, wantObserved) {
+		t.Fatalf("observed_egm_ids = %#v, want %#v", got.ObservedEGMIDs, wantObserved)
+	}
+	if !reflect.DeepEqual(got.RecommendedFirstTestEGMIDs, wantRecommended) {
+		t.Fatalf("recommended_first_test_egm_ids = %#v, want %#v", got.RecommendedFirstTestEGMIDs, wantRecommended)
+	}
+	if got.PlaceholderDetected {
+		t.Fatal("placeholder_detected = true, want false")
 	}
 }
 

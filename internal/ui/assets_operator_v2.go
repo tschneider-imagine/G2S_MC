@@ -273,9 +273,11 @@ const dashboardHTML = `<!doctype html>
             </div>
           </div>
           <div id="setup-validation-list" class="validation-list"></div>
+          <div id="setup-observed-egms-preview" class="muted-text">Observed EGM suggestions will appear here.</div>
           <div class="setup-actions">
             <button id="setup-save-button" type="submit" disabled>Save Override</button>
             <button id="setup-reset-button" type="button" class="secondary-button" disabled>Clear Override</button>
+            <button id="setup-use-observed-egms-button" type="button" class="secondary-button">Use Observed EGMs</button>
             <button id="setup-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
         </form>
@@ -1803,6 +1805,7 @@ const dashboardJS = `const endpoints = {
   certificates: "/api/certificates",
   sessionEvidence: "/api/session-evidence?limit=20",
   cabinetProfile: "/api/cabinet-profile",
+  cabinetProfileSuggestions: "/api/cabinet-profile/suggestions",
   heartbeatPolicy: "/api/heartbeat-policy",
   cabinetPreflight: "/api/cabinet-preflight",
   certificateImport: "/api/certificates/import",
@@ -1872,6 +1875,7 @@ function emptySnapshot() {
     certificates: [],
     sessionEvidence: [],
     cabinetProfile: null,
+    cabinetProfileSuggestions: null,
     heartbeatPolicy: null,
     cabinetPreflight: null
   };
@@ -1895,6 +1899,7 @@ function copySnapshot(snapshot) {
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
     cabinetProfile: snapshot.cabinetProfile || null,
+    cabinetProfileSuggestions: snapshot.cabinetProfileSuggestions || null,
     heartbeatPolicy: snapshot.heartbeatPolicy || null,
     cabinetPreflight: snapshot.cabinetPreflight || null
   };
@@ -4623,6 +4628,47 @@ function fillCabinetSetupForm(profile) {
   renderCabinetSetupValidation();
 }
 
+function normalizeCabinetProfileSuggestions(payload) {
+  const observed = Array.isArray(payload?.observed_egm_ids)
+    ? payload.observed_egm_ids.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const recommended = Array.isArray(payload?.recommended_first_test_egm_ids)
+    ? payload.recommended_first_test_egm_ids.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const messages = Array.isArray(payload?.messages)
+    ? payload.messages.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  return {
+    observed_egm_ids: observed,
+    recommended_first_test_egm_ids: recommended,
+    placeholder_detected: payload?.placeholder_detected === true,
+    reason: String(payload?.reason || "").trim(),
+    messages: messages
+  };
+}
+
+function cabinetProfileSuggestionsFromSnapshot(snapshot) {
+  return normalizeCabinetProfileSuggestions(snapshot?.cabinetProfileSuggestions);
+}
+
+function renderCabinetProfileSuggestions(snapshot) {
+  const suggestions = cabinetProfileSuggestionsFromSnapshot(snapshot);
+  let preview = "";
+  if (suggestions.recommended_first_test_egm_ids.length > 0) {
+    preview = "Preview apply: " + suggestions.recommended_first_test_egm_ids.join(", ") + " (form only; Save Override persists).";
+  } else if (suggestions.observed_egm_ids.length > 0) {
+    preview = "Observed EGMs: " + suggestions.observed_egm_ids.join(", ") + ".";
+  } else if (suggestions.reason) {
+    preview = suggestions.reason;
+  } else {
+    preview = "No observed EGMs yet; start cabinet traffic to generate suggestions.";
+  }
+  if (suggestions.placeholder_detected) {
+    preview += " Placeholder IDs detected in current first-test values.";
+  }
+  $("setup-observed-egms-preview").textContent = preview;
+}
+
 function validateCabinetSetupProfile(profile) {
   const problems = [];
   let parsedURL = null;
@@ -4733,12 +4779,39 @@ async function copySetupTokenToClipboard() {
 
 async function reloadCabinetProfileForm() {
   setSetupState("working", "Reloading cabinet profile.");
-  const profile = await fetchJSON(endpoints.cabinetProfile);
+  const [profile, suggestions] = await Promise.all([
+    fetchJSON(endpoints.cabinetProfile),
+    fetchJSON(endpoints.cabinetProfileSuggestions)
+  ]);
   clientState.displaySnapshot = clientState.displaySnapshot || emptySnapshot();
   clientState.displaySnapshot.cabinetProfile = profile;
+  clientState.displaySnapshot.cabinetProfileSuggestions = normalizeCabinetProfileSuggestions(suggestions);
   fillCabinetSetupForm(profile.effective || {});
+  renderCabinetProfileSuggestions(clientState.displaySnapshot);
   setSetupState("ready", "Current values loaded from the appliance.");
   return profile;
+}
+
+async function useObservedEGMSuggestions() {
+  try {
+    setSetupState("working", "Loading observed EGM suggestions.");
+    const suggestionsRaw = await fetchJSON(endpoints.cabinetProfileSuggestions);
+    const suggestions = normalizeCabinetProfileSuggestions(suggestionsRaw);
+    clientState.displaySnapshot = clientState.displaySnapshot || emptySnapshot();
+    clientState.displaySnapshot.cabinetProfileSuggestions = suggestions;
+    renderCabinetProfileSuggestions(clientState.displaySnapshot);
+    if (suggestions.recommended_first_test_egm_ids.length === 0) {
+      setSetupState("ready", suggestions.reason || "No observed EGM recommendation is available yet.");
+      return;
+    }
+    $("setup-first-test-egm-ids").value = joinList(suggestions.recommended_first_test_egm_ids);
+    renderCabinetSetupValidation();
+    renderFirstCabinetSession(clientState.displaySnapshot);
+    renderSessionEvidence(clientState.displaySnapshot);
+    setSetupState("ready", "Applied observed EGM recommendation to the form. Save Override to persist.");
+  } catch (err) {
+    setSetupState("blocked", err && err.message ? err.message : "Unable to load observed EGM suggestions.");
+  }
 }
 
 async function saveCabinetProfileOverride(event) {
@@ -5107,9 +5180,11 @@ function syncCabinetSetupFromSnapshot(snapshot) {
   const profile = profileResponse?.effective || snapshot?.status?.cabinet_profile || {};
   if (!profile || cabinetSetupHasFocus()) {
     renderCabinetSetupValidation();
+    renderCabinetProfileSuggestions(snapshot);
     return;
   }
   fillCabinetSetupForm(profile);
+  renderCabinetProfileSuggestions(snapshot);
 }
 
 function renderStatus(snapshot) {
@@ -5331,11 +5406,12 @@ async function pollOnce() {
       fetchJSON(endpoints.certificates),
       fetchJSON(endpoints.sessionEvidence),
       fetchJSON(endpoints.cabinetProfile),
+      fetchJSON(endpoints.cabinetProfileSuggestions),
       fetchJSON(endpoints.heartbeatPolicy),
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -5366,6 +5442,7 @@ async function pollOnce() {
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
     if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
+    if (cabinetProfileSuggestionsResult.status === "fulfilled") snapshot.cabinetProfileSuggestions = normalizeCabinetProfileSuggestions(cabinetProfileSuggestionsResult.value);
     if (heartbeatPolicyResult.status === "fulfilled") snapshot.heartbeatPolicy = heartbeatPolicyResult.value;
     if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
 
@@ -5377,6 +5454,7 @@ async function pollOnce() {
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
     if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
+    if (cabinetProfileSuggestionsResult.status !== "fulfilled") failures.push("cabinet profile suggestions unavailable");
     if (heartbeatPolicyResult.status !== "fulfilled") failures.push("heartbeat policy unavailable");
     if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
 
@@ -5593,6 +5671,7 @@ function bindControls() {
 
   $("cabinet-setup-form").addEventListener("submit", saveCabinetProfileOverride);
   $("setup-reset-button").addEventListener("click", clearCabinetProfileOverride);
+  $("setup-use-observed-egms-button").addEventListener("click", useObservedEGMSuggestions);
   $("setup-copy-token-button").addEventListener("click", copySetupTokenToClipboard);
   $("setup-reload-button").addEventListener("click", () => {
     reloadCabinetProfileForm().catch((err) => {
