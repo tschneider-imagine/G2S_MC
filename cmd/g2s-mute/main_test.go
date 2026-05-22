@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1325,6 +1327,143 @@ func TestSessionEvidenceHandlerCRUDAndAuth(t *testing.T) {
 	strictHandler(unauthorizedDeleteRec, unauthorizedDeleteReq)
 	if !deniedByAuth(unauthorizedDeleteRec.Code) {
 		t.Fatalf("DELETE public network without token status = %d, want 401/403", unauthorizedDeleteRec.Code)
+	}
+}
+
+func TestSessionEvidenceByIDDeleteRouteAndAuth(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	record := model.SessionEvidenceRecord{
+		CreatedAt:      time.Now().UTC().Truncate(time.Second),
+		OverallState:   "LAB_READY",
+		ReadyzState:    "READY_LAB",
+		PreflightState: "PASS",
+		HostID:         "HOST-TSPI4-001",
+		WireHostURL:    "https://tspi4.local:8444/g2s",
+		OperatorNotes:  "route test",
+		PayloadJSON:    `{"session":{"overall_state":"LAB_READY"}}`,
+	}
+	id, err := auditStore.RecordSessionEvidence(ctx, record)
+	if err != nil {
+		t.Fatalf("record session evidence: %v", err)
+	}
+
+	cfg := config.Config{API: config.API{AuthToken: "lab-secret"}}
+	handler := requireMutationAuthForMethods(
+		sessionEvidenceByIDHandler(auditStore),
+		cfg,
+		http.MethodDelete,
+	)
+
+	unauthorizedReq := httptest.NewRequest(http.MethodDelete, "/api/session-evidence/"+strconv.FormatInt(id, 10), nil)
+	unauthorizedReq.RemoteAddr = "198.51.100.10:9999"
+	unauthorizedRec := httptest.NewRecorder()
+	handler(unauthorizedRec, unauthorizedReq)
+	if !deniedByAuth(unauthorizedRec.Code) {
+		t.Fatalf("DELETE without token status = %d, want 401/403", unauthorizedRec.Code)
+	}
+
+	authorizedReq := httptest.NewRequest(http.MethodDelete, "/api/session-evidence/"+strconv.FormatInt(id, 10), nil)
+	authorizedReq.RemoteAddr = "198.51.100.10:9999"
+	authorizedReq.Header.Set("Authorization", "Bearer lab-secret")
+	authorizedRec := httptest.NewRecorder()
+	handler(authorizedRec, authorizedReq)
+	if authorizedRec.Code != http.StatusOK {
+		t.Fatalf("DELETE with token status = %d: %s", authorizedRec.Code, authorizedRec.Body.String())
+	}
+
+	missingReq := httptest.NewRequest(http.MethodDelete, "/api/session-evidence/"+strconv.FormatInt(id, 10), nil)
+	missingReq.RemoteAddr = "198.51.100.10:9999"
+	missingReq.Header.Set("Authorization", "Bearer lab-secret")
+	missingRec := httptest.NewRecorder()
+	handler(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("DELETE missing status = %d, want 404", missingRec.Code)
+	}
+
+	invalidReq := httptest.NewRequest(http.MethodDelete, "/api/session-evidence/not-a-number", nil)
+	invalidReq.RemoteAddr = "198.51.100.10:9999"
+	invalidReq.Header.Set("Authorization", "Bearer lab-secret")
+	invalidRec := httptest.NewRecorder()
+	handler(invalidRec, invalidReq)
+	if invalidRec.Code != http.StatusBadRequest {
+		t.Fatalf("DELETE invalid id status = %d, want 400", invalidRec.Code)
+	}
+}
+
+func TestSessionEvidenceExportAllHandlerShapeAndNoAuthRequirement(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	records := []model.SessionEvidenceRecord{
+		{
+			CreatedAt:      time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second),
+			OverallState:   "LAB_READY",
+			ReadyzState:    "READY_LAB",
+			PreflightState: "PASS",
+			HostID:         "HOST-TSPI4-001",
+			WireHostURL:    "https://tspi4.local:8444/g2s",
+			OperatorNotes:  "first capture",
+			PayloadJSON:    `{"session":{"overall_state":"LAB_READY"},"operator_notes":"first capture"}`,
+		},
+		{
+			CreatedAt:      time.Now().UTC().Add(-1 * time.Minute).Truncate(time.Second),
+			OverallState:   "BLOCKED",
+			ReadyzState:    "DEGRADED",
+			PreflightState: "FAIL",
+			HostID:         "HOST-TSPI4-001",
+			WireHostURL:    "https://tspi4.local:8444/g2s",
+			OperatorNotes:  "second capture",
+			PayloadJSON:    `{"session":{"overall_state":"BLOCKED"},"operator_notes":"second capture"}`,
+		},
+	}
+	for _, record := range records {
+		if _, err := auditStore.RecordSessionEvidence(ctx, record); err != nil {
+			t.Fatalf("record session evidence: %v", err)
+		}
+	}
+
+	handler := sessionEvidenceExportAllHandler(auditStore)
+	req := httptest.NewRequest(http.MethodGet, "/api/session-evidence/export-all", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET export-all status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("content-type = %q, want application/json", rec.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rec.Header().Get("Content-Disposition"), "attachment;") {
+		t.Fatalf("content-disposition = %q, want attachment", rec.Header().Get("Content-Disposition"))
+	}
+
+	var archive sessionEvidenceArchive
+	if err := json.Unmarshal(rec.Body.Bytes(), &archive); err != nil {
+		t.Fatalf("decode export-all payload: %v", err)
+	}
+	if archive.SummaryIndex.CaptureCount != 2 {
+		t.Fatalf("capture_count = %d, want 2", archive.SummaryIndex.CaptureCount)
+	}
+	if len(archive.SummaryIndex.Captures) != 2 {
+		t.Fatalf("summary captures len = %d, want 2", len(archive.SummaryIndex.Captures))
+	}
+	if len(archive.CaptureFiles) != 2 {
+		t.Fatalf("capture files len = %d, want 2", len(archive.CaptureFiles))
+	}
+	if archive.CaptureFiles[0].JSONFileName == "" || archive.CaptureFiles[0].MarkdownFileName == "" {
+		t.Fatalf("missing archive filenames in capture files")
+	}
+	if archive.CaptureFiles[0].MarkdownReport == "" {
+		t.Fatalf("missing markdown report in export-all payload")
 	}
 }
 

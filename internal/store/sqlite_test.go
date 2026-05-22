@@ -403,8 +403,19 @@ func TestSessionEvidenceCRUD(t *testing.T) {
 		t.Fatalf("payload_json = %q, want %q", records[0].PayloadJSON, record.PayloadJSON)
 	}
 
-	if err := store.DeleteSessionEvidence(ctx, id); err != nil {
-		t.Fatalf("delete session evidence: %v", err)
+	deleted, err := store.DeleteSessionEvidenceByID(ctx, id)
+	if err != nil {
+		t.Fatalf("delete session evidence by id: %v", err)
+	}
+	if !deleted {
+		t.Fatalf("delete session evidence by id returned deleted=false")
+	}
+	deleted, err = store.DeleteSessionEvidenceByID(ctx, id)
+	if err != nil {
+		t.Fatalf("delete missing session evidence by id: %v", err)
+	}
+	if deleted {
+		t.Fatalf("delete missing session evidence by id returned deleted=true")
 	}
 	assertCount(t, store, "session_evidence_records", 0)
 }

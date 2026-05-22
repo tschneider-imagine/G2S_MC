@@ -679,8 +679,53 @@ func (s *SQLiteStore) ListSessionEvidence(ctx context.Context, limit int) ([]mod
 }
 
 func (s *SQLiteStore) DeleteSessionEvidence(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM session_evidence_records WHERE id = ?`, id)
+	_, err := s.DeleteSessionEvidenceByID(ctx, id)
 	return err
+}
+
+func (s *SQLiteStore) DeleteSessionEvidenceByID(ctx context.Context, id int64) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM session_evidence_records WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return deleted > 0, nil
+}
+
+func (s *SQLiteStore) ListAllSessionEvidence(ctx context.Context) ([]model.SessionEvidenceRecord, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, created_at, overall_state, readyz_state, preflight_state, host_id, wire_host_url, COALESCE(operator_notes, ''), payload_json
+		 FROM session_evidence_records
+		 ORDER BY id DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []model.SessionEvidenceRecord{}
+	for rows.Next() {
+		var record model.SessionEvidenceRecord
+		if err := rows.Scan(
+			&record.ID,
+			&record.CreatedAt,
+			&record.OverallState,
+			&record.ReadyzState,
+			&record.PreflightState,
+			&record.HostID,
+			&record.WireHostURL,
+			&record.OperatorNotes,
+			&record.PayloadJSON,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 func (s *SQLiteStore) RecordRunMarker(ctx context.Context, marker model.RunMarker) (int64, error) {

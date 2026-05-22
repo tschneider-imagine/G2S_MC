@@ -252,7 +252,7 @@ const dashboardHTML = `<!doctype html>
           <button id="session-evidence-save-button" type="button">Save to Appliance History</button>
           <button id="session-evidence-json-button" type="button">Download JSON Evidence</button>
           <button id="session-evidence-markdown-button" type="button" class="secondary-button">Download Markdown Evidence</button>
-          <button id="session-evidence-export-all-button" type="button" class="secondary-button">Download All Saved Evidence</button>
+          <button id="session-evidence-export-all-button" type="button" class="secondary-button">Export All Captures</button>
         </div>
         <div class="first-cabinet-session-blockers-wrap">
           <p class="label">Recent Captures</p>
@@ -1892,6 +1892,7 @@ const dashboardJS = `const endpoints = {
   operatorDrill: "/api/operator-drill",
   certificates: "/api/certificates",
   sessionEvidence: "/api/session-evidence?limit=20",
+  sessionEvidenceExportAll: "/api/session-evidence/export-all",
   sessionWorkflow: "/api/session-workflow",
   cabinetProfile: "/api/cabinet-profile",
   cabinetProfileSuggestions: "/api/cabinet-profile/suggestions",
@@ -3701,25 +3702,31 @@ function exportAllSavedSessionEvidence() {
     $("session-evidence-state").textContent = "blocked";
     $("session-evidence-state").className = "source-pill source-mixed";
     $("session-evidence-message").textContent = "No saved evidence captures are available to export.";
+    setAlert("warning", "Export All failed", "No saved captures are available for export.");
     return;
   }
-  const payload = records.map((record) => ({
-    record: {
-      id: record.id,
-      created_at: record.created_at,
-      overall_state: record.overall_state,
-      readyz_state: record.readyz_state,
-      preflight_state: record.preflight_state,
-      host_id: record.host_id,
-      wire_host_url: record.wire_host_url,
-      operator_notes: record.operator_notes || ""
-    },
-    evidence: parseSavedSessionEvidencePayload(record)
-  }));
-  downloadTextMaterial("saved-session-evidence-history.json", JSON.stringify(payload, null, 2));
-  $("session-evidence-state").textContent = "saved";
-  $("session-evidence-state").className = "source-pill source-file";
-  $("session-evidence-message").textContent = "Saved evidence history downloaded.";
+  fetch(endpoints.sessionEvidenceExportAll, { cache: "no-store" })
+    .then(async (response) => {
+      if (!response.ok) {
+        const detail = sanitizeHTTPText(await response.text());
+        throw new Error("Export failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      }
+      const text = await response.text();
+      const disposition = String(response.headers.get("Content-Disposition") || "");
+      const match = disposition.match(/filename=\"([^\"]+)\"/i);
+      const filename = match && match[1] ? match[1] : "saved-session-evidence-archive.json";
+      downloadTextMaterial(filename, text);
+      $("session-evidence-state").textContent = "saved";
+      $("session-evidence-state").className = "source-pill source-file";
+      $("session-evidence-message").textContent = "All saved evidence captures exported.";
+      setAlert("info", "Export All complete", "Saved session evidence archive downloaded.");
+    })
+    .catch((err) => {
+      $("session-evidence-state").textContent = "blocked";
+      $("session-evidence-state").className = "source-pill source-mixed";
+      $("session-evidence-message").textContent = err && err.message ? err.message : "Export failed.";
+      setAlert("warning", "Export All failed", "Unable to export all saved evidence captures.");
+    });
 }
 
 async function deleteSavedSessionEvidence(id) {
@@ -3728,6 +3735,9 @@ async function deleteSavedSessionEvidence(id) {
     $("session-evidence-state").textContent = "blocked";
     $("session-evidence-state").className = "source-pill source-mixed";
     $("session-evidence-message").textContent = "Saved evidence record id is invalid.";
+    return;
+  }
+  if (!window.confirm("Delete saved capture #" + numericID + "? This cannot be undone.")) {
     return;
   }
   if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
@@ -3745,7 +3755,7 @@ async function deleteSavedSessionEvidence(id) {
     if (token) {
       headers.Authorization = "Bearer " + token;
     }
-    const response = await fetch(endpoints.sessionEvidence.replace("?limit=8", "") + "?id=" + encodeURIComponent(String(numericID)), {
+    const response = await fetch("/api/session-evidence/" + encodeURIComponent(String(numericID)), {
       method: "DELETE",
       headers: headers
     });
@@ -3762,11 +3772,13 @@ async function deleteSavedSessionEvidence(id) {
     $("session-evidence-state").textContent = "saved";
     $("session-evidence-state").className = "source-pill source-file";
     $("session-evidence-message").textContent = "Saved evidence deleted.";
+    setAlert("info", "Saved capture deleted", "Session evidence capture #" + numericID + " was removed.");
     schedulePoll(0);
   } catch (err) {
     $("session-evidence-state").textContent = "blocked";
     $("session-evidence-state").className = "source-pill source-mixed";
     $("session-evidence-message").textContent = err && err.message ? err.message : "Delete failed.";
+    setAlert("warning", "Delete failed", "Unable to delete saved evidence capture.");
   }
 }
 

@@ -129,6 +129,15 @@ func main() {
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
 	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
+	mux.HandleFunc("/api/session-evidence/export-all", sessionEvidenceExportAllHandler(auditStore))
+	mux.HandleFunc(
+		"/api/session-evidence/",
+		requireMutationAuthForMethods(
+			sessionEvidenceByIDHandler(auditStore),
+			cfg,
+			http.MethodDelete,
+		),
+	)
 	mux.HandleFunc(
 		"/api/session-workflow",
 		requireMutationAuthForMethods(
@@ -640,6 +649,38 @@ type runMarkerPayload struct {
 	Operator    string    `json:"operator"`
 }
 
+type sessionEvidenceArchive struct {
+	GeneratedAt  time.Time                    `json:"generated_at"`
+	SummaryIndex sessionEvidenceArchiveIndex  `json:"summary_index"`
+	CaptureFiles []sessionEvidenceArchiveFile `json:"capture_files"`
+}
+
+type sessionEvidenceArchiveIndex struct {
+	CaptureCount int                          `json:"capture_count"`
+	Captures     []sessionEvidenceArchiveItem `json:"captures"`
+}
+
+type sessionEvidenceArchiveItem struct {
+	ID               int64     `json:"id"`
+	CreatedAt        time.Time `json:"created_at"`
+	OverallState     string    `json:"overall_state"`
+	ReadyzState      string    `json:"readyz_state"`
+	PreflightState   string    `json:"preflight_state"`
+	HostID           string    `json:"host_id"`
+	WireHostURL      string    `json:"wire_host_url"`
+	OperatorNotes    string    `json:"operator_notes,omitempty"`
+	JSONFileName     string    `json:"json_file_name"`
+	MarkdownFileName string    `json:"markdown_file_name"`
+}
+
+type sessionEvidenceArchiveFile struct {
+	ID               int64  `json:"id"`
+	JSONFileName     string `json:"json_file_name"`
+	MarkdownFileName string `json:"markdown_file_name"`
+	JSONCapture      any    `json:"json_capture"`
+	MarkdownReport   string `json:"markdown_report"`
+}
+
 func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -655,8 +696,13 @@ func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 				http.Error(w, "valid id query parameter is required", http.StatusBadRequest)
 				return
 			}
-			if err := store.DeleteSessionEvidence(r.Context(), id); err != nil {
+			deleted, err := store.DeleteSessionEvidenceByID(r.Context(), id)
+			if err != nil {
 				writeJSON(w, nil, err)
+				return
+			}
+			if !deleted {
+				http.Error(w, "session evidence record not found", http.StatusNotFound)
 				return
 			}
 			writeJSON(w, map[string]any{"deleted_id": id}, nil)
@@ -709,6 +755,53 @@ func sessionEvidenceHandler(store *store.SQLiteStore, cfg config.Config) http.Ha
 			writeJSON(w, record, nil)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func sessionEvidenceByIDHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		id, err := sessionEvidenceIDFromPath(r.URL.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		deleted, err := store.DeleteSessionEvidenceByID(r.Context(), id)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		if !deleted {
+			http.Error(w, "session evidence record not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]any{"deleted_id": id}, nil)
+	}
+}
+
+func sessionEvidenceExportAllHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		records, err := store.ListAllSessionEvidence(r.Context())
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		archive := buildSessionEvidenceArchive(records)
+		filename := "session-evidence-archive-" + archive.GeneratedAt.Format("20060102T150405Z") + ".json"
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+		if err := json.NewEncoder(w).Encode(archive); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}
 }
@@ -1267,6 +1360,126 @@ func cabinetProfilesEqual(a config.CabinetProfile, b config.CabinetProfile) bool
 		}
 	}
 	return true
+}
+
+func sessionEvidenceIDFromPath(path string) (int64, error) {
+	const prefix = "/api/session-evidence/"
+	if !strings.HasPrefix(path, prefix) {
+		return 0, fmt.Errorf("session evidence id path is invalid")
+	}
+	trimmed := strings.TrimPrefix(path, prefix)
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" || strings.Contains(trimmed, "/") {
+		return 0, fmt.Errorf("session evidence id path is invalid")
+	}
+	id, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("session evidence id must be a positive integer")
+	}
+	return id, nil
+}
+
+func buildSessionEvidenceArchive(records []model.SessionEvidenceRecord) sessionEvidenceArchive {
+	archive := sessionEvidenceArchive{
+		GeneratedAt:  time.Now().UTC(),
+		SummaryIndex: sessionEvidenceArchiveIndex{CaptureCount: len(records), Captures: []sessionEvidenceArchiveItem{}},
+		CaptureFiles: []sessionEvidenceArchiveFile{},
+	}
+
+	for _, record := range records {
+		base := sessionEvidenceArchiveBaseName(record)
+		jsonName := base + ".json"
+		markdownName := base + ".md"
+		payload := parseSessionEvidencePayload(record.PayloadJSON)
+		archive.SummaryIndex.Captures = append(archive.SummaryIndex.Captures, sessionEvidenceArchiveItem{
+			ID:               record.ID,
+			CreatedAt:        record.CreatedAt,
+			OverallState:     record.OverallState,
+			ReadyzState:      record.ReadyzState,
+			PreflightState:   record.PreflightState,
+			HostID:           record.HostID,
+			WireHostURL:      record.WireHostURL,
+			OperatorNotes:    record.OperatorNotes,
+			JSONFileName:     jsonName,
+			MarkdownFileName: markdownName,
+		})
+		archive.CaptureFiles = append(archive.CaptureFiles, sessionEvidenceArchiveFile{
+			ID:               record.ID,
+			JSONFileName:     jsonName,
+			MarkdownFileName: markdownName,
+			JSONCapture:      payload,
+			MarkdownReport:   buildSessionEvidenceArchiveMarkdown(record, payload),
+		})
+	}
+
+	return archive
+}
+
+func parseSessionEvidencePayload(raw string) any {
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return map[string]any{
+			"payload_parse_error": err.Error(),
+			"payload_raw":         raw,
+		}
+	}
+	return payload
+}
+
+func sessionEvidenceArchiveBaseName(record model.SessionEvidenceRecord) string {
+	host := strings.TrimSpace(record.HostID)
+	if host == "" {
+		host = "cabinet"
+	}
+	host = sanitizeArchiveName(host)
+	stamp := record.CreatedAt.UTC().Format("20060102T150405Z")
+	return fmt.Sprintf("%s-session-evidence-%d-%s", host, record.ID, stamp)
+}
+
+func sanitizeArchiveName(raw string) string {
+	builder := strings.Builder{}
+	for _, r := range raw {
+		if (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.' {
+			builder.WriteRune(r)
+			continue
+		}
+		builder.WriteRune('-')
+	}
+	value := strings.Trim(builder.String(), "-")
+	if value == "" {
+		return "cabinet"
+	}
+	return value
+}
+
+func buildSessionEvidenceArchiveMarkdown(record model.SessionEvidenceRecord, payload any) string {
+	lines := []string{
+		"# Session Evidence Capture",
+		"",
+		"- Record ID: " + strconv.FormatInt(record.ID, 10),
+		"- Captured at: " + record.CreatedAt.UTC().Format(time.RFC3339),
+		"- Session state: " + record.OverallState,
+		"- Readyz state: " + record.ReadyzState,
+		"- Preflight state: " + record.PreflightState,
+		"- Host ID: " + record.HostID,
+		"- Wire host URL: " + record.WireHostURL,
+		"- Operator notes: " + strings.TrimSpace(record.OperatorNotes),
+		"",
+		"## Payload",
+		"",
+		"```json",
+	}
+	pretty, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		lines = append(lines, "{}")
+	} else {
+		lines = append(lines, string(pretty))
+	}
+	lines = append(lines, "```")
+	return strings.Join(lines, "\n")
 }
 
 func writeJSON(w http.ResponseWriter, value any, err error) {
