@@ -913,6 +913,188 @@ func TestHeartbeatPolicyRouteMutationAuthTokenGuard(t *testing.T) {
 	}
 }
 
+func TestSessionWorkflowHandlerCRUDAndValidation(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	handler := sessionWorkflowHandler(auditStore)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/session-workflow", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var getBody sessionWorkflowResponse
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("decode GET: %v", err)
+	}
+	if getBody.CurrentPhase != "pre_check" {
+		t.Fatalf("GET current_phase = %q, want pre_check", getBody.CurrentPhase)
+	}
+	if getBody.Persisted {
+		t.Fatalf("GET persisted = %t, want false", getBody.Persisted)
+	}
+
+	validPut := `{"current_phase":"run_active","completed_steps":["pre_check","connect_observe"],"operator_notes":"session running"}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/session-workflow", bytes.NewBufferString(validPut))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	handler(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d: %s", putRec.Code, putRec.Body.String())
+	}
+	var putBody sessionWorkflowResponse
+	if err := json.Unmarshal(putRec.Body.Bytes(), &putBody); err != nil {
+		t.Fatalf("decode PUT: %v", err)
+	}
+	if putBody.CurrentPhase != "run_active" {
+		t.Fatalf("PUT current_phase = %q", putBody.CurrentPhase)
+	}
+	if !reflect.DeepEqual(putBody.CompletedSteps, []string{"pre_check", "connect_observe"}) {
+		t.Fatalf("PUT completed_steps = %#v", putBody.CompletedSteps)
+	}
+	if !putBody.Persisted {
+		t.Fatalf("PUT persisted = %t, want true", putBody.Persisted)
+	}
+	if putBody.LastUpdatedAt == nil || putBody.LastUpdatedAt.IsZero() {
+		t.Fatalf("expected last_updated_at in PUT response")
+	}
+
+	invalidCases := []string{
+		`{"current_phase":"","completed_steps":[],"operator_notes":""}`,
+		`{"current_phase":"not_a_phase","completed_steps":[],"operator_notes":""}`,
+		`{"current_phase":"pre_check","completed_steps":["pre_check","pre_check"],"operator_notes":""}`,
+		`{"current_phase":"pre_check","completed_steps":["bad_step"],"operator_notes":""}`,
+	}
+	for _, body := range invalidCases {
+		req := httptest.NewRequest(http.MethodPut, "/api/session-workflow", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("invalid PUT status = %d, want 400: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/session-workflow", nil)
+	deleteRec := httptest.NewRecorder()
+	handler(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+	var deleteBody sessionWorkflowResponse
+	if err := json.Unmarshal(deleteRec.Body.Bytes(), &deleteBody); err != nil {
+		t.Fatalf("decode DELETE: %v", err)
+	}
+	if deleteBody.Persisted {
+		t.Fatalf("DELETE persisted = %t, want false", deleteBody.Persisted)
+	}
+}
+
+func TestSessionWorkflowRouteMutationAuthTokenGuard(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+	}
+	handler := requireMutationAuthForMethods(
+		sessionWorkflowHandler(auditStore),
+		cfg,
+		http.MethodPut,
+		http.MethodDelete,
+	)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/session-workflow", nil)
+	getRec := httptest.NewRecorder()
+	handler(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	unauthorizedPut := httptest.NewRequest(http.MethodPut, "/api/session-workflow", bytes.NewBufferString(`{"current_phase":"pre_check","completed_steps":[],"operator_notes":""}`))
+	unauthorizedPut.Header.Set("Content-Type", "application/json")
+	unauthorizedPutRec := httptest.NewRecorder()
+	handler(unauthorizedPutRec, unauthorizedPut)
+	if !deniedByAuth(unauthorizedPutRec.Code) {
+		t.Fatalf("PUT without token status = %d, want 401/403", unauthorizedPutRec.Code)
+	}
+
+	authorizedPut := httptest.NewRequest(http.MethodPut, "/api/session-workflow", bytes.NewBufferString(`{"current_phase":"connect_observe","completed_steps":["pre_check"],"operator_notes":"auth ok"}`))
+	authorizedPut.Header.Set("Content-Type", "application/json")
+	authorizedPut.Header.Set("Authorization", "Bearer lab-secret")
+	authorizedPutRec := httptest.NewRecorder()
+	handler(authorizedPutRec, authorizedPut)
+	if authorizedPutRec.Code != http.StatusOK {
+		t.Fatalf("PUT with token status = %d: %s", authorizedPutRec.Code, authorizedPutRec.Body.String())
+	}
+
+	unauthorizedDelete := httptest.NewRequest(http.MethodDelete, "/api/session-workflow", nil)
+	unauthorizedDeleteRec := httptest.NewRecorder()
+	handler(unauthorizedDeleteRec, unauthorizedDelete)
+	if !deniedByAuth(unauthorizedDeleteRec.Code) {
+		t.Fatalf("DELETE without token status = %d, want 401/403", unauthorizedDeleteRec.Code)
+	}
+
+	authorizedDelete := httptest.NewRequest(http.MethodDelete, "/api/session-workflow", nil)
+	authorizedDelete.Header.Set("Authorization", "Bearer lab-secret")
+	authorizedDeleteRec := httptest.NewRecorder()
+	handler(authorizedDeleteRec, authorizedDelete)
+	if authorizedDeleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE with token status = %d: %s", authorizedDeleteRec.Code, authorizedDeleteRec.Body.String())
+	}
+}
+
+func TestSessionWorkflowRouteAllowsTrustedPrivateNetworkWithoutToken(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		WebUI: config.WebUI{
+			RequireLogin:                        false,
+			AllowTrustedPrivateNetworkMutations: true,
+		},
+	}
+	handler := requireMutationAuthForMethods(
+		sessionWorkflowHandler(auditStore),
+		cfg,
+		http.MethodPut,
+		http.MethodDelete,
+	)
+
+	privateReq := httptest.NewRequest(http.MethodPut, "/api/session-workflow", bytes.NewBufferString(`{"current_phase":"connect_observe","completed_steps":["pre_check"],"operator_notes":"trusted network update"}`))
+	privateReq.Header.Set("Content-Type", "application/json")
+	privateReq.RemoteAddr = "192.168.10.70:4455"
+	privateRec := httptest.NewRecorder()
+	handler(privateRec, privateReq)
+	if privateRec.Code != http.StatusOK {
+		t.Fatalf("PUT trusted private network status = %d: %s", privateRec.Code, privateRec.Body.String())
+	}
+
+	publicReq := httptest.NewRequest(http.MethodPut, "/api/session-workflow", bytes.NewBufferString(`{"current_phase":"connect_observe","completed_steps":["pre_check"],"operator_notes":"public blocked"}`))
+	publicReq.Header.Set("Content-Type", "application/json")
+	publicReq.RemoteAddr = "198.51.100.80:4455"
+	publicRec := httptest.NewRecorder()
+	handler(publicRec, publicReq)
+	if !deniedByAuth(publicRec.Code) {
+		t.Fatalf("PUT public network without token status = %d, want 401/403", publicRec.Code)
+	}
+}
+
 func waitForLastEvent(t *testing.T, eng *engine.Engine, event string) {
 	t.Helper()
 	deadline := time.Now().Add(500 * time.Millisecond)

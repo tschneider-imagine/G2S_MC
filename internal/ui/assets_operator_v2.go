@@ -195,6 +195,33 @@ const dashboardHTML = `<!doctype html>
           <p class="label">Operator Workflow</p>
           <div id="first-cabinet-session-workflow" class="first-cabinet-session-workflow"></div>
         </div>
+        <div class="first-cabinet-session-workflow-progress-wrap">
+          <p class="label">Workflow Progress</p>
+          <div class="workflow-progress-meta">
+            <span id="workflow-progress-last-saved">Last saved: not saved</span>
+            <span id="workflow-progress-unsaved" class="workflow-progress-unsaved workflow-progress-unsaved-clean">Saved</span>
+          </div>
+          <div class="workflow-progress-grid">
+            <label>Current Phase
+              <select id="workflow-progress-phase">
+                <option value="pre_check">Pre-check</option>
+                <option value="connect_observe">Connect/Observe</option>
+                <option value="run_active">Run Active</option>
+                <option value="capture_evidence">Capture Evidence</option>
+                <option value="session_complete">Session Complete</option>
+              </select>
+            </label>
+          </div>
+          <div id="workflow-progress-steps" class="workflow-progress-steps"></div>
+          <label class="cert-textarea-label">Operator Notes
+            <textarea id="workflow-progress-notes" rows="4" placeholder="Optional operator notes for workflow continuity."></textarea>
+          </label>
+          <div class="setup-actions">
+            <button id="workflow-progress-save-button" type="button">Save Progress</button>
+            <button id="workflow-progress-clear-button" type="button" class="secondary-button">Clear Progress</button>
+          </div>
+          <div id="workflow-progress-message" class="muted-text">Workflow progress is not saved yet.</div>
+        </div>
       </div>
 
       <div class="panel evidence-capture-panel">
@@ -1564,6 +1591,67 @@ button:disabled {
   background: #f8fbf8;
 }
 
+.first-cabinet-session-workflow-progress-wrap {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+  background: #f8fbf8;
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.workflow-progress-unsaved {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workflow-progress-unsaved-clean {
+  background: var(--green-bg);
+  color: #1e6c47;
+}
+
+.workflow-progress-unsaved-dirty {
+  background: #fbeecd;
+  color: #7b5b0e;
+}
+
+.workflow-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workflow-progress-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.workflow-progress-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.workflow-progress-step input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 .first-cabinet-session-actions-wrap {
   border-top: 1px solid var(--line);
   padding: 12px 16px 16px;
@@ -1804,6 +1892,7 @@ const dashboardJS = `const endpoints = {
   operatorDrill: "/api/operator-drill",
   certificates: "/api/certificates",
   sessionEvidence: "/api/session-evidence?limit=20",
+  sessionWorkflow: "/api/session-workflow",
   cabinetProfile: "/api/cabinet-profile",
   cabinetProfileSuggestions: "/api/cabinet-profile/suggestions",
   heartbeatPolicy: "/api/heartbeat-policy",
@@ -1834,7 +1923,9 @@ const clientState = {
   certSelectedRole: "g2s_ca_cert",
   selectedSessionEvidenceID: 0,
   selectedRunReportStartID: 0,
-  selectedRunReportEndID: 0
+  selectedRunReportEndID: 0,
+  workflowProgressLoaded: false,
+  workflowProgressBaseline: null
 };
 
 function currentRuntime() {
@@ -1874,6 +1965,7 @@ function emptySnapshot() {
     operatorDrill: null,
     certificates: [],
     sessionEvidence: [],
+    sessionWorkflow: null,
     cabinetProfile: null,
     cabinetProfileSuggestions: null,
     heartbeatPolicy: null,
@@ -1898,6 +1990,7 @@ function copySnapshot(snapshot) {
     operatorDrill: snapshot.operatorDrill || null,
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
+    sessionWorkflow: snapshot.sessionWorkflow || null,
     cabinetProfile: snapshot.cabinetProfile || null,
     cabinetProfileSuggestions: snapshot.cabinetProfileSuggestions || null,
     heartbeatPolicy: snapshot.heartbeatPolicy || null,
@@ -2695,6 +2788,221 @@ function buildCabinetSessionWorkflow(snapshot, session) {
   };
 }
 
+const workflowProgressSteps = [
+  { id: "pre_check", label: "Pre-check complete" },
+  { id: "connect_observe", label: "Connect/Observe complete" },
+  { id: "run_active", label: "Run Active complete" },
+  { id: "capture_evidence", label: "Capture Evidence complete" },
+  { id: "session_complete", label: "Session Complete" }
+];
+
+function defaultSessionWorkflowProgress() {
+  return {
+    current_phase: "pre_check",
+    completed_steps: [],
+    operator_notes: "",
+    last_updated_at: "",
+    persisted: false
+  };
+}
+
+function normalizeSessionWorkflowProgress(payload) {
+  const fallback = defaultSessionWorkflowProgress();
+  const phase = String(payload?.current_phase || fallback.current_phase).trim();
+  const completed = Array.isArray(payload?.completed_steps)
+    ? payload.completed_steps.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const notes = String(payload?.operator_notes || "").trim();
+  const validStepIDs = new Set(workflowProgressSteps.map((step) => step.id));
+  const uniqueCompleted = [];
+  completed.forEach((stepID) => {
+    if (!validStepIDs.has(stepID)) return;
+    if (uniqueCompleted.indexOf(stepID) >= 0) return;
+    uniqueCompleted.push(stepID);
+  });
+  const validPhase = validStepIDs.has(phase) ? phase : fallback.current_phase;
+  return {
+    current_phase: validPhase,
+    completed_steps: uniqueCompleted,
+    operator_notes: notes,
+    last_updated_at: String(payload?.last_updated_at || "").trim(),
+    persisted: payload?.persisted === true
+  };
+}
+
+function workflowProgressHasFocus() {
+  const steps = $("workflow-progress-steps");
+  const notes = $("workflow-progress-notes");
+  const phase = $("workflow-progress-phase");
+  const active = document.activeElement;
+  if (!active) return false;
+  if (notes === active || phase === active) return true;
+  return !!(steps && steps.contains(active));
+}
+
+function sessionWorkflowProgressEquivalent(a, b) {
+  const left = normalizeSessionWorkflowProgress(a || {});
+  const right = normalizeSessionWorkflowProgress(b || {});
+  if (left.current_phase !== right.current_phase) return false;
+  if (left.operator_notes !== right.operator_notes) return false;
+  if (left.completed_steps.length !== right.completed_steps.length) return false;
+  for (let i = 0; i < left.completed_steps.length; i++) {
+    if (left.completed_steps[i] !== right.completed_steps[i]) return false;
+  }
+  return true;
+}
+
+function workflowProgressFromForm() {
+  const completed = [];
+  workflowProgressSteps.forEach((step) => {
+    const checkbox = $("workflow-progress-step-" + step.id);
+    if (checkbox && checkbox.checked) {
+      completed.push(step.id);
+    }
+  });
+  return {
+    current_phase: String($("workflow-progress-phase").value || "pre_check").trim(),
+    completed_steps: completed,
+    operator_notes: $("workflow-progress-notes").value.trim()
+  };
+}
+
+function workflowProgressAuthHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  return headers;
+}
+
+function renderWorkflowProgressStepCheckboxes(progress) {
+  const completed = new Set(Array.isArray(progress?.completed_steps) ? progress.completed_steps : []);
+  $("workflow-progress-steps").innerHTML = workflowProgressSteps.map((step) =>
+    "<label class=\"workflow-progress-step\">" +
+      "<input id=\"workflow-progress-step-" + escapeHTML(step.id) + "\" type=\"checkbox\" " + (completed.has(step.id) ? "checked" : "") + ">" +
+      "<span>" + escapeHTML(step.label) + "</span>" +
+    "</label>"
+  ).join("");
+}
+
+function setWorkflowProgressMessage(text) {
+  $("workflow-progress-message").textContent = text;
+}
+
+function setWorkflowProgressUnsavedState(dirty) {
+  const badge = $("workflow-progress-unsaved");
+  badge.textContent = dirty ? "Unsaved changes" : "Saved";
+  badge.className = "workflow-progress-unsaved " + (dirty ? "workflow-progress-unsaved-dirty" : "workflow-progress-unsaved-clean");
+}
+
+function updateWorkflowProgressDirtyState() {
+  const baseline = normalizeSessionWorkflowProgress(clientState.workflowProgressBaseline || defaultSessionWorkflowProgress());
+  const current = normalizeSessionWorkflowProgress(workflowProgressFromForm());
+  const dirty = !sessionWorkflowProgressEquivalent(baseline, current);
+  setWorkflowProgressUnsavedState(dirty);
+  const tokenRequired = setupActionsRequireToken();
+  const tokenPresent = !!getSetupToken() || !!getCertToken();
+  $("workflow-progress-save-button").disabled = !dirty || (tokenRequired && !tokenPresent);
+}
+
+function fillWorkflowProgressForm(progress) {
+  const normalized = normalizeSessionWorkflowProgress(progress);
+  $("workflow-progress-phase").value = normalized.current_phase;
+  renderWorkflowProgressStepCheckboxes(normalized);
+  $("workflow-progress-notes").value = normalized.operator_notes || "";
+}
+
+function renderSessionWorkflowProgress(snapshot, workflow) {
+  const progress = normalizeSessionWorkflowProgress(snapshot?.sessionWorkflow || defaultSessionWorkflowProgress());
+  const shouldFill = !clientState.workflowProgressLoaded || !workflowProgressHasFocus();
+  if (shouldFill) {
+    fillWorkflowProgressForm(progress);
+    clientState.workflowProgressBaseline = normalizeSessionWorkflowProgress(progress);
+    clientState.workflowProgressLoaded = true;
+  }
+  $("workflow-progress-last-saved").textContent = progress.persisted && progress.last_updated_at
+    ? ("Last saved: " + fmtTime(progress.last_updated_at))
+    : "Last saved: not saved";
+
+  if (progress.persisted) {
+    setWorkflowProgressMessage("Workflow progress saved. Current phase: " + String(progress.current_phase || "pre_check").replace(/_/g, " ") + ".");
+  } else {
+    setWorkflowProgressMessage("Workflow progress is not saved yet. Current workflow step: " + (workflow?.current_step || "Pre-check") + ".");
+  }
+
+  const tokenRequired = setupActionsRequireToken();
+  const tokenPresent = !!getSetupToken() || !!getCertToken();
+  $("workflow-progress-clear-button").disabled = !progress.persisted || (tokenRequired && !tokenPresent);
+  updateWorkflowProgressDirtyState();
+}
+
+async function saveSessionWorkflowProgress() {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    setWorkflowProgressMessage("Enter an API token before saving workflow progress.");
+    return;
+  }
+  const payload = normalizeSessionWorkflowProgress(workflowProgressFromForm());
+  try {
+    setWorkflowProgressMessage("Saving workflow progress.");
+    const response = await fetch(endpoints.sessionWorkflow, {
+      method: "PUT",
+      headers: workflowProgressAuthHeaders(),
+      body: JSON.stringify({
+        current_phase: payload.current_phase,
+        completed_steps: payload.completed_steps,
+        operator_notes: payload.operator_notes
+      })
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setWorkflowProgressMessage("Save failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    const saved = normalizeSessionWorkflowProgress(await response.json());
+    const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    snapshot.sessionWorkflow = saved;
+    clientState.displaySnapshot = snapshot;
+    clientState.workflowProgressBaseline = saved;
+    fillWorkflowProgressForm(saved);
+    setWorkflowProgressUnsavedState(false);
+    setWorkflowProgressMessage("Workflow progress saved.");
+    schedulePoll(0);
+  } catch (err) {
+    setWorkflowProgressMessage(err && err.message ? err.message : "Workflow progress save failed.");
+  }
+}
+
+async function clearSessionWorkflowProgress() {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    setWorkflowProgressMessage("Enter an API token before clearing workflow progress.");
+    return;
+  }
+  try {
+    setWorkflowProgressMessage("Clearing workflow progress.");
+    const response = await fetch(endpoints.sessionWorkflow, {
+      method: "DELETE",
+      headers: workflowProgressAuthHeaders()
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setWorkflowProgressMessage("Clear failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    const cleared = normalizeSessionWorkflowProgress(await response.json());
+    const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    snapshot.sessionWorkflow = cleared;
+    clientState.displaySnapshot = snapshot;
+    clientState.workflowProgressBaseline = cleared;
+    fillWorkflowProgressForm(cleared);
+    setWorkflowProgressUnsavedState(false);
+    setWorkflowProgressMessage("Workflow progress cleared.");
+    schedulePoll(0);
+  } catch (err) {
+    setWorkflowProgressMessage(err && err.message ? err.message : "Workflow progress clear failed.");
+  }
+}
+
 function pushUniqueString(list, text) {
   const value = String(text || "").trim();
   if (!value) return;
@@ -3016,6 +3324,7 @@ function renderFirstCabinetSession(snapshot) {
       "<span>" + escapeHTML(step.detail) + "</span>" +
     "</div>"
   );
+  renderSessionWorkflowProgress(snapshot, workflow);
 }
 
 function buildSessionEvidence(snapshot) {
@@ -5405,13 +5714,14 @@ async function pollOnce() {
       fetchJSON(endpoints.operatorDrill),
       fetchJSON(endpoints.certificates),
       fetchJSON(endpoints.sessionEvidence),
+      fetchJSON(endpoints.sessionWorkflow),
       fetchJSON(endpoints.cabinetProfile),
       fetchJSON(endpoints.cabinetProfileSuggestions),
       fetchJSON(endpoints.heartbeatPolicy),
       fetchJSON(endpoints.cabinetPreflight)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, sessionEvidenceResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -5441,6 +5751,7 @@ async function pollOnce() {
     if (operatorDrillResult.status === "fulfilled") snapshot.operatorDrill = operatorDrillResult.value;
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
     if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
+    if (sessionWorkflowResult.status === "fulfilled") snapshot.sessionWorkflow = normalizeSessionWorkflowProgress(sessionWorkflowResult.value);
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
     if (cabinetProfileSuggestionsResult.status === "fulfilled") snapshot.cabinetProfileSuggestions = normalizeCabinetProfileSuggestions(cabinetProfileSuggestionsResult.value);
     if (heartbeatPolicyResult.status === "fulfilled") snapshot.heartbeatPolicy = heartbeatPolicyResult.value;
@@ -5453,6 +5764,7 @@ async function pollOnce() {
     if (operatorDrillResult.status !== "fulfilled") failures.push("operator drill unavailable");
     if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
     if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
+    if (sessionWorkflowResult.status !== "fulfilled") failures.push("session workflow unavailable");
     if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
     if (cabinetProfileSuggestionsResult.status !== "fulfilled") failures.push("cabinet profile suggestions unavailable");
     if (heartbeatPolicyResult.status !== "fulfilled") failures.push("heartbeat policy unavailable");
@@ -5554,6 +5866,11 @@ function bindControls() {
   $("session-evidence-json-button").addEventListener("click", exportSessionEvidenceJSON);
   $("session-evidence-markdown-button").addEventListener("click", exportSessionEvidenceMarkdown);
   $("session-evidence-export-all-button").addEventListener("click", exportAllSavedSessionEvidence);
+  $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
+  $("workflow-progress-clear-button").addEventListener("click", clearSessionWorkflowProgress);
+  $("workflow-progress-phase").addEventListener("change", updateWorkflowProgressDirtyState);
+  $("workflow-progress-notes").addEventListener("input", updateWorkflowProgressDirtyState);
+  $("workflow-progress-steps").addEventListener("change", updateWorkflowProgressDirtyState);
   $("session-evidence-history").addEventListener("click", (event) => {
     const button = event.target.closest(".session-evidence-history-button");
     if (!button) return;

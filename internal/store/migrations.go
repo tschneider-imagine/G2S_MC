@@ -110,4 +110,12 @@ CREATE TABLE IF NOT EXISTS heartbeat_policy_overrides (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by TEXT
 );
+
+CREATE TABLE IF NOT EXISTS session_workflow_progress (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    current_phase TEXT NOT NULL,
+    completed_steps_json TEXT NOT NULL,
+    operator_notes TEXT,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `

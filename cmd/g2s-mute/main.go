@@ -129,6 +129,15 @@ func main() {
 	mux.HandleFunc("/api/state-history", stateHistoryHandler(auditStore))
 	mux.HandleFunc("/api/certificates", certificatesHandler(auditStore))
 	mux.HandleFunc("/api/session-evidence", sessionEvidenceHandler(auditStore, cfg))
+	mux.HandleFunc(
+		"/api/session-workflow",
+		requireMutationAuthForMethods(
+			sessionWorkflowHandler(auditStore),
+			cfg,
+			http.MethodPut,
+			http.MethodDelete,
+		),
+	)
 	mux.HandleFunc("/api/run-markers", runMarkersHandler(auditStore, cfg))
 	mux.HandleFunc("/api/operator-drill", operatorDrillHandler(drillManager, cfg))
 	mux.HandleFunc(
@@ -330,6 +339,20 @@ type cabinetProfileOverrideView struct {
 	Profile   config.CabinetProfile `json:"profile"`
 	UpdatedAt time.Time             `json:"updated_at"`
 	UpdatedBy string                `json:"updated_by,omitempty"`
+}
+
+type sessionWorkflowResponse struct {
+	CurrentPhase   string     `json:"current_phase"`
+	CompletedSteps []string   `json:"completed_steps"`
+	OperatorNotes  string     `json:"operator_notes"`
+	LastUpdatedAt  *time.Time `json:"last_updated_at,omitempty"`
+	Persisted      bool       `json:"persisted"`
+}
+
+type sessionWorkflowRequest struct {
+	CurrentPhase   string   `json:"current_phase"`
+	CompletedSteps []string `json:"completed_steps"`
+	OperatorNotes  string   `json:"operator_notes"`
 }
 
 type cabinetProfileSuggestionsResponse struct {
@@ -813,6 +836,51 @@ func cabinetProfileSuggestionsHandler(eng *engine.Engine, store *store.SQLiteSto
 	}
 }
 
+func sessionWorkflowHandler(store *store.SQLiteStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			progress, err := store.GetSessionWorkflowProgress(r.Context())
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildSessionWorkflowResponse(progress), nil)
+		case http.MethodPut:
+			var payload sessionWorkflowRequest
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&payload); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+			normalized, err := validateSessionWorkflowRequest(payload)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := store.UpsertSessionWorkflowProgress(r.Context(), normalized.CurrentPhase, normalized.CompletedSteps, normalized.OperatorNotes); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			progress, err := store.GetSessionWorkflowProgress(r.Context())
+			if err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildSessionWorkflowResponse(progress), nil)
+		case http.MethodDelete:
+			if err := store.ClearSessionWorkflowProgress(r.Context()); err != nil {
+				writeJSON(w, nil, err)
+				return
+			}
+			writeJSON(w, buildSessionWorkflowResponse(nil), nil)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 func heartbeatPolicyHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -893,6 +961,68 @@ func buildCabinetProfileResponse(profile resolvedCabinetProfile) cabinetProfileR
 		}
 	}
 	return response
+}
+
+var sessionWorkflowPhases = map[string]struct{}{
+	"pre_check":        {},
+	"connect_observe":  {},
+	"run_active":       {},
+	"capture_evidence": {},
+	"session_complete": {},
+}
+
+func buildSessionWorkflowResponse(progress *model.SessionWorkflowProgress) sessionWorkflowResponse {
+	if progress == nil {
+		return sessionWorkflowResponse{
+			CurrentPhase:   "pre_check",
+			CompletedSteps: []string{},
+			OperatorNotes:  "",
+			Persisted:      false,
+		}
+	}
+	updatedAt := progress.LastUpdatedAt
+	return sessionWorkflowResponse{
+		CurrentPhase:   progress.CurrentPhase,
+		CompletedSteps: append([]string{}, progress.CompletedSteps...),
+		OperatorNotes:  progress.OperatorNotes,
+		LastUpdatedAt:  &updatedAt,
+		Persisted:      true,
+	}
+}
+
+func validateSessionWorkflowRequest(payload sessionWorkflowRequest) (sessionWorkflowRequest, error) {
+	normalized := sessionWorkflowRequest{
+		CurrentPhase:   strings.TrimSpace(payload.CurrentPhase),
+		CompletedSteps: []string{},
+		OperatorNotes:  strings.TrimSpace(payload.OperatorNotes),
+	}
+	if normalized.CurrentPhase == "" {
+		return sessionWorkflowRequest{}, fmt.Errorf("current_phase is required")
+	}
+	if _, ok := sessionWorkflowPhases[normalized.CurrentPhase]; !ok {
+		return sessionWorkflowRequest{}, fmt.Errorf("current_phase must be one of pre_check, connect_observe, run_active, capture_evidence, session_complete")
+	}
+	if len(normalized.OperatorNotes) > 4000 {
+		return sessionWorkflowRequest{}, fmt.Errorf("operator_notes must be 4000 characters or fewer")
+	}
+
+	seen := map[string]struct{}{}
+	for _, raw := range payload.CompletedSteps {
+		stepID := strings.TrimSpace(raw)
+		if stepID == "" {
+			return sessionWorkflowRequest{}, fmt.Errorf("completed_steps entries must be non-empty")
+		}
+		if _, ok := sessionWorkflowPhases[stepID]; !ok {
+			return sessionWorkflowRequest{}, fmt.Errorf("completed_steps contains invalid step %q", stepID)
+		}
+		if _, duplicated := seen[stepID]; duplicated {
+			return sessionWorkflowRequest{}, fmt.Errorf("completed_steps contains duplicate step %q", stepID)
+		}
+		seen[stepID] = struct{}{}
+		normalized.CompletedSteps = append(normalized.CompletedSteps, stepID)
+	}
+
+	return normalized, nil
 }
 
 func buildHeartbeatPolicyResponse(policy resolvedHeartbeatPolicy) heartbeatPolicyResponse {

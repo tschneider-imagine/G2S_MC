@@ -287,6 +287,81 @@ func TestHeartbeatPolicyOverrideCRUD(t *testing.T) {
 	}
 }
 
+func TestSessionWorkflowProgressCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	progress, err := store.GetSessionWorkflowProgress(ctx)
+	if err != nil {
+		t.Fatalf("get empty session workflow progress: %v", err)
+	}
+	if progress != nil {
+		t.Fatalf("expected no session workflow progress row")
+	}
+
+	completed := []string{"pre_check", "connect_observe"}
+	if err := store.UpsertSessionWorkflowProgress(ctx, "run_active", completed, "ready for first live test"); err != nil {
+		t.Fatalf("upsert session workflow progress: %v", err)
+	}
+	assertCount(t, store, "session_workflow_progress", 1)
+
+	progress, err = store.GetSessionWorkflowProgress(ctx)
+	if err != nil {
+		t.Fatalf("get session workflow progress: %v", err)
+	}
+	if progress == nil {
+		t.Fatalf("expected session workflow progress row")
+	}
+	if progress.CurrentPhase != "run_active" {
+		t.Fatalf("current_phase = %q, want run_active", progress.CurrentPhase)
+	}
+	if len(progress.CompletedSteps) != len(completed) {
+		t.Fatalf("completed_steps len = %d, want %d", len(progress.CompletedSteps), len(completed))
+	}
+	if progress.CompletedSteps[0] != completed[0] || progress.CompletedSteps[1] != completed[1] {
+		t.Fatalf("completed_steps = %#v, want %#v", progress.CompletedSteps, completed)
+	}
+	if progress.OperatorNotes != "ready for first live test" {
+		t.Fatalf("operator_notes = %q", progress.OperatorNotes)
+	}
+	if progress.LastUpdatedAt.IsZero() {
+		t.Fatalf("expected last_updated_at to be set")
+	}
+
+	if err := store.UpsertSessionWorkflowProgress(ctx, "capture_evidence", []string{"pre_check", "connect_observe", "run_active"}, "updated notes"); err != nil {
+		t.Fatalf("update session workflow progress: %v", err)
+	}
+	progress, err = store.GetSessionWorkflowProgress(ctx)
+	if err != nil {
+		t.Fatalf("get updated session workflow progress: %v", err)
+	}
+	if progress.CurrentPhase != "capture_evidence" {
+		t.Fatalf("current_phase = %q, want capture_evidence", progress.CurrentPhase)
+	}
+	if progress.OperatorNotes != "updated notes" {
+		t.Fatalf("operator_notes = %q, want updated notes", progress.OperatorNotes)
+	}
+	if len(progress.CompletedSteps) != 3 {
+		t.Fatalf("completed_steps len = %d, want 3", len(progress.CompletedSteps))
+	}
+
+	if err := store.ClearSessionWorkflowProgress(ctx); err != nil {
+		t.Fatalf("clear session workflow progress: %v", err)
+	}
+	assertCount(t, store, "session_workflow_progress", 0)
+	progress, err = store.GetSessionWorkflowProgress(ctx)
+	if err != nil {
+		t.Fatalf("get cleared session workflow progress: %v", err)
+	}
+	if progress != nil {
+		t.Fatalf("expected cleared session workflow progress to be nil")
+	}
+}
+
 func TestSessionEvidenceCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")

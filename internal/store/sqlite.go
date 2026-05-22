@@ -561,6 +561,66 @@ func (s *SQLiteStore) ClearHeartbeatPolicyOverride(ctx context.Context) error {
 	return err
 }
 
+func (s *SQLiteStore) GetSessionWorkflowProgress(ctx context.Context) (*model.SessionWorkflowProgress, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT current_phase, completed_steps_json, COALESCE(operator_notes, ''), updated_at
+		   FROM session_workflow_progress
+		  WHERE id = 1`,
+	)
+
+	var currentPhase string
+	var completedStepsJSON string
+	var operatorNotes string
+	var updatedAt time.Time
+	if err := row.Scan(&currentPhase, &completedStepsJSON, &operatorNotes, &updatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	completedSteps := []string{}
+	if err := decodeJSONStringSlice(completedStepsJSON, &completedSteps); err != nil {
+		return nil, fmt.Errorf("decode completed_steps_json: %w", err)
+	}
+
+	return &model.SessionWorkflowProgress{
+		CurrentPhase:   currentPhase,
+		CompletedSteps: completedSteps,
+		OperatorNotes:  operatorNotes,
+		LastUpdatedAt:  updatedAt,
+	}, nil
+}
+
+func (s *SQLiteStore) UpsertSessionWorkflowProgress(ctx context.Context, currentPhase string, completedSteps []string, operatorNotes string) error {
+	completedStepsJSON, err := encodeJSONStringSlice(completedSteps)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`INSERT INTO session_workflow_progress (
+		    id, current_phase, completed_steps_json, operator_notes, updated_at
+		 ) VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(id) DO UPDATE SET
+		    current_phase = excluded.current_phase,
+		    completed_steps_json = excluded.completed_steps_json,
+		    operator_notes = excluded.operator_notes,
+		    updated_at = CURRENT_TIMESTAMP`,
+		currentPhase,
+		completedStepsJSON,
+		operatorNotes,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ClearSessionWorkflowProgress(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM session_workflow_progress WHERE id = 1`)
+	return err
+}
+
 func (s *SQLiteStore) RecordSessionEvidence(ctx context.Context, record model.SessionEvidenceRecord) (int64, error) {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -680,7 +740,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}

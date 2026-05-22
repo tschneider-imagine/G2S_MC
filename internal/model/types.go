@@ -135,3 +135,10 @@ type RunMarker struct {
 	WireHostURL string    `json:"wire_host_url,omitempty"`
 	Operator    string    `json:"operator,omitempty"`
 }
+
+type SessionWorkflowProgress struct {
+	CurrentPhase   string    `json:"current_phase"`
+	CompletedSteps []string  `json:"completed_steps"`
+	OperatorNotes  string    `json:"operator_notes,omitempty"`
+	LastUpdatedAt  time.Time `json:"last_updated_at"`
+}
