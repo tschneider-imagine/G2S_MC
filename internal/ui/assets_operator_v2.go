@@ -589,6 +589,16 @@ const dashboardHTML = `<!doctype html>
             <button type="button" class="secondary-button cert-export-role-button" data-export-role="web_server_cert">Export Web Server Cert</button>
           </div>
         </div>
+        <div class="cert-backup-history">
+          <div class="panel-head panel-head-stack">
+            <div class="panel-title-row">
+              <p class="label">Backup History</p>
+              <button id="cert-backup-refresh-button" type="button" class="secondary-button">Refresh Backups</button>
+            </div>
+            <span id="cert-backup-state" class="muted-text">Loading backup history for selected role.</span>
+          </div>
+          <div id="cert-backup-list" class="timeline cert-backup-list"></div>
+        </div>
         <div id="cert-manager-detail" class="cert-manager-detail muted-text"></div>
       </div>
 
@@ -1428,6 +1438,38 @@ th {
   min-height: 34px;
 }
 
+.cert-backup-history {
+  padding: 0 18px 12px;
+}
+
+.cert-backup-list {
+  margin-top: 6px;
+}
+
+.cert-backup-item {
+  display: grid;
+  gap: 6px;
+}
+
+.cert-backup-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.cert-backup-meta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.cert-backup-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .token-help {
   display: flex;
   flex-wrap: wrap;
@@ -1921,6 +1963,8 @@ const dashboardJS = `const endpoints = {
   cabinetProfileSuggestions: "/api/cabinet-profile/suggestions",
   heartbeatPolicy: "/api/heartbeat-policy",
   cabinetPreflight: "/api/cabinet-preflight",
+  certificateBackups: "/api/certificates/backups",
+  certificateRestore: "/api/certificates/restore",
   certificatePreview: "/api/certificates/preview",
   certificateImport: "/api/certificates/import",
   certificateExport: "/api/certificates/export"
@@ -1948,6 +1992,7 @@ const clientState = {
   certSelectedRole: "g2s_ca_cert",
   certPreviewFingerprint: "",
   certPreviewResult: null,
+  certBackupsByRole: {},
   selectedSessionEvidenceID: 0,
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
@@ -5280,6 +5325,122 @@ function clearCertificatePreviewState() {
   clientState.certPreviewResult = null;
 }
 
+function certBackupCache(role) {
+  const key = String(role || "").trim();
+  if (!key) {
+    return { loaded: false, loading: false, error: "", items: [] };
+  }
+  if (!clientState.certBackupsByRole[key]) {
+    clientState.certBackupsByRole[key] = { loaded: false, loading: false, error: "", items: [] };
+  }
+  return clientState.certBackupsByRole[key];
+}
+
+function formatByteCount(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "0 B";
+  }
+  if (size < 1024) return size + " B";
+  const kib = size / 1024;
+  if (kib < 1024) return kib.toFixed(1) + " KiB";
+  const mib = kib / 1024;
+  if (mib < 1024) return mib.toFixed(1) + " MiB";
+  return (mib / 1024).toFixed(1) + " GiB";
+}
+
+function normalizeCertificateBackups(raw, role) {
+  const payload = raw && typeof raw === "object" ? raw : {};
+  const records = Array.isArray(payload.backups) ? payload.backups : [];
+  return {
+    role: String(payload.role || role || "").trim(),
+    backups: records.map((item) => ({
+      id: String(item?.id || "").trim(),
+      created_at: item?.created_at || "",
+      certificate_size_bytes: Number(item?.certificate?.size_bytes || 0),
+      certificate_sha256: String(item?.certificate?.sha256 || "").trim(),
+      private_key_size_bytes: Number(item?.private_key?.size_bytes || 0),
+      private_key_sha256: String(item?.private_key?.sha256 || "").trim(),
+      total_size_bytes: Number(item?.total_size_bytes || 0),
+      restorable: item?.restorable === true
+    })).filter((item) => item.id)
+  };
+}
+
+function renderCertificateBackupHistory(certState) {
+  const role = certState.role;
+  const cache = certBackupCache(role);
+  const backups = Array.isArray(cache.items) ? cache.items : [];
+  let message = "Backup history unavailable.";
+  if (cache.loading) {
+    message = "Loading backup history for selected role.";
+  } else if (cache.error) {
+    message = "Backup history load failed: " + cache.error;
+  } else if (!backups.length) {
+    message = "No backups found for " + roleDisplayName(role) + ".";
+  } else if (certState.tokenRequired && !certState.tokenPresent) {
+    message = "Restore actions require API token in this session.";
+  } else {
+    message = "Showing " + String(backups.length) + " backup record(s) for " + roleDisplayName(role) + ".";
+  }
+  $("cert-backup-state").textContent = message;
+  if (!backups.length) {
+    $("cert-backup-list").innerHTML = cache.loading ? "" : "<div class=\"item\">No backups recorded yet.</div>";
+    return;
+  }
+
+  $("cert-backup-list").innerHTML = backups.map((item) => {
+    const createdAt = item.created_at ? fmtTime(item.created_at) : item.id;
+    const certMeta = "Cert " + formatByteCount(item.certificate_size_bytes) + (item.certificate_sha256 ? " sha256=" + item.certificate_sha256.slice(0, 12) + "…" : "");
+    const keyMeta = item.private_key_size_bytes > 0 || item.private_key_sha256
+      ? "Key " + formatByteCount(item.private_key_size_bytes) + (item.private_key_sha256 ? " sha256=" + item.private_key_sha256.slice(0, 12) + "…" : "")
+      : "";
+    const restoreBlocked = !item.restorable || (certState.tokenRequired && !certState.tokenPresent);
+    const restoreLabel = item.restorable ? "Restore" : "Incomplete Backup";
+    const metaParts = [certMeta];
+    if (keyMeta) metaParts.push(keyMeta);
+    metaParts.push("Total " + formatByteCount(item.total_size_bytes));
+    return "<div class=\"item cert-backup-item\">" +
+      "<div class=\"cert-backup-item-head\"><strong>" + escapeHTML(item.id) + "</strong><span>" + escapeHTML(createdAt) + "</span></div>" +
+      "<div class=\"cert-backup-meta\">" + escapeHTML(metaParts.join(" | ")) + "</div>" +
+      "<div class=\"cert-backup-actions\"><button type=\"button\" class=\"secondary-button cert-restore-backup-button\" data-backup-id=\"" + escapeHTML(item.id) + "\"" + (restoreBlocked ? " disabled" : "") + ">" + escapeHTML(restoreLabel) + "</button></div>" +
+      "</div>";
+  }).join("");
+}
+
+async function loadCertificateBackups(role, forceReload) {
+  const normalizedRole = String(role || "").trim();
+  if (!normalizedRole) return;
+  const cache = certBackupCache(normalizedRole);
+  if (cache.loading) return;
+  if (cache.loaded && !forceReload) return;
+  cache.loading = true;
+  cache.error = "";
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  renderCertificateManager(snapshot);
+  try {
+    const response = await fetch(endpoints.certificateBackups + "?role=" + encodeURIComponent(normalizedRole), {
+      method: "GET",
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      throw new Error("HTTP " + response.status + (detail ? " " + detail : ""));
+    }
+    const payload = await response.json();
+    const normalized = normalizeCertificateBackups(payload, normalizedRole);
+    cache.items = normalized.backups;
+    cache.loaded = true;
+    cache.error = "";
+  } catch (err) {
+    cache.items = [];
+    cache.error = err && err.message ? err.message : "backup history request failed";
+  } finally {
+    cache.loading = false;
+    renderCertificateManager(snapshot);
+  }
+}
+
 function setCertManagerState(level, message) {
   const badge = $("cert-manager-state");
   badge.textContent = level;
@@ -5451,6 +5612,13 @@ function renderCertificateManager(snapshot) {
     : "Trusted private network bypass is active for this browser; token is optional for import and private-key export.";
 
   renderCertificatePreview(certState);
+  renderCertificateBackupHistory(certState);
+  loadCertificateBackups(certState.role, false).catch((err) => {
+    const cache = certBackupCache(certState.role);
+    cache.loading = false;
+    cache.error = err && err.message ? err.message : "backup history request failed";
+    renderCertificateBackupHistory(certState);
+  });
   setCertKeyFieldVisible(certState.details.requiresKey);
   $("cert-preview-button").disabled = certState.baseProblems.length > 0;
   $("cert-import-button").disabled = certState.importProblems.length > 0;
@@ -5590,6 +5758,46 @@ async function previewCertificateMaterial() {
   }
 }
 
+async function restoreCertificateBackup(backupID) {
+  const role = selectedCertRole();
+  const normalizedBackupID = String(backupID || "").trim();
+  if (!normalizedBackupID) {
+    setCertManagerState("blocked", "Backup ID is required for restore.");
+    return;
+  }
+  if (setupActionsRequireToken() && !getCertToken()) {
+    setCertManagerState("blocked", "Enter an API token before restoring backup material.");
+    return;
+  }
+  if (!window.confirm("Restore backup " + normalizedBackupID + " for " + roleDisplayName(role) + "?")) {
+    return;
+  }
+  try {
+    setCertManagerState("working", "Restoring backup " + normalizedBackupID + " for " + roleDisplayName(role) + ".");
+    const response = await fetch(endpoints.certificateRestore, {
+      method: "POST",
+      headers: certAuthHeaders(),
+      body: JSON.stringify({
+        role: role,
+        backup_id: normalizedBackupID
+      })
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setCertManagerState("blocked", "Restore failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    const result = await response.json();
+    clearCertificatePreviewState();
+    await loadCertificateBackups(role, true);
+    setCertManagerState("saved", "Restore complete for " + roleDisplayName(role) + ".");
+    setCertManagerDetail("Backup: " + normalizedBackupID + " | Path: " + (result.certificate_path || "-") + (result.private_key_path ? " | Key path: " + result.private_key_path : "") + " | Status: " + (result.certificate_status || "-"));
+    schedulePoll(0);
+  } catch (err) {
+    setCertManagerState("blocked", err && err.message ? err.message : "Restore failed.");
+  }
+}
+
 async function importCertificateMaterial(event) {
   event.preventDefault();
   const payload = certImportPayload();
@@ -5621,6 +5829,7 @@ async function importCertificateMaterial(event) {
     setCertManagerState("saved", "Import complete for " + roleDisplayName(payload.role) + " (" + certState + ").");
     setCertManagerDetail("Subject: " + (result.certificate_subject || "-") + " | Path: " + (result.certificate_path || "-") + (result.private_key_path ? " | Key path: " + result.private_key_path : ""));
     clearCertificatePreviewState();
+    loadCertificateBackups(payload.role, true).catch(() => {});
     if (!details.requiresKey) {
       $("cert-private-key-pem").value = "";
     }
@@ -6117,6 +6326,19 @@ function bindControls() {
 
   $("cert-manager-form").addEventListener("submit", importCertificateMaterial);
   $("cert-preview-button").addEventListener("click", previewCertificateMaterial);
+  $("cert-backup-refresh-button").addEventListener("click", () => {
+    loadCertificateBackups(selectedCertRole(), true).catch((err) => {
+      setCertManagerState("blocked", err && err.message ? err.message : "Backup history refresh failed.");
+    });
+  });
+  $("cert-backup-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".cert-restore-backup-button");
+    if (!button || button.disabled) {
+      return;
+    }
+    const backupID = button.getAttribute("data-backup-id") || "";
+    restoreCertificateBackup(backupID);
+  });
   $("cert-role-select").addEventListener("change", () => {
     clientState.certSelectedRole = selectedCertRole();
     clearCertificatePreviewState();

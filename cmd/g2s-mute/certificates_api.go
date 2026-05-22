@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +67,45 @@ type certificatePreviewResponse struct {
 	KeyMatchesCert bool       `json:"key_matches_cert"`
 	Errors         []string   `json:"errors"`
 }
+
+type certificateBackupMaterialSummary struct {
+	SizeBytes int64  `json:"size_bytes"`
+	SHA256    string `json:"sha256,omitempty"`
+}
+
+type certificateBackupRecord struct {
+	ID          string                            `json:"id"`
+	CreatedAt   *time.Time                        `json:"created_at,omitempty"`
+	Certificate *certificateBackupMaterialSummary `json:"certificate,omitempty"`
+	PrivateKey  *certificateBackupMaterialSummary `json:"private_key,omitempty"`
+	TotalSize   int64                             `json:"total_size_bytes"`
+	Restorable  bool                              `json:"restorable"`
+}
+
+type certificateBackupsResponse struct {
+	Role    string                    `json:"role"`
+	Backups []certificateBackupRecord `json:"backups"`
+}
+
+type certificateRestoreRequest struct {
+	Role     string `json:"role"`
+	BackupID string `json:"backup_id"`
+}
+
+type certificateRestoreResponse struct {
+	Role                 string                       `json:"role"`
+	BackupID             string                       `json:"backup_id"`
+	RestoredAt           time.Time                    `json:"restored_at"`
+	CertificatePath      string                       `json:"certificate_path"`
+	PrivateKeyPath       string                       `json:"private_key_path,omitempty"`
+	CertificateStatus    string                       `json:"certificate_status"`
+	CertificateInventory []model.CertificateInventory `json:"certificate_inventory"`
+}
+
+var (
+	errCertificateBackupNotFound = errors.New("certificate backup not found")
+	errCertificateBackupInvalid  = errors.New("certificate backup is invalid")
+)
 
 func certificateImportHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +260,96 @@ func certificatePreviewHandler(cfg config.Config) http.HandlerFunc {
 		}
 
 		writeJSON(w, buildCertificatePreviewResponse(role, request), nil)
+	}
+}
+
+func certificateBackupsHandler(cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !certificateMaterialRequestAllowed(r, cfg) {
+			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
+			return
+		}
+
+		role, err := resolveCertificateRole(r.URL.Query().Get("role"), cfg.Crypto)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		backups, err := listCertificateBackups(role)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, certificateBackupsResponse{
+			Role:    role.Role,
+			Backups: backups,
+		}, nil)
+	}
+}
+
+func certificateRestoreHandler(store *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !requireMutationAuth(w, r, cfg) {
+			return
+		}
+		if !certificateMaterialRequestAllowed(r, cfg) {
+			http.Error(w, "forbidden: loopback or trusted private network requests only", http.StatusForbidden)
+			return
+		}
+
+		var request certificateRestoreRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		role, err := resolveCertificateRole(request.Role, cfg.Crypto)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		backupID := strings.TrimSpace(request.BackupID)
+		if backupID == "" {
+			http.Error(w, "backup_id is required", http.StatusBadRequest)
+			return
+		}
+
+		if err := restoreCertificateBackup(role, backupID); err != nil {
+			switch {
+			case errors.Is(err, errCertificateBackupNotFound):
+				http.Error(w, err.Error(), http.StatusNotFound)
+			case errors.Is(err, errCertificateBackupInvalid):
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			default:
+				writeJSON(w, nil, err)
+			}
+			return
+		}
+
+		restoredAt := time.Now().UTC()
+		inventory, err := refreshCertificateInventory(r.Context(), store, cfg, restoredAt)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		writeJSON(w, certificateRestoreResponse{
+			Role:                 role.Role,
+			BackupID:             backupID,
+			RestoredAt:           restoredAt,
+			CertificatePath:      role.CertificatePath,
+			PrivateKeyPath:       role.PrivateKeyPath,
+			CertificateStatus:    certificateStatusByRole(inventory, role.Role),
+			CertificateInventory: inventory,
+		}, nil)
 	}
 }
 
@@ -473,6 +605,261 @@ func refreshCertificateInventory(ctx context.Context, store *store.SQLiteStore, 
 		return nil, err
 	}
 	return records, nil
+}
+
+func listCertificateBackups(role certificateRolePaths) ([]certificateBackupRecord, error) {
+	certFilesByID, err := backupFilesByID(role.CertificatePath)
+	if err != nil {
+		return nil, err
+	}
+	keyFilesByID := map[string]string{}
+	if role.RequiresPrivateKey {
+		keyFilesByID, err = backupFilesByID(role.PrivateKeyPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	idSet := map[string]struct{}{}
+	for id := range certFilesByID {
+		idSet[id] = struct{}{}
+	}
+	for id := range keyFilesByID {
+		idSet[id] = struct{}{}
+	}
+
+	records := make([]certificateBackupRecord, 0, len(idSet))
+	for id := range idSet {
+		record := certificateBackupRecord{
+			ID: id,
+		}
+		if parsedAt, ok := parseBackupIDTime(id); ok {
+			record.CreatedAt = &parsedAt
+		}
+		if certPath, ok := certFilesByID[id]; ok {
+			meta, err := backupMaterialSummary(certPath)
+			if err != nil {
+				return nil, err
+			}
+			record.Certificate = &meta
+			record.TotalSize += meta.SizeBytes
+		}
+		if keyPath, ok := keyFilesByID[id]; ok {
+			meta, err := backupMaterialSummary(keyPath)
+			if err != nil {
+				return nil, err
+			}
+			record.PrivateKey = &meta
+			record.TotalSize += meta.SizeBytes
+		}
+		record.Restorable = record.Certificate != nil && (!role.RequiresPrivateKey || record.PrivateKey != nil)
+		records = append(records, record)
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		left := records[i]
+		right := records[j]
+		if left.CreatedAt != nil && right.CreatedAt != nil {
+			return left.CreatedAt.After(*right.CreatedAt)
+		}
+		if left.CreatedAt != nil && right.CreatedAt == nil {
+			return true
+		}
+		if left.CreatedAt == nil && right.CreatedAt != nil {
+			return false
+		}
+		return left.ID > right.ID
+	})
+
+	return records, nil
+}
+
+func backupFilesByID(targetPath string) (map[string]string, error) {
+	results := map[string]string{}
+	glob := strings.TrimSpace(targetPath) + ".bak-*"
+	matches, err := filepath.Glob(glob)
+	if err != nil {
+		return nil, err
+	}
+	prefix := strings.TrimSpace(targetPath) + ".bak-"
+	for _, path := range matches {
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		id := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+		if id == "" {
+			continue
+		}
+		results[id] = path
+	}
+	return results, nil
+}
+
+func parseBackupIDTime(backupID string) (time.Time, bool) {
+	parsed, err := time.Parse("20060102T150405Z", strings.TrimSpace(backupID))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
+}
+
+func backupMaterialSummary(path string) (certificateBackupMaterialSummary, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return certificateBackupMaterialSummary{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return certificateBackupMaterialSummary{}, err
+	}
+	sum := sha256.Sum256(data)
+	return certificateBackupMaterialSummary{
+		SizeBytes: info.Size(),
+		SHA256:    hex.EncodeToString(sum[:]),
+	}, nil
+}
+
+func restoreCertificateBackup(role certificateRolePaths, backupID string) error {
+	trimmedID := strings.TrimSpace(backupID)
+	if trimmedID == "" {
+		return errors.New("backup_id is required")
+	}
+	certBackupPath := role.CertificatePath + ".bak-" + trimmedID
+	certificateData, err := os.ReadFile(certBackupPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", errCertificateBackupNotFound, certBackupPath)
+		}
+		return err
+	}
+	if _, err := parseCertificatePEM(string(certificateData)); err != nil {
+		return fmt.Errorf("%w: invalid certificate backup: %s", errCertificateBackupInvalid, err.Error())
+	}
+
+	keyData := []byte{}
+	if role.RequiresPrivateKey {
+		keyBackupPath := role.PrivateKeyPath + ".bak-" + trimmedID
+		keyData, err = os.ReadFile(keyBackupPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("%w: %s", errCertificateBackupNotFound, keyBackupPath)
+			}
+			return err
+		}
+		if _, err := parsePrivateKeyPEM(string(keyData)); err != nil {
+			return fmt.Errorf("%w: invalid private key backup: %s", errCertificateBackupInvalid, err.Error())
+		}
+		if _, err := tls.X509KeyPair(certificateData, keyData); err != nil {
+			return fmt.Errorf("%w: certificate and private key do not match: %s", errCertificateBackupInvalid, err.Error())
+		}
+	}
+
+	certRestore, err := captureCurrentMaterial(role.CertificatePath)
+	if err != nil {
+		return err
+	}
+	keyRestore := materialSnapshot{}
+	if role.RequiresPrivateKey {
+		keyRestore, err = captureCurrentMaterial(role.PrivateKeyPath)
+		if err != nil {
+			return err
+		}
+	}
+
+	certMode := certRestore.Mode
+	if certMode == 0 {
+		certMode = 0o644
+	}
+	if err := writeFileAtomically(role.CertificatePath, certificateData, certMode); err != nil {
+		return err
+	}
+	if !role.RequiresPrivateKey {
+		return nil
+	}
+
+	keyMode := keyRestore.Mode
+	if keyMode == 0 {
+		keyMode = 0o600
+	}
+	if err := writeFileAtomically(role.PrivateKeyPath, keyData, keyMode); err != nil {
+		_ = restoreMaterialSnapshot(role.CertificatePath, certRestore)
+		return err
+	}
+	return nil
+}
+
+type materialSnapshot struct {
+	Exists bool
+	Mode   os.FileMode
+	Data   []byte
+}
+
+func captureCurrentMaterial(path string) (materialSnapshot, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return materialSnapshot{}, nil
+		}
+		return materialSnapshot{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return materialSnapshot{}, err
+	}
+	return materialSnapshot{
+		Exists: true,
+		Mode:   info.Mode().Perm(),
+		Data:   data,
+	}, nil
+}
+
+func restoreMaterialSnapshot(path string, snapshot materialSnapshot) error {
+	if !snapshot.Exists {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	mode := snapshot.Mode
+	if mode == 0 {
+		mode = 0o644
+	}
+	return writeFileAtomically(path, snapshot.Data, mode)
+}
+
+func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
+	targetPath := strings.TrimSpace(path)
+	if targetPath == "" {
+		return errors.New("target path is required")
+	}
+	dir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(targetPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Chmod(mode); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Chmod(targetPath, mode)
 }
 
 func certificateStatusByRole(records []model.CertificateInventory, role string) string {

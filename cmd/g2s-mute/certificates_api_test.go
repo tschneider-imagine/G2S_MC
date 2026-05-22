@@ -277,6 +277,249 @@ func TestCertificatePreviewHandlerReadOnlyAuthModel(t *testing.T) {
 	}
 }
 
+func TestCertificateBackupsHandlerListsRoleBackups(t *testing.T) {
+	tempDir := t.TempDir()
+	clientCertPath := filepath.Join(tempDir, "client.crt")
+	clientKeyPath := filepath.Join(tempDir, "client.key")
+	if err := os.WriteFile(clientCertPath, []byte("seed-cert"), 0o644); err != nil {
+		t.Fatalf("seed cert: %v", err)
+	}
+	if err := os.WriteFile(clientKeyPath, []byte("seed-key"), 0o600); err != nil {
+		t.Fatalf("seed key: %v", err)
+	}
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		Crypto: config.Crypto{
+			G2SClientCertPath: clientCertPath,
+			G2SClientKeyPath:  clientKeyPath,
+		},
+	}
+	role, err := resolveCertificateRole("g2s_client_cert", cfg.Crypto)
+	if err != nil {
+		t.Fatalf("resolve role: %v", err)
+	}
+	certPEM, keyPEM := generateTestCertificateAndKey(t, "backup-list.local", 90*24*time.Hour)
+	if _, err := persistImportedCertificate(role, certPEM, keyPEM, time.Date(2026, 5, 22, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatalf("persist imported certificate: %v", err)
+	}
+
+	handler := certificateBackupsHandler(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/api/certificates/backups?role=g2s_client_cert", nil)
+	req.RemoteAddr = "127.0.0.1:9440"
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body certificateBackupsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode backups response: %v", err)
+	}
+	if body.Role != "g2s_client_cert" {
+		t.Fatalf("role = %q", body.Role)
+	}
+	if len(body.Backups) == 0 {
+		t.Fatal("expected at least one backup record")
+	}
+	first := body.Backups[0]
+	if first.ID == "" {
+		t.Fatal("expected backup id")
+	}
+	if first.Certificate == nil || first.Certificate.SizeBytes == 0 || strings.TrimSpace(first.Certificate.SHA256) == "" {
+		t.Fatalf("expected certificate backup metadata, got %#v", first.Certificate)
+	}
+	if first.PrivateKey == nil || first.PrivateKey.SizeBytes == 0 || strings.TrimSpace(first.PrivateKey.SHA256) == "" {
+		t.Fatalf("expected private key backup metadata, got %#v", first.PrivateKey)
+	}
+}
+
+func TestCertificateRestoreHandlerSuccessAndMissingBackup(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	tempDir := t.TempDir()
+	clientCertPath := filepath.Join(tempDir, "client.crt")
+	clientKeyPath := filepath.Join(tempDir, "client.key")
+	caPath := filepath.Join(tempDir, "ca.crt")
+	certA, keyA := generateTestCertificateAndKey(t, "restore-a.local", 90*24*time.Hour)
+	certB, keyB := generateTestCertificateAndKey(t, "restore-b.local", 90*24*time.Hour)
+	caCert, _ := generateTestCertificateAndKey(t, "restore-ca.local", 90*24*time.Hour)
+	if err := os.WriteFile(clientCertPath, []byte(certA), 0o644); err != nil {
+		t.Fatalf("seed cert: %v", err)
+	}
+	if err := os.WriteFile(clientKeyPath, []byte(keyA), 0o600); err != nil {
+		t.Fatalf("seed key: %v", err)
+	}
+	if err := os.WriteFile(caPath, []byte(caCert), 0o644); err != nil {
+		t.Fatalf("seed ca: %v", err)
+	}
+
+	cfg := config.Config{
+		Crypto: config.Crypto{
+			G2SCAPath:         caPath,
+			G2SClientCertPath: clientCertPath,
+			G2SClientKeyPath:  clientKeyPath,
+		},
+	}
+	role, err := resolveCertificateRole("g2s_client_cert", cfg.Crypto)
+	if err != nil {
+		t.Fatalf("resolve role: %v", err)
+	}
+	backupTime := time.Date(2026, 5, 22, 2, 3, 4, 0, time.UTC)
+	if _, err := persistImportedCertificate(role, certB, keyB, backupTime); err != nil {
+		t.Fatalf("persist imported certificate: %v", err)
+	}
+	backupID := backupTime.Format("20060102T150405Z")
+	handler := certificateRestoreHandler(auditStore, cfg)
+
+	restorePayload, err := json.Marshal(certificateRestoreRequest{
+		Role:     "g2s_client_cert",
+		BackupID: backupID,
+	})
+	if err != nil {
+		t.Fatalf("marshal restore payload: %v", err)
+	}
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/certificates/restore", bytes.NewReader(restorePayload))
+	restoreReq.RemoteAddr = "127.0.0.1:9441"
+	restoreRec := httptest.NewRecorder()
+	handler(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("restore status = %d, want %d: %s", restoreRec.Code, http.StatusOK, restoreRec.Body.String())
+	}
+
+	var restoreBody certificateRestoreResponse
+	if err := json.Unmarshal(restoreRec.Body.Bytes(), &restoreBody); err != nil {
+		t.Fatalf("decode restore response: %v", err)
+	}
+	if restoreBody.BackupID != backupID {
+		t.Fatalf("backup id = %q, want %q", restoreBody.BackupID, backupID)
+	}
+	if restoreBody.CertificateStatus == "" {
+		t.Fatal("expected certificate status after restore")
+	}
+	if len(restoreBody.CertificateInventory) == 0 {
+		t.Fatal("expected certificate inventory after restore")
+	}
+
+	certBytes, err := os.ReadFile(clientCertPath)
+	if err != nil {
+		t.Fatalf("read restored cert: %v", err)
+	}
+	keyBytes, err := os.ReadFile(clientKeyPath)
+	if err != nil {
+		t.Fatalf("read restored key: %v", err)
+	}
+	if strings.TrimSpace(string(certBytes)) != strings.TrimSpace(certA) {
+		t.Fatal("expected certificate restore to previous backup value")
+	}
+	if strings.TrimSpace(string(keyBytes)) != strings.TrimSpace(keyA) {
+		t.Fatal("expected private key restore to previous backup value")
+	}
+
+	missingPayload, err := json.Marshal(certificateRestoreRequest{
+		Role:     "g2s_client_cert",
+		BackupID: "missing-backup-id",
+	})
+	if err != nil {
+		t.Fatalf("marshal missing payload: %v", err)
+	}
+	missingReq := httptest.NewRequest(http.MethodPost, "/api/certificates/restore", bytes.NewReader(missingPayload))
+	missingReq.RemoteAddr = "127.0.0.1:9442"
+	missingRec := httptest.NewRecorder()
+	handler(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing backup status = %d, want %d", missingRec.Code, http.StatusNotFound)
+	}
+}
+
+func TestCertificateBackupsAndRestoreAuthAndRoleValidation(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	tempDir := t.TempDir()
+	caPath := filepath.Join(tempDir, "ca.crt")
+	certificatePEM, _ := generateTestCertificateAndKey(t, "restore-auth.local", 90*24*time.Hour)
+	if err := os.WriteFile(caPath, []byte(certificatePEM), 0o644); err != nil {
+		t.Fatalf("seed ca: %v", err)
+	}
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		Crypto: config.Crypto{
+			G2SCAPath: caPath,
+		},
+	}
+	backupsHandler := certificateBackupsHandler(cfg)
+	backupsReq := httptest.NewRequest(http.MethodGet, "/api/certificates/backups?role=bad-role", nil)
+	backupsReq.RemoteAddr = "127.0.0.1:9443"
+	backupsRec := httptest.NewRecorder()
+	backupsHandler(backupsRec, backupsReq)
+	if backupsRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid role backups status = %d, want %d", backupsRec.Code, http.StatusBadRequest)
+	}
+
+	restoreHandler := certificateRestoreHandler(auditStore, cfg)
+	restorePayload, err := json.Marshal(certificateRestoreRequest{
+		Role:     "g2s_ca_cert",
+		BackupID: "20260522T010203Z",
+	})
+	if err != nil {
+		t.Fatalf("marshal restore payload: %v", err)
+	}
+
+	noTokenReq := httptest.NewRequest(http.MethodPost, "/api/certificates/restore", bytes.NewReader(restorePayload))
+	noTokenReq.RemoteAddr = "127.0.0.1:9444"
+	noTokenRec := httptest.NewRecorder()
+	restoreHandler(noTokenRec, noTokenReq)
+	if noTokenRec.Code != http.StatusUnauthorized {
+		t.Fatalf("restore without token status = %d, want %d", noTokenRec.Code, http.StatusUnauthorized)
+	}
+
+	invalidRolePayload, err := json.Marshal(certificateRestoreRequest{
+		Role:     "bad-role",
+		BackupID: "20260522T010203Z",
+	})
+	if err != nil {
+		t.Fatalf("marshal invalid role restore payload: %v", err)
+	}
+	invalidRoleReq := httptest.NewRequest(http.MethodPost, "/api/certificates/restore", bytes.NewReader(invalidRolePayload))
+	invalidRoleReq.RemoteAddr = "127.0.0.1:9447"
+	invalidRoleReq.Header.Set("Authorization", "Bearer lab-secret")
+	invalidRoleRec := httptest.NewRecorder()
+	restoreHandler(invalidRoleRec, invalidRoleReq)
+	if invalidRoleRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid role restore status = %d, want %d", invalidRoleRec.Code, http.StatusBadRequest)
+	}
+
+	badTokenReq := httptest.NewRequest(http.MethodPost, "/api/certificates/restore", bytes.NewReader(restorePayload))
+	badTokenReq.RemoteAddr = "127.0.0.1:9445"
+	badTokenReq.Header.Set("Authorization", "Bearer wrong-token")
+	badTokenRec := httptest.NewRecorder()
+	restoreHandler(badTokenRec, badTokenReq)
+	if badTokenRec.Code != http.StatusUnauthorized {
+		t.Fatalf("restore with invalid token status = %d, want %d", badTokenRec.Code, http.StatusUnauthorized)
+	}
+
+	validTokenReq := httptest.NewRequest(http.MethodPost, "/api/certificates/restore", bytes.NewReader(restorePayload))
+	validTokenReq.RemoteAddr = "127.0.0.1:9446"
+	validTokenReq.Header.Set("Authorization", "Bearer lab-secret")
+	validTokenRec := httptest.NewRecorder()
+	restoreHandler(validTokenRec, validTokenReq)
+	if validTokenRec.Code == http.StatusUnauthorized {
+		t.Fatalf("expected authorized restore request, got %d", validTokenRec.Code)
+	}
+}
+
 func TestCertificateImportHandlerPersistsMaterialsAndRefreshesInventory(t *testing.T) {
 	ctx := context.Background()
 	auditStore, err := store.Open(ctx, ":memory:")
