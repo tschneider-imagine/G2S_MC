@@ -160,4 +160,16 @@ CREATE TABLE IF NOT EXISTS endpoint_integrity_alert_states (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by TEXT
 );
+
+CREATE TABLE IF NOT EXISTS egm_registry_overrides (
+    egm_id TEXT PRIMARY KEY,
+    display_name TEXT,
+    vendor TEXT,
+    cabinet_family TEXT,
+    game_title TEXT,
+    software_version TEXT,
+    notes TEXT,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
+);
 `

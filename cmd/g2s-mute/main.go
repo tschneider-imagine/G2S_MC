@@ -125,6 +125,24 @@ func main() {
 	}))
 	mux.HandleFunc("/api/incidents", incidentsHandler(auditStore))
 	mux.HandleFunc("/api/egms/history", egmHistoryHandler(auditStore))
+	mux.HandleFunc("/api/egm-registry", egmRegistryHandler(eng, auditStore, cfg))
+	mux.HandleFunc(
+		"/api/egm-registry/promote",
+		requireMutationAuthForMethods(
+			egmRegistryPromoteHandler(eng, auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
+	mux.HandleFunc(
+		"/api/egm-registry/",
+		requireMutationAuthForMethods(
+			egmRegistryByIDHandler(eng, auditStore, cfg),
+			cfg,
+			http.MethodPut,
+			http.MethodDelete,
+		),
+	)
 	mux.HandleFunc("/api/endpoint-integrity/alerts", endpointIntegrityAlertsHandler(eng, auditStore, cfg))
 	mux.HandleFunc(
 		"/api/endpoint-integrity/alerts/",
@@ -483,6 +501,11 @@ func readinessHandler(eng *engine.Engine, store *store.SQLiteStore, cfg config.C
 
 func computeApplianceStatus(ctx context.Context, eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo, request *http.Request) (applianceStatus, error) {
 	snapshot := eng.Snapshot()
+	egmRegistryOverrides, err := store.ListEGMRegistryOverrides(ctx)
+	if err != nil {
+		return applianceStatus{}, err
+	}
+	snapshot = applyEGMRegistryOverrides(snapshot, egmRegistryOverrides)
 	certificates, err := store.ListCertificateInventory(ctx)
 	if err != nil {
 		return applianceStatus{}, err

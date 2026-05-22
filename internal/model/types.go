@@ -62,12 +62,15 @@ type EndpointCollisionSummary struct {
 
 type EGM struct {
 	ID                       string                   `json:"id"`
+	DisplayName              string                   `json:"display_name,omitempty"`
 	IPAddress                string                   `json:"ip_address"`
 	Port                     int                      `json:"port"`
 	Vendor                   string                   `json:"vendor,omitempty"`
 	CabinetFamily            string                   `json:"cabinet_family,omitempty"`
 	GameTitle                string                   `json:"game_title,omitempty"`
 	SoftwareVersion          string                   `json:"software_version,omitempty"`
+	Notes                    string                   `json:"notes,omitempty"`
+	RegistryOverride         bool                     `json:"registry_override,omitempty"`
 	Source                   EGMSource                `json:"source"`
 	Status                   EGMHealth                `json:"status"`
 	LastError                string                   `json:"last_error,omitempty"`

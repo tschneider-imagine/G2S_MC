@@ -287,6 +287,82 @@ func TestHeartbeatPolicyOverrideCRUD(t *testing.T) {
 	}
 }
 
+func TestEGMRegistryOverrideCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	records, err := store.ListEGMRegistryOverrides(ctx)
+	if err != nil {
+		t.Fatalf("list empty overrides: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected empty registry override list, got %d", len(records))
+	}
+
+	row := EGMRegistryOverride{
+		EGMID:           "EGM-02",
+		DisplayName:     "Cabinet 2",
+		Vendor:          "ACME",
+		CabinetFamily:   "Family B",
+		GameTitle:       "Test Game",
+		SoftwareVersion: "1.2.3",
+		Notes:           "promoted from discovery",
+		UpdatedBy:       "tester-a",
+	}
+	if err := store.UpsertEGMRegistryOverride(ctx, row); err != nil {
+		t.Fatalf("upsert override: %v", err)
+	}
+	assertCount(t, store, "egm_registry_overrides", 1)
+
+	saved, err := store.GetEGMRegistryOverride(ctx, "EGM-02")
+	if err != nil {
+		t.Fatalf("get override: %v", err)
+	}
+	if saved == nil {
+		t.Fatalf("expected override row")
+	}
+	if saved.DisplayName != "Cabinet 2" || saved.Notes != "promoted from discovery" {
+		t.Fatalf("unexpected override row: %+v", saved)
+	}
+
+	row.DisplayName = "Cabinet 2A"
+	row.Notes = "updated note"
+	row.UpdatedBy = "tester-b"
+	if err := store.UpsertEGMRegistryOverride(ctx, row); err != nil {
+		t.Fatalf("update override: %v", err)
+	}
+	records, err = store.ListEGMRegistryOverrides(ctx)
+	if err != nil {
+		t.Fatalf("list overrides: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 override row after update, got %d", len(records))
+	}
+	if records[0].DisplayName != "Cabinet 2A" || records[0].UpdatedBy != "tester-b" {
+		t.Fatalf("unexpected updated override: %+v", records[0])
+	}
+
+	deleted, err := store.DeleteEGMRegistryOverride(ctx, "EGM-02")
+	if err != nil {
+		t.Fatalf("delete override: %v", err)
+	}
+	if !deleted {
+		t.Fatalf("expected deleted=true for existing row")
+	}
+	deleted, err = store.DeleteEGMRegistryOverride(ctx, "EGM-02")
+	if err != nil {
+		t.Fatalf("delete missing override: %v", err)
+	}
+	if deleted {
+		t.Fatalf("expected deleted=false for missing row")
+	}
+	assertCount(t, store, "egm_registry_overrides", 0)
+}
+
 func TestBlockerPolicyOverrideCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")

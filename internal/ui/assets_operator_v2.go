@@ -392,12 +392,49 @@ const dashboardHTML = `<!doctype html>
                 <th>Endpoint Drift</th>
                 <th>Game</th>
                 <th><button type="button" class="sort-button" data-sort-key="last_seen">Last seen</button></th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="egm-table">
-              <tr><td colspan="8">Loading...</td></tr>
+              <tr><td colspan="9">Loading...</td></tr>
             </tbody>
           </table>
+        </div>
+        <div id="egm-registry-drawer" class="egm-registry-drawer egm-registry-drawer-hidden">
+          <div class="panel-title-row">
+            <strong id="egm-registry-drawer-title">EGM Metadata</strong>
+            <span id="egm-registry-drawer-state" class="source-pill source-file">ready</span>
+          </div>
+          <span id="egm-registry-drawer-message" class="muted-text">Select an EGM row to edit registry metadata.</span>
+          <form id="egm-registry-form" class="setup-form">
+            <div class="form-grid">
+              <label>EGM ID<input id="egm-registry-egm-id" type="text" disabled></label>
+              <label>Display Name<input id="egm-registry-display-name" type="text" maxlength="120"></label>
+              <label>Vendor<input id="egm-registry-vendor" type="text" maxlength="120"></label>
+              <label>Cabinet Family<input id="egm-registry-cabinet-family" type="text" maxlength="120"></label>
+              <label>Game Title<input id="egm-registry-game-title" type="text" maxlength="160"></label>
+              <label>Software Version<input id="egm-registry-software-version" type="text" maxlength="120"></label>
+            </div>
+            <label class="cert-textarea-label">Notes
+              <textarea id="egm-registry-notes" rows="3" maxlength="2000" placeholder="Operator notes for this cabinet"></textarea>
+            </label>
+            <div class="setup-details">
+              <div>
+                <p class="label">Override State</p>
+                <strong id="egm-registry-override-state">-</strong>
+              </div>
+              <div>
+                <p class="label">Source</p>
+                <strong id="egm-registry-source-state">-</strong>
+              </div>
+            </div>
+            <div class="setup-actions">
+              <button id="egm-registry-save-button" type="submit">Save Metadata</button>
+              <button id="egm-registry-delete-button" type="button" class="secondary-button">Delete Override</button>
+              <button id="egm-registry-promote-button" type="button" class="secondary-button">Promote Discovered EGM</button>
+              <button id="egm-registry-close-button" type="button" class="secondary-button">Close</button>
+            </div>
+          </form>
         </div>
       </div>
 
@@ -1827,6 +1864,28 @@ th {
   border-color: rgba(245, 158, 11, 0.35);
 }
 
+.egm-registry-drawer {
+  border-top: 1px solid var(--line);
+  background: #f8fbf8;
+  padding: 12px 16px 16px;
+}
+
+.egm-registry-drawer-hidden {
+  display: none;
+}
+
+.egm-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.egm-row-actions button {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .endpoint-integrity-sections {
   display: grid;
   gap: 10px;
@@ -2407,6 +2466,8 @@ const dashboardJS = `const endpoints = {
   readyz: "/readyz",
   incidents: "/api/incidents?limit=20",
   egmHistory: "/api/egms/history",
+  egmRegistry: "/api/egm-registry",
+  egmRegistryPromote: "/api/egm-registry/promote",
   stateHistory: "/api/state-history?limit=30",
   runMarkers: "/api/run-markers?limit=30",
   operatorDrill: "/api/operator-drill",
@@ -2467,6 +2528,7 @@ const clientState = {
   selectedSessionEvidenceID: 0,
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
+  selectedEGMRegistryID: "",
   workflowProgressLoaded: false,
   workflowProgressBaseline: null,
   endpointIntegrityActionInFlight: false
@@ -2507,6 +2569,7 @@ function emptySnapshot() {
     stateHistory: [],
     runMarkers: [],
     operatorDrill: null,
+    egmRegistry: null,
     certificates: [],
     operatorAudit: [],
     sessionEvidence: [],
@@ -2536,6 +2599,7 @@ function copySnapshot(snapshot) {
     stateHistory: Array.isArray(snapshot.stateHistory) ? snapshot.stateHistory.slice() : [],
     runMarkers: Array.isArray(snapshot.runMarkers) ? snapshot.runMarkers.slice() : [],
     operatorDrill: snapshot.operatorDrill || null,
+    egmRegistry: snapshot.egmRegistry || null,
     certificates: Array.isArray(snapshot.certificates) ? snapshot.certificates.slice() : [],
     operatorAudit: Array.isArray(snapshot.operatorAudit) ? snapshot.operatorAudit.slice() : [],
     sessionEvidence: Array.isArray(snapshot.sessionEvidence) ? snapshot.sessionEvidence.slice() : [],
@@ -2652,6 +2716,7 @@ function egmMatchesGlobalFilters(egm) {
   const collisionTypes = Array.isArray(egm?.endpoint_collision_types) ? egm.endpoint_collision_types.join(" ") : "";
   return globalSeverityAllows(egmSeverityBucket(egm)) && rowMatchesGlobalText([
     egm?.id,
+    egm?.display_name,
     egm?.source,
     egm?.status,
     egm?.vendor,
@@ -2662,6 +2727,7 @@ function egmMatchesGlobalFilters(egm) {
     egm?.last_endpoint_port,
     egm?.game_title,
     egm?.software_version,
+    egm?.notes,
     driftIPs,
     collisionTypes
   ]);
@@ -6512,6 +6578,213 @@ function updateSortLabels() {
   $("egm-sort-label").textContent = "Sort: " + (clientState.egmSortKey === "egm_id" ? "EGM ID" : clientState.egmSortKey === "last_seen" ? "Last seen" : "Status") + " " + (clientState.egmSortDir === "asc" ? "(asc)" : "(desc)");
 }
 
+function normalizeEGMRegistryResponse(payload) {
+  const data = payload && typeof payload === "object" ? payload : {};
+  const normalize = (item) => {
+    const row = item && typeof item === "object" ? item : {};
+    return {
+      egm_id: String(row.egm_id || "").trim(),
+      display_name: String(row.display_name || "").trim(),
+      vendor: String(row.vendor || "").trim(),
+      cabinet_family: String(row.cabinet_family || "").trim(),
+      game_title: String(row.game_title || "").trim(),
+      software_version: String(row.software_version || "").trim(),
+      notes: String(row.notes || "").trim(),
+      updated_at: String(row.updated_at || "").trim(),
+      updated_by: String(row.updated_by || "").trim()
+    };
+  };
+  const overrides = Array.isArray(data.overrides) ? data.overrides.map(normalize).filter((row) => row.egm_id) : [];
+  return {
+    generated_at: String(data.generated_at || "").trim(),
+    overrides: overrides
+  };
+}
+
+function egmRegistryOverridesFromSnapshot(snapshot) {
+  const payload = snapshot?.egmRegistry;
+  const normalized = normalizeEGMRegistryResponse(payload);
+  const map = {};
+  (normalized.overrides || []).forEach((item) => {
+    map[item.egm_id] = item;
+  });
+  return map;
+}
+
+function egmRegistryOverrideForID(snapshot, egmID) {
+  const id = String(egmID || "").trim();
+  if (!id) return null;
+  const map = egmRegistryOverridesFromSnapshot(snapshot);
+  return map[id] || null;
+}
+
+function setEGMRegistryDrawerState(level, message) {
+  const badge = $("egm-registry-drawer-state");
+  badge.textContent = level;
+  badge.className = "source-pill " + (level === "ready" || level === "saved" ? "source-file" : level === "working" ? "source-override" : "source-mixed");
+  $("egm-registry-drawer-message").textContent = message;
+}
+
+function openEGMRegistryDrawerFor(egmID) {
+  clientState.selectedEGMRegistryID = String(egmID || "").trim();
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  renderEGMRegistryDrawer(snapshot);
+}
+
+function closeEGMRegistryDrawer() {
+  clientState.selectedEGMRegistryID = "";
+  const drawer = $("egm-registry-drawer");
+  drawer.classList.add("egm-registry-drawer-hidden");
+}
+
+function selectedEGMFromSnapshot(snapshot) {
+  const selectedID = String(clientState.selectedEGMRegistryID || "").trim();
+  if (!selectedID) return null;
+  const rows = Array.isArray(snapshot?.status?.egms) ? snapshot.status.egms : [];
+  return rows.find((row) => String(row?.id || "").trim() === selectedID) || null;
+}
+
+function currentEGMRegistryFormValue() {
+  return {
+    display_name: $("egm-registry-display-name").value.trim(),
+    vendor: $("egm-registry-vendor").value.trim(),
+    cabinet_family: $("egm-registry-cabinet-family").value.trim(),
+    game_title: $("egm-registry-game-title").value.trim(),
+    software_version: $("egm-registry-software-version").value.trim(),
+    notes: $("egm-registry-notes").value.trim()
+  };
+}
+
+function egmRegistryMutationHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  return withEGMFocusHeader(headers);
+}
+
+function renderEGMRegistryDrawer(snapshot) {
+  const drawer = $("egm-registry-drawer");
+  const selected = selectedEGMFromSnapshot(snapshot);
+  if (!selected) {
+    drawer.classList.add("egm-registry-drawer-hidden");
+    return;
+  }
+  drawer.classList.remove("egm-registry-drawer-hidden");
+  const selectedID = String(selected.id || "").trim();
+  const override = egmRegistryOverrideForID(snapshot, selectedID);
+  const tokenRequired = mutationTokenRequired();
+  const tokenPresent = !!(getSetupToken() || getCertToken());
+  $("egm-registry-drawer-title").textContent = "EGM Metadata: " + selectedID;
+  $("egm-registry-egm-id").value = selectedID;
+  $("egm-registry-display-name").value = override?.display_name || selected.display_name || selectedID;
+  $("egm-registry-vendor").value = override?.vendor || selected.vendor || "";
+  $("egm-registry-cabinet-family").value = override?.cabinet_family || selected.cabinet_family || "";
+  $("egm-registry-game-title").value = override?.game_title || selected.game_title || "";
+  $("egm-registry-software-version").value = override?.software_version || selected.software_version || "";
+  $("egm-registry-notes").value = override?.notes || selected.notes || "";
+  $("egm-registry-override-state").textContent = override
+    ? ("override active; updated " + fmtTime(override.updated_at) + (override.updated_by ? (" by " + override.updated_by) : ""))
+    : "no registry override; live metadata only";
+  $("egm-registry-source-state").textContent = String(selected.source || "UNKNOWN") + (selected.registry_override ? " (registry override merged)" : "");
+  $("egm-registry-delete-button").disabled = !override || (tokenRequired && !tokenPresent);
+  $("egm-registry-save-button").disabled = tokenRequired && !tokenPresent;
+  const promoteEnabled = String(selected.source || "").toUpperCase() === "DISCOVERED" && selected.registry_override !== true;
+  $("egm-registry-promote-button").disabled = !promoteEnabled || (tokenRequired && !tokenPresent);
+  setEGMRegistryDrawerState("ready", tokenRequired && !tokenPresent
+    ? "Enter a setup or certificate API token before saving, promoting, or deleting registry metadata."
+    : "Edit metadata and save. Promote converts discovered EGM metadata into configured override.");
+}
+
+async function promoteSelectedEGMRegistry(event) {
+  if (event) event.preventDefault();
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const selected = selectedEGMFromSnapshot(snapshot);
+  if (!selected) return;
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setEGMRegistryDrawerState("blocked", "Enter a setup or certificate API token before promoting.");
+    return;
+  }
+  try {
+    setEGMRegistryDrawerState("working", "Promoting discovered EGM metadata.");
+    const formValue = currentEGMRegistryFormValue();
+    const response = await fetch(endpoints.egmRegistryPromote, {
+      method: "POST",
+      headers: egmRegistryMutationHeaders(),
+      body: JSON.stringify(Object.assign({ egm_id: selected.id }, formValue))
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setEGMRegistryDrawerState("blocked", "Promote failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    setEGMRegistryDrawerState("saved", "Discovered EGM promoted into configured registry metadata.");
+    schedulePoll(0);
+  } catch (err) {
+    setEGMRegistryDrawerState("blocked", err && err.message ? err.message : "Promote failed.");
+  }
+}
+
+async function saveSelectedEGMRegistry(event) {
+  if (event) event.preventDefault();
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const selected = selectedEGMFromSnapshot(snapshot);
+  if (!selected) return;
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setEGMRegistryDrawerState("blocked", "Enter a setup or certificate API token before saving.");
+    return;
+  }
+  try {
+    setEGMRegistryDrawerState("working", "Saving EGM registry metadata.");
+    const response = await fetch(endpoints.egmRegistry + "/" + encodeURIComponent(String(selected.id || "").trim()), {
+      method: "PUT",
+      headers: egmRegistryMutationHeaders(),
+      body: JSON.stringify(currentEGMRegistryFormValue())
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setEGMRegistryDrawerState("blocked", "Save failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    setEGMRegistryDrawerState("saved", "EGM registry metadata saved.");
+    schedulePoll(0);
+  } catch (err) {
+    setEGMRegistryDrawerState("blocked", err && err.message ? err.message : "Save failed.");
+  }
+}
+
+async function deleteSelectedEGMRegistryOverride() {
+  const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
+  const selected = selectedEGMFromSnapshot(snapshot);
+  if (!selected) return;
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setEGMRegistryDrawerState("blocked", "Enter a setup or certificate API token before deleting override.");
+    return;
+  }
+  const egmID = String(selected.id || "").trim();
+  if (!egmID) return;
+  if (!window.confirm("Delete EGM registry override for " + egmID + "?")) {
+    return;
+  }
+  try {
+    setEGMRegistryDrawerState("working", "Deleting EGM registry override.");
+    const response = await fetch(endpoints.egmRegistry + "/" + encodeURIComponent(egmID), {
+      method: "DELETE",
+      headers: egmRegistryMutationHeaders()
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setEGMRegistryDrawerState("blocked", "Delete failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    setEGMRegistryDrawerState("saved", "EGM registry override deleted.");
+    schedulePoll(0);
+  } catch (err) {
+    setEGMRegistryDrawerState("blocked", err && err.message ? err.message : "Delete failed.");
+  }
+}
+
 function renderEGMTable(status) {
   const all = Array.isArray(status?.egms) ? status.egms.slice() : [];
   const focusScoped = filterStatusEGMsByFocus(all);
@@ -6530,9 +6803,16 @@ function renderEGMTable(status) {
       const integrityLabel = egm.endpoint_collision_warning === true
         ? ("warning" + (collisionTypes.length ? (" (" + collisionTypes.join(", ") + ")") : ""))
         : "none";
+      const promoteVisible = String(egm.source || "").toUpperCase() === "DISCOVERED" && egm.registry_override !== true;
+      const actionButtons = "<div class=\"egm-row-actions\">" +
+        "<button type=\"button\" class=\"secondary-button egm-row-action-button\" data-egm-action=\"edit\" data-egm-id=\"" + escapeHTML(String(egm.id || "")) + "\">Edit</button>" +
+        (promoteVisible
+          ? "<button type=\"button\" class=\"secondary-button egm-row-action-button\" data-egm-action=\"promote\" data-egm-id=\"" + escapeHTML(String(egm.id || "")) + "\">Promote</button>"
+          : "") +
+        "</div>";
       return "" +
     "<tr>" +
-      "<td><strong>" + escapeHTML(egm.id) + "</strong><br><span class=\"minor\">" + escapeHTML((egm.vendor || "") + " " + (egm.cabinet_family || "")).trim() + "</span></td>" +
+      "<td><strong>" + escapeHTML(egm.display_name || egm.id) + "</strong><br><span class=\"minor\">" + escapeHTML((egm.vendor || "") + " " + (egm.cabinet_family || "")).trim() + "</span><br><span class=\"minor\">" + escapeHTML("id " + (egm.id || "-")) + (egm.registry_override === true ? " | override" : "") + "</span></td>" +
       "<td>" + egmSourcePill(egm.source) + "</td>" +
       "<td>" + statusPill(egm.status) + "</td>" +
       "<td>" + escapeHTML(configuredAddress) + "</td>" +
@@ -6540,6 +6820,7 @@ function renderEGMTable(status) {
       "<td>" + escapeHTML(driftLabel) + "<br><span class=\"minor\">integrity " + escapeHTML(integrityLabel) + "</span></td>" +
       "<td>" + escapeHTML(egm.game_title || "-") + "<br><span class=\"minor\">" + escapeHTML(egm.software_version || "") + "</span></td>" +
       "<td>" + escapeHTML(fmtTime(egm.last_seen)) + "<br><span class=\"minor\">" + escapeHTML(fmtAge(egm.last_seen)) + "</span></td>" +
+      "<td>" + actionButtons + "</td>" +
     "</tr>";
     })()
   );
@@ -6552,7 +6833,7 @@ function renderEGMTable(status) {
   $("egm-count").textContent = focusID
     ? ("Focus " + focusID + " | " + filtered.length + " / " + all.length + " EGMs" + globalSuffix)
     : (filtered.length + " / " + all.length + " EGMs" + globalSuffix);
-  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"8\">No EGMs match current filter</td></tr>";
+  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"9\">No EGMs match current filter</td></tr>";
   updateSortLabels();
 }
 
@@ -7508,6 +7789,7 @@ function renderStatus(snapshot) {
   renderEGMGroupedSummary(snapshot);
   renderSelectedEGMDetail(snapshot);
   renderEGMTable(status);
+  renderEGMRegistryDrawer(snapshot);
   renderEndpointIntegrity(snapshot);
   renderRunMarkerControls(snapshot);
   renderRunReportControls(snapshot);
@@ -7691,6 +7973,7 @@ async function pollOnce() {
       fetchReadyz(),
       fetchJSON(endpoints.incidents),
       fetchJSON(egmHistoryEndpointURL()),
+      fetchJSON(endpoints.egmRegistry),
       fetchJSON(endpoints.stateHistory),
       fetchJSON(endpoints.runMarkers),
       fetchJSON(endpoints.operatorDrill),
@@ -7707,7 +7990,7 @@ async function pollOnce() {
       fetchJSON(endpoints.endpointIntegrityAlerts)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, blockerPolicySuggestionsResult, cabinetPreflightResult, endpointIntegrityAlertsResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, egmRegistryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, blockerPolicySuggestionsResult, cabinetPreflightResult, endpointIntegrityAlertsResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -7732,6 +8015,7 @@ async function pollOnce() {
 
     if (incidentsResult.status === "fulfilled") snapshot.incidents = incidentsResult.value;
     if (egmHistoryResult.status === "fulfilled") snapshot.egmHistory = egmHistoryResult.value;
+    if (egmRegistryResult.status === "fulfilled") snapshot.egmRegistry = normalizeEGMRegistryResponse(egmRegistryResult.value);
     if (stateHistoryResult.status === "fulfilled") snapshot.stateHistory = stateHistoryResult.value;
     if (runMarkersResult.status === "fulfilled") snapshot.runMarkers = runMarkersResult.value;
     if (operatorDrillResult.status === "fulfilled") snapshot.operatorDrill = operatorDrillResult.value;
@@ -7749,6 +8033,7 @@ async function pollOnce() {
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
+    if (egmRegistryResult.status !== "fulfilled") failures.push("egm registry unavailable");
     if (stateHistoryResult.status !== "fulfilled") failures.push("state history unavailable");
     if (runMarkersResult.status !== "fulfilled") failures.push("run markers unavailable");
     if (operatorDrillResult.status !== "fulfilled") failures.push("operator drill unavailable");
@@ -7911,6 +8196,25 @@ function bindControls() {
     if (!button) return;
     handleEndpointIntegrityAlertActionFromUI(button);
   });
+  $("egm-table").addEventListener("click", async (event) => {
+    const button = event.target.closest(".egm-row-action-button");
+    if (!button) return;
+    const egmID = button.getAttribute("data-egm-id") || "";
+    const action = button.getAttribute("data-egm-action") || "";
+    if (!egmID || !action) return;
+    if (action === "edit") {
+      openEGMRegistryDrawerFor(egmID);
+      return;
+    }
+    if (action === "promote") {
+      openEGMRegistryDrawerFor(egmID);
+      await promoteSelectedEGMRegistry();
+    }
+  });
+  $("egm-registry-form").addEventListener("submit", saveSelectedEGMRegistry);
+  $("egm-registry-delete-button").addEventListener("click", deleteSelectedEGMRegistryOverride);
+  $("egm-registry-promote-button").addEventListener("click", promoteSelectedEGMRegistry);
+  $("egm-registry-close-button").addEventListener("click", closeEGMRegistryDrawer);
   $("session-package-export-button").addEventListener("click", exportSessionPackage);
   $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
   $("workflow-progress-clear-button").addEventListener("click", clearSessionWorkflowProgress);

@@ -27,6 +27,18 @@ type CabinetProfileOverride struct {
 	UpdatedBy string
 }
 
+type EGMRegistryOverride struct {
+	EGMID           string
+	DisplayName     string
+	Vendor          string
+	CabinetFamily   string
+	GameTitle       string
+	SoftwareVersion string
+	Notes           string
+	UpdatedAt       time.Time
+	UpdatedBy       string
+}
+
 type HeartbeatPolicyOverride struct {
 	IntervalMS         int
 	WarningAfterMissed int
@@ -592,6 +604,111 @@ func (s *SQLiteStore) UpsertCabinetProfileOverride(ctx context.Context, profile 
 func (s *SQLiteStore) ClearCabinetProfileOverride(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM cabinet_profile_overrides WHERE id = 1`)
 	return err
+}
+
+func (s *SQLiteStore) ListEGMRegistryOverrides(ctx context.Context) ([]EGMRegistryOverride, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT egm_id, COALESCE(display_name, ''), COALESCE(vendor, ''), COALESCE(cabinet_family, ''), COALESCE(game_title, ''), COALESCE(software_version, ''), COALESCE(notes, ''), updated_at, COALESCE(updated_by, '')
+		 FROM egm_registry_overrides
+		 ORDER BY egm_id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []EGMRegistryOverride{}
+	for rows.Next() {
+		var record EGMRegistryOverride
+		if err := rows.Scan(
+			&record.EGMID,
+			&record.DisplayName,
+			&record.Vendor,
+			&record.CabinetFamily,
+			&record.GameTitle,
+			&record.SoftwareVersion,
+			&record.Notes,
+			&record.UpdatedAt,
+			&record.UpdatedBy,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s *SQLiteStore) GetEGMRegistryOverride(ctx context.Context, egmID string) (*EGMRegistryOverride, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT egm_id, COALESCE(display_name, ''), COALESCE(vendor, ''), COALESCE(cabinet_family, ''), COALESCE(game_title, ''), COALESCE(software_version, ''), COALESCE(notes, ''), updated_at, COALESCE(updated_by, '')
+		 FROM egm_registry_overrides
+		 WHERE egm_id = ?`,
+		strings.TrimSpace(egmID),
+	)
+
+	var record EGMRegistryOverride
+	if err := row.Scan(
+		&record.EGMID,
+		&record.DisplayName,
+		&record.Vendor,
+		&record.CabinetFamily,
+		&record.GameTitle,
+		&record.SoftwareVersion,
+		&record.Notes,
+		&record.UpdatedAt,
+		&record.UpdatedBy,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (s *SQLiteStore) UpsertEGMRegistryOverride(ctx context.Context, override EGMRegistryOverride) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO egm_registry_overrides (
+		    egm_id, display_name, vendor, cabinet_family, game_title, software_version, notes, updated_at, updated_by
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(egm_id) DO UPDATE SET
+		    display_name = excluded.display_name,
+		    vendor = excluded.vendor,
+		    cabinet_family = excluded.cabinet_family,
+		    game_title = excluded.game_title,
+		    software_version = excluded.software_version,
+		    notes = excluded.notes,
+		    updated_at = CURRENT_TIMESTAMP,
+		    updated_by = excluded.updated_by`,
+		strings.TrimSpace(override.EGMID),
+		strings.TrimSpace(override.DisplayName),
+		strings.TrimSpace(override.Vendor),
+		strings.TrimSpace(override.CabinetFamily),
+		strings.TrimSpace(override.GameTitle),
+		strings.TrimSpace(override.SoftwareVersion),
+		strings.TrimSpace(override.Notes),
+		strings.TrimSpace(override.UpdatedBy),
+	)
+	return err
+}
+
+func (s *SQLiteStore) DeleteEGMRegistryOverride(ctx context.Context, egmID string) (bool, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM egm_registry_overrides WHERE egm_id = ?`,
+		strings.TrimSpace(egmID),
+	)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return deleted > 0, nil
 }
 
 func (s *SQLiteStore) GetHeartbeatPolicyOverride(ctx context.Context) (*HeartbeatPolicyOverride, error) {
@@ -1202,7 +1319,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides", "blocker_policy_escalation_events", "endpoint_integrity_alert_states":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides", "blocker_policy_escalation_events", "endpoint_integrity_alert_states", "egm_registry_overrides":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}
