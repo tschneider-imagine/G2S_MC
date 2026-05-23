@@ -82,8 +82,8 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two operator-toolbar-grid">
-      <div class="panel operator-actions-bar">
-        <div class="panel-head panel-head-stack" data-dashboard-tab="cabinet-signal,diagnostics">
+      <div class="panel operator-actions-bar" data-dashboard-tab="overview,cabinet-signal,evidence">
+        <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Operator Actions</h2>
             <span class="muted-text">Quick controls</span>
@@ -93,10 +93,10 @@ const dashboardHTML = `<!doctype html>
         <div class="setup-actions operator-actions-buttons">
           <button id="operator-actions-refresh-button" type="button">Refresh now</button>
           <button id="operator-actions-capture-evidence-button" type="button" class="secondary-button">Capture evidence</button>
-          <button id="operator-actions-export-package-button" type="button" class="secondary-button">Export session package</button>
+          <button id="operator-actions-export-package-button" type="button" class="secondary-button">Export controller package</button>
         </div>
       </div>
-      <div class="panel global-view-controls-panel">
+      <div class="panel global-view-controls-panel" data-dashboard-tab="egms,diagnostics">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Global View Controls</h2>
@@ -158,7 +158,7 @@ const dashboardHTML = `<!doctype html>
           <h2>Service Status Details</h2>
           <span id="uptime">-</span>
         </div>
-        <dl class="kv-list" data-dashboard-tab="overview,cabinet-signal">
+        <dl class="kv-list">
           <div><dt>Bind</dt><dd id="bind-address">-</dd></div>
           <div><dt>Database</dt><dd id="database-path">-</dd></div>
           <div><dt>G2S endpoint</dt><dd id="g2s-endpoint">-</dd></div>
@@ -190,7 +190,7 @@ const dashboardHTML = `<!doctype html>
           <div><dt>Required SAN DNS</dt><dd id="cabinet-required-san-dns">-</dd></div>
           <div><dt>Required SAN IPs</dt><dd id="cabinet-required-san-ips">-</dd></div>
           <div><dt>Host ID</dt><dd id="cabinet-host-id">-</dd></div>
-          <div><dt>First Test EGM IDs</dt><dd id="cabinet-first-test-egm-ids">-</dd></div>
+          <div><dt>Test EGM IDs</dt><dd id="cabinet-first-test-egm-ids">-</dd></div>
           <div><dt>Profile Updated</dt><dd id="cabinet-profile-updated-at">-</dd></div>
           <div><dt>Profile Warning</dt><dd id="cabinet-profile-warning">None</dd></div>
         </dl>
@@ -198,7 +198,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel first-cabinet-session-panel" data-dashboard-tab="overview,cabinet-signal,settings">
+      <div class="panel first-cabinet-session-panel" data-dashboard-tab="overview,cabinet-signal">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Cabinet Signal Monitor</h2>
@@ -207,14 +207,14 @@ const dashboardHTML = `<!doctype html>
           <span id="first-cabinet-session-message" class="muted-text">Waiting for cabinet signal telemetry.</span>
         </div>
         <dl class="kv-list" data-dashboard-tab="cabinet-signal">
-          <div><dt>Overall Session State</dt><dd id="first-cabinet-overall">-</dd></div>
+          <div><dt>Overall Signal State</dt><dd id="first-cabinet-overall">-</dd></div>
           <div><dt>Last Checked</dt><dd id="first-cabinet-last-checked">-</dd></div>
           <div><dt>Readyz State</dt><dd id="first-cabinet-readyz">-</dd></div>
           <div><dt>Cabinet System Check State</dt><dd id="first-cabinet-preflight">-</dd></div>
           <div><dt>Cabinet Profile Source</dt><dd id="first-cabinet-profile-source">-</dd></div>
           <div><dt>Wire Host URL</dt><dd id="first-cabinet-wire-host-url">-</dd></div>
           <div><dt>Host ID</dt><dd id="first-cabinet-host-id">-</dd></div>
-          <div><dt>First Test EGM IDs</dt><dd id="first-cabinet-egm-ids">-</dd></div>
+          <div><dt>Test EGM IDs</dt><dd id="first-cabinet-egm-ids">-</dd></div>
           <div><dt>Certificate Blocking Count</dt><dd id="first-cabinet-cert-blocking">-</dd></div>
           <div><dt>Setup Optional Certificate Count</dt><dd id="first-cabinet-cert-lab-optional">-</dd></div>
           <div><dt>Endpoint Integrity Alerts</dt><dd id="first-cabinet-endpoint-alerts">-</dd></div>
@@ -254,7 +254,17 @@ const dashboardHTML = `<!doctype html>
           <p class="label">Next Action</p>
           <div id="next-operator-actions" class="operator-readiness-model"></div>
         </div>
-        <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="settings">
+      </div>
+
+      <div class="panel" data-dashboard-tab="settings">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Runtime Overrides</h2>
+            <span class="muted-text">Saved appliance settings</span>
+          </div>
+          <span class="muted-text">Save or restore runtime override state after setup changes.</span>
+        </div>
+        <div class="first-cabinet-session-actions-wrap">
           <p class="label">Runtime Override Snapshot</p>
           <label class="cert-textarea-label">Restore Snapshot JSON
             <textarea id="runtime-overrides-restore-json" rows="6" placeholder="Paste runtime override snapshot JSON here before restore."></textarea>
@@ -268,7 +278,7 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, policy overrides, and EGM registry overrides.</div>
         </div>
-        <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="settings">
+        <div class="first-cabinet-session-actions-wrap">
           <p class="label">Runtime Preset Library</p>
           <div class="workflow-progress-grid">
             <label>Preset Name<input id="runtime-preset-name" type="text" maxlength="64" placeholder="preset_baseline"></label>
@@ -291,15 +301,15 @@ const dashboardHTML = `<!doctype html>
             <h2>Evidence Capture</h2>
             <span id="session-evidence-state" class="source-pill source-file">ready</span>
           </div>
-          <span id="session-evidence-message" class="muted-text">Capture the current cabinet session state as JSON or Markdown.</span>
+          <span id="session-evidence-message" class="muted-text">Capture the current controller state as JSON or Markdown.</span>
         </div>
         <dl class="kv-list">
-          <div><dt>Current Session State</dt><dd id="session-evidence-overall">-</dd></div>
+          <div><dt>Current Controller State</dt><dd id="session-evidence-overall">-</dd></div>
           <div><dt>Snapshot Timestamp</dt><dd id="session-evidence-timestamp">-</dd></div>
           <div><dt>EGM Focus</dt><dd id="session-evidence-egm-focus">All EGMs</dd></div>
           <div><dt>Incidents in Snapshot (global)</dt><dd id="session-evidence-incident-count">0</dd></div>
           <div><dt>State History Rows (global)</dt><dd id="session-evidence-state-count">0</dd></div>
-          <div><dt>Run Markers in Snapshot (global)</dt><dd id="session-evidence-run-marker-count">0</dd></div>
+          <div><dt>Evidence Markers in Snapshot (global)</dt><dd id="session-evidence-run-marker-count">0</dd></div>
           <div><dt>EGM History Rows (focused)</dt><dd id="session-evidence-egm-count">0</dd></div>
           <div><dt>EGM Groups (focused / all)</dt><dd id="session-evidence-egm-groups">0 / 0</dd></div>
           <div><dt>Heartbeat Events (focused)</dt><dd id="session-evidence-heartbeat-count">0</dd></div>
@@ -316,11 +326,11 @@ const dashboardHTML = `<!doctype html>
           <button id="session-evidence-export-all-button" type="button" class="secondary-button">Export All Captures</button>
         </div>
         <div class="first-cabinet-session-actions-wrap">
-          <p class="label">Session Package Export</p>
+          <p class="label">Controller Package Export</p>
           <div class="setup-actions">
-            <button id="session-package-export-button" type="button" class="secondary-button">Export Session Package</button>
+            <button id="session-package-export-button" type="button" class="secondary-button">Export Controller Package</button>
           </div>
-          <div id="session-package-export-message" class="muted-text">Download one JSON package with current status, system check, heartbeat policy, operator audit, and saved capture metadata.</div>
+          <div id="session-package-export-message" class="muted-text">Download one JSON package with controller status, EGM traffic, certificates, operator audit, and saved capture metadata.</div>
         </div>
         <div class="first-cabinet-session-blockers-wrap">
           <p class="label">Recent Captures</p>
@@ -350,7 +360,7 @@ const dashboardHTML = `<!doctype html>
             <label>Host ID<input id="setup-host-id" name="host_id" autocomplete="off"></label>
             <label>Required SAN DNS<input id="setup-required-san-dns" name="required_san_dns" autocomplete="off"></label>
             <label>Required SAN IPs<input id="setup-required-san-ips" name="required_san_ips" autocomplete="off"></label>
-            <label>First Test EGM IDs<input id="setup-first-test-egm-ids" name="first_test_egm_ids" autocomplete="off"></label>
+            <label>Test EGM IDs<input id="setup-first-test-egm-ids" name="first_test_egm_ids" autocomplete="off"></label>
             <label id="setup-api-token-wrapper"><span id="setup-api-token-label">API Token Required for Save/Clear</span><input id="setup-api-token" name="api_token" type="password" autocomplete="off"></label>
           </div>
           <div id="setup-token-controls" class="token-help">
@@ -379,8 +389,44 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
+    <section class="grid">
+      <div class="panel" data-dashboard-tab="settings">
+        <div class="panel-head panel-head-stack">
+          <div class="panel-title-row">
+            <h2>Heartbeat Policy</h2>
+            <span id="heartbeat-policy-source" class="source-pill source-file">file</span>
+          </div>
+          <span id="heartbeat-policy-message" class="muted-text">Tune warning and escalation thresholds for heartbeat gap handling.</span>
+        </div>
+        <form id="heartbeat-policy-form" class="setup-form run-report-form">
+          <div class="form-grid run-report-grid">
+            <label>Interval (ms)<input id="heartbeat-policy-interval" type="number" min="1"></label>
+            <label>Updated<input id="heartbeat-policy-updated" type="text" disabled></label>
+            <label>Warning After Missed Beats<input id="heartbeat-policy-warning-after-missed" type="number" min="1"></label>
+            <label>Escalate Alert After Missed Beats<input id="heartbeat-policy-block-after-missed" type="number" min="1"></label>
+          </div>
+          <div class="setup-details run-report-details">
+            <div>
+              <p class="label">Warning Gap</p>
+              <strong id="heartbeat-policy-warning-gap">-</strong>
+            </div>
+            <div>
+              <p class="label">Escalation Gap</p>
+              <strong id="heartbeat-policy-block-gap">-</strong>
+            </div>
+          </div>
+          <div id="heartbeat-policy-validation-list" class="validation-list"></div>
+          <div class="setup-actions evidence-actions">
+            <button id="heartbeat-policy-save-button" type="submit">Save Override</button>
+            <button id="heartbeat-policy-clear-button" type="button" class="secondary-button">Clear Override</button>
+            <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
     <section class="grid two">
-      <div class="panel wide" data-dashboard-tab="egms,settings">
+      <div class="panel wide" data-dashboard-tab="egms">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>EGM Roster</h2>
@@ -399,7 +445,7 @@ const dashboardHTML = `<!doctype html>
             <button id="egm-select-all-visible-button" type="button" class="secondary-button">Select All Visible</button>
             <button id="egm-clear-selection-button" type="button" class="secondary-button">Clear Selection</button>
             <button id="egm-bulk-promote-button" type="button">Promote Selected</button>
-            <button id="egm-bulk-apply-profile-button" type="button" class="secondary-button">Add Selected to First-Test EGM IDs</button>
+            <button id="egm-bulk-apply-profile-button" type="button" class="secondary-button">Use Selected as Test EGMs</button>
             <span id="egm-bulk-selection-summary" class="muted-text">0 selected</span>
           </div>
           <span id="egm-bulk-action-message" class="muted-text">Select one or more EGMs to apply bulk actions.</span>
@@ -503,10 +549,10 @@ const dashboardHTML = `<!doctype html>
         </div>
       </div>
 
-      <div class="panel cabinet-run-panel" data-dashboard-tab="cabinet-signal,settings,diagnostics">
+      <div class="panel cabinet-run-panel" data-dashboard-tab="cabinet-signal,diagnostics,evidence">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
-            <h2>Cabinet Run Timeline</h2>
+            <h2>Cabinet Signal Timeline</h2>
             <span id="timeline-count">0 events</span>
           </div>
           <div class="toolbar-row timeline-toolbar">
@@ -527,17 +573,17 @@ const dashboardHTML = `<!doctype html>
           <span id="timeline-heartbeat-mode-label" class="muted-text">Heartbeat mode: rolled up</span>
           <span id="timeline-grouping-label" class="muted-text">All EGM rows grouped by EGM ID; global rows remain grouped as global.</span>
         </div>
-        <form id="run-marker-form" class="setup-form run-marker-form" data-dashboard-tab="cabinet-signal">
+        <form id="run-marker-form" class="setup-form run-marker-form" data-dashboard-tab="evidence">
           <div class="panel-title-row">
-            <strong>Run Markers</strong>
+            <strong>Evidence Markers</strong>
             <span id="run-marker-state" class="source-pill source-file">ready</span>
           </div>
-          <span id="run-marker-message" class="muted-text">Mark session start, operator notes, and session end directly into the appliance timeline.</span>
+          <span id="run-marker-message" class="muted-text">Mark start, operator notes, and end points directly into the appliance timeline.</span>
           <div class="form-grid run-marker-grid">
             <label>Marker Title<input id="run-marker-title" name="title" autocomplete="off"></label>
             <label>Operator<input id="run-marker-operator" name="operator" autocomplete="off" placeholder="ops-ui"></label>
           </div>
-          <label class="cert-textarea-label run-marker-notes-label">Run Marker Notes
+          <label class="cert-textarea-label run-marker-notes-label">Evidence Marker Notes
             <textarea id="run-marker-notes" rows="4" placeholder="Optional cabinet notes, attach/detach notes, or operator observations."></textarea>
           </label>
           <div class="setup-actions evidence-actions">
@@ -546,12 +592,12 @@ const dashboardHTML = `<!doctype html>
             <button id="run-marker-end-button" type="button" class="secondary-button">Mark End</button>
           </div>
         </form>
-        <form id="run-report-form" class="setup-form run-report-form" data-dashboard-tab="cabinet-signal">
+        <form id="run-report-form" class="setup-form run-report-form" data-dashboard-tab="evidence">
           <div class="panel-title-row">
-            <strong>Run Window Report</strong>
+            <strong>Evidence Window Report</strong>
             <span id="run-report-state" class="source-pill source-file">ready</span>
           </div>
-          <span id="run-report-message" class="muted-text">Pick a start and end marker to export a bounded run report.</span>
+          <span id="run-report-message" class="muted-text">Pick a start and end marker to export a bounded evidence report.</span>
           <div class="form-grid run-report-grid">
             <label>Start Marker
               <select id="run-report-start-marker"></select>
@@ -571,45 +617,16 @@ const dashboardHTML = `<!doctype html>
             </div>
           </div>
           <div class="setup-actions evidence-actions">
-            <button id="run-report-json-button" type="button">Download Run JSON</button>
-            <button id="run-report-markdown-button" type="button" class="secondary-button">Download Run Markdown</button>
+            <button id="run-report-json-button" type="button">Download Evidence JSON</button>
+            <button id="run-report-markdown-button" type="button" class="secondary-button">Download Evidence Markdown</button>
           </div>
         </form>
-        <form id="heartbeat-policy-form" class="setup-form run-report-form" data-dashboard-tab="settings">
+        <form id="operator-drill-form" class="setup-form operator-drill-form" data-dashboard-tab="diagnostics">
           <div class="panel-title-row">
-            <strong>Heartbeat Policy</strong>
-            <span id="heartbeat-policy-source" class="source-pill source-file">file</span>
-          </div>
-          <span id="heartbeat-policy-message" class="muted-text">Tune warning and escalation thresholds for heartbeat gap handling.</span>
-          <div class="form-grid run-report-grid">
-            <label>Interval (ms)<input id="heartbeat-policy-interval" type="number" min="1"></label>
-            <label>Updated<input id="heartbeat-policy-updated" type="text" disabled></label>
-            <label>Warning After Missed Beats<input id="heartbeat-policy-warning-after-missed" type="number" min="1"></label>
-            <label>Escalate Alert After Missed Beats<input id="heartbeat-policy-block-after-missed" type="number" min="1"></label>
-          </div>
-          <div class="setup-details run-report-details">
-            <div>
-              <p class="label">Warning Gap</p>
-              <strong id="heartbeat-policy-warning-gap">-</strong>
-            </div>
-            <div>
-              <p class="label">Escalation Gap</p>
-              <strong id="heartbeat-policy-block-gap">-</strong>
-            </div>
-          </div>
-          <div id="heartbeat-policy-validation-list" class="validation-list"></div>
-          <div class="setup-actions evidence-actions">
-            <button id="heartbeat-policy-save-button" type="submit">Save Override</button>
-            <button id="heartbeat-policy-clear-button" type="button" class="secondary-button">Clear Override</button>
-            <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
-          </div>
-        </form>
-        <form id="operator-drill-form" class="setup-form operator-drill-form" data-dashboard-tab="cabinet-signal,diagnostics">
-          <div class="panel-title-row">
-            <strong>Operator Drill</strong>
+            <strong>Traffic Simulator</strong>
             <span id="operator-drill-state" class="source-pill source-file">ready</span>
           </div>
-          <span id="operator-drill-message" class="muted-text">Drive simulated cabinet session traffic directly from the dashboard.</span>
+          <span id="operator-drill-message" class="muted-text">Drive simulated G2S traffic directly from the dashboard.</span>
           <div class="form-grid operator-drill-grid">
             <label>EGM
               <select id="operator-drill-egm-id"></select>
@@ -699,10 +716,10 @@ const dashboardHTML = `<!doctype html>
               <option value="certificate.preview">certificate.preview</option>
               <option value="certificate.import">certificate.import</option>
               <option value="certificate.restore">certificate.restore</option>
-              <option value="session_workflow.save">session_workflow.save</option>
-              <option value="session_workflow.clear">session_workflow.clear</option>
-              <option value="session_evidence.delete">session_evidence.delete</option>
-              <option value="session_evidence.export_all">session_evidence.export_all</option>
+              <option value="session_workflow.save">operator_record.save</option>
+              <option value="session_workflow.clear">operator_record.clear</option>
+              <option value="session_evidence.delete">evidence.delete</option>
+              <option value="session_evidence.export_all">evidence.export_all</option>
             </select>
           </label>
           <label>Result
@@ -3707,7 +3724,7 @@ function selectedEGMDetailForSnapshot(snapshot) {
     focus_mode: focus.mode,
     message: liveObserved
       ? "Live telemetry is present for this EGM."
-      : "No EGM history rows yet; waiting for session traffic."
+      : "No EGM history rows yet; waiting for G2S traffic."
   };
 }
 
@@ -3737,7 +3754,7 @@ function renderSelectedEGMDetail(snapshot) {
       "<span>Recent Endpoints (newest first)</span>" +
       "<ul class=\"operator-readiness-items\">" + recentHTML + "</ul>" +
       (item.endpoint_warning_text ? ("<span>" + escapeHTML(item.endpoint_warning_text) + "</span>") : "") +
-      "<span>first-test set: " + escapeHTML(item.in_first_test_set ? "yes" : "no") + " | " + escapeHTML(item.message || "") + "</span>" +
+      "<span>test set: " + escapeHTML(item.in_first_test_set ? "yes" : "no") + " | " + escapeHTML(item.message || "") + "</span>" +
     "</div>";
     })()
   );
@@ -4184,7 +4201,7 @@ function buildCabinetSessionWorkflow(snapshot, session) {
       state: runActive ? "ACTIVE" : (runComplete ? "COMPLETE" : "ACTION_NEEDED"),
       detail: runActive
         ? "Run window is active; continue operator actions and timeline notes."
-        : (runComplete ? "Run window markers show start/end captured." : "Mark run start and end to bound the cabinet session window.")
+        : (runComplete ? "Evidence window markers show start/end captured." : "Mark start and end to bound the evidence window.")
     },
     {
       id: "capture_evidence",
@@ -4199,8 +4216,8 @@ function buildCabinetSessionWorkflow(snapshot, session) {
       title: "Wrap-up",
       state: sessionComplete ? "COMPLETE" : "ACTION_NEEDED",
       detail: sessionComplete
-        ? "Run markers and saved evidence are complete for this cabinet session."
-        : "Complete run markers and evidence capture to close the cabinet session."
+        ? "Evidence markers and saved evidence are complete for this operator record."
+        : "Complete evidence markers and capture to finish the operator record."
     }
   ];
 
@@ -4535,8 +4552,8 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   const preflightProfileCheck = preflightCheckByID(preflight, "cabinet_profile");
   const placeholderFirstTestWarning = String(preflightProfileCheck?.detail || "").indexOf("lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER") >= 0;
   if (placeholderFirstTestWarning) {
-    pushUniqueString(labWarning, "Replace placeholder first-test EGM IDs before real cabinet deployment.");
-    pushUniqueString(nextActions, "Replace placeholder first-test EGM IDs before real cabinet deployment.");
+    pushUniqueString(labWarning, "Replace placeholder test EGM IDs before real cabinet deployment.");
+    pushUniqueString(nextActions, "Replace placeholder test EGM IDs before real cabinet deployment.");
   }
 
   if (session?.profile?.wire_host_url && session?.profile?.host_id && Array.isArray(session?.firstEGMIDs) && session.firstEGMIDs.length > 0) {
@@ -4553,7 +4570,7 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
     pushUniqueString(readyNow, "Required certificate roles are valid for current runtime.");
   }
   if (session?.certCounts?.labOptional > 0) {
-    pushUniqueString(labWarning, "Lab-optional certificate roles not configured: " + String(session.certCounts.labOptional) + ".");
+    pushUniqueString(labWarning, "Setup-optional certificate roles not configured: " + String(session.certCounts.labOptional) + ".");
   }
   const expiringSoon = certificates.filter((item) => certSeverity(item, runtime) === "warning").length;
   if (expiringSoon > 0) {
@@ -4577,7 +4594,7 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
     pushUniqueString(readyNow, "Recent EGM telemetry observed across " + String(telemetry.recent_global_count) + " EGM(s) within " + fmtDurationMs(telemetry.threshold_ms) + ".");
   } else {
     pushUniqueString(informational, "No recent EGM telemetry observed yet.");
-    pushUniqueString(nextActions, "Start cabinet session and confirm commsOnLine/keepAlive traffic.");
+    pushUniqueString(nextActions, "Confirm commsOnLine/keepAlive traffic.");
   }
   const endpointIntegrity = status?.endpoint_collision_summary || {};
   const endpointAlerts = Number(endpointIntegrity?.total || 0);
@@ -4591,7 +4608,7 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   }
 
   if (!focus.selected_egm_id) {
-    pushUniqueString(informational, "All-EGMs focus is active for session-wide monitoring.");
+    pushUniqueString(informational, "All-EGMs focus is active for controller-wide monitoring.");
     pushUniqueString(nextActions, "Select one EGM focus for cabinet-level inspection detail.");
   } else if (telemetry.selected_not_active_warning) {
     pushUniqueString(labWarning, "Selected EGM not active; global telemetry is healthy.");
@@ -4604,16 +4621,16 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   }
 
   if (workflow?.steps?.find((item) => item.id === "run_active")?.state === "ACTION_NEEDED" && startCount === 0) {
-    pushUniqueString(nextActions, "Mark run start before executing cabinet validation steps.");
+    pushUniqueString(nextActions, "Mark evidence start before the next cabinet signal test.");
   }
   if (workflow?.steps?.find((item) => item.id === "capture_evidence")?.state === "ACTION_NEEDED") {
-    pushUniqueString(nextActions, "Capture session evidence before ending run.");
+    pushUniqueString(nextActions, "Capture evidence before ending the operator record.");
   }
   if (startCount > 0 && endCount === 0) {
-    pushUniqueString(nextActions, "Mark run end to close the session window.");
+    pushUniqueString(nextActions, "Mark evidence end to close the operator record.");
   }
   if (evidenceCount > 0) {
-    pushUniqueString(readyNow, "Saved session evidence is available for follow-up.");
+    pushUniqueString(readyNow, "Saved evidence is available for follow-up.");
   }
 
   if (heartbeat?.severity === "critical" || heartbeat?.severity === "warning") {
@@ -4771,7 +4788,7 @@ function renderFirstCabinetSession(snapshot) {
   $("runtime-preset-save-button").disabled = !snapshot?.status || (mutationTokenRequired() && !getSetupToken() && !getCertToken());
   $("runtime-preset-refresh-button").disabled = !snapshot?.status;
   if (!snapshot?.status) {
-    $("session-package-export-message").textContent = "Session package export waits for a status snapshot.";
+    $("session-package-export-message").textContent = "Controller package export waits for a status snapshot.";
     $("runtime-overrides-message").textContent = "Runtime snapshot/restore waits for a status snapshot.";
     $("runtime-preset-message").textContent = "Runtime preset library waits for a status snapshot.";
   } else if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
@@ -4910,25 +4927,23 @@ function buildSessionEvidenceMarkdown(evidence) {
     "# Evidence Capture",
     "",
     "- Captured at: " + (evidence.captured_at || "-"),
-    "- Session state: " + (evidence.session.overall_state || "-"),
+    "- Controller state: " + (evidence.session.overall_state || "-"),
     "- EGM focus: " + (evidence?.egm_focus?.label || "All EGMs"),
     "- EGM focus mode: " + (evidence?.egm_focus?.mode || "ALL_EGMS"),
     "- EGM history scope: " + (evidence?.scope?.egm_history_scope || "FULL_SESSION"),
     "- EGM-specific views filtered: " + String(evidence?.egm_focus?.egm_specific_views_filtered === true),
-    "- Ready for session: " + String(evidence.session.ready_for_session === true),
     "- Readyz state: " + (evidence.session.readyz_state || "-"),
     "- System Check state: " + (evidence.session.preflight_state || "-"),
     "- System Check status: " + (evidence?.runbook_readiness?.state || "UNKNOWN"),
-    "- Setup can continue: " + String(evidence?.runbook_readiness?.can_continue_cabinet_prep === true),
     "- Mute path state: " + (evidence?.mute_path?.mute_path_state || "UNKNOWN"),
     "- Mute path note: " + (evidence?.mute_path?.mute_path_note || "-"),
     "- API auth state: " + (evidence.session.api_auth_state || "-"),
     "- Cabinet profile source: " + (evidence.cabinet_profile.source || "-"),
     "- Wire host URL: " + (evidence.cabinet_profile.wire_host_url || "-"),
     "- Host ID: " + (evidence.cabinet_profile.host_id || "-"),
-    "- First test EGM IDs: " + ((evidence.cabinet_profile.first_test_egm_ids || []).join(", ") || "-"),
+    "- Test EGM IDs: " + ((evidence.cabinet_profile.first_test_egm_ids || []).join(", ") || "-"),
     "- Certificate blocking count: " + String(evidence.session.certificate_blocking_count || 0),
-    "- Certificate lab optional count: " + String(evidence.session.certificate_lab_optional_count || 0),
+    "- Setup optional certificate count: " + String(evidence.session.certificate_lab_optional_count || 0),
     "- EGM snapshot count: " + String(evidence.egm_snapshot_count || 0),
     "- EGM history rows (focused): " + String(evidence.egm_history_focused_count || 0),
     "- EGM history rows (all): " + String(evidence.egm_history_total_count || 0),
@@ -4936,7 +4951,7 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- EGM grouped rows (all): " + String(evidence.egm_grouped_summary_count_all || 0),
     "- Incident rows captured: " + String((evidence.incidents || []).length),
     "- State history rows captured: " + String((evidence.state_history || []).length),
-    "- Run markers captured: " + String((evidence.run_markers || []).length),
+    "- Evidence markers captured: " + String((evidence.run_markers || []).length),
     "- Heartbeat events captured: " + String(evidence?.heartbeat_summary?.total || 0),
     "- Heartbeat health: " + (evidence?.heartbeat_summary?.label || "-"),
     "- Heartbeat source: " + (evidence?.operator_drill?.source || "-"),
@@ -4963,21 +4978,21 @@ function buildSessionEvidenceMarkdown(evidence) {
   } else {
     lines.push("- None");
   }
-  lines.push("", "## Action Items", "");
+  lines.push("", "## Operator Attention", "");
   const actionItems = Array.isArray(evidence?.action_model?.needs_operator_action) ? evidence.action_model.needs_operator_action : [];
   if (actionItems.length > 0) {
     actionItems.forEach((item) => lines.push("- " + item));
   } else {
     lines.push("- None");
   }
-  lines.push("", "## Advisories", "");
+  lines.push("", "## Warnings", "");
   const labWarnings = Array.isArray(evidence?.action_model?.lab_warning) ? evidence.action_model.lab_warning : [];
   if (labWarnings.length > 0) {
     labWarnings.forEach((item) => lines.push("- " + item));
   } else {
     lines.push("- None");
   }
-  lines.push("", "## Next Operator Actions", "");
+  lines.push("", "## Recommended Action", "");
   const nextActions = Array.isArray(evidence?.next_operator_actions) ? evidence.next_operator_actions : [];
   if (nextActions.length > 0) {
     nextActions.forEach((item) => lines.push("- " + item));
@@ -4999,15 +5014,15 @@ function buildSessionEvidenceMarkdown(evidence) {
     lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
     lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
     lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
-    lines.push("- First-test set: " + String(selectedEGMDetail.in_first_test_set === true));
+    lines.push("- Test set: " + String(selectedEGMDetail.in_first_test_set === true));
   } else {
     lines.push("- " + (selectedEGMDetail?.message || "No selected EGM detail available."));
   }
   lines.push("", "## Operator Notes", "");
   lines.push(evidence.operator_notes || "None");
-  lines.push("", "## Run State", "");
+  lines.push("", "## Evidence Marker State", "");
   const workflowSteps = Array.isArray(evidence?.workflow?.steps) ? evidence.workflow.steps : [];
-  lines.push("- Run phase: " + (evidence?.workflow?.current_step || "-"));
+  lines.push("- Marker phase: " + (evidence?.workflow?.current_step || "-"));
   if (workflowSteps.length > 0) {
     workflowSteps.forEach((step) => lines.push("- " + [step.title || "-", step.state || "-", step.detail || ""].filter(Boolean).join(" | ")));
   } else {
@@ -5030,7 +5045,7 @@ function buildSessionEvidenceMarkdown(evidence) {
   } else {
     lines.push("- None");
   }
-  lines.push("", "## Run Markers", "");
+  lines.push("", "## Evidence Markers", "");
   if (Array.isArray(evidence.run_markers) && evidence.run_markers.length) {
     evidence.run_markers.forEach((item) => lines.push("- " + [item.marker_type || "marker", item.title || "-", item.created_at || "-", item.notes || ""].filter(Boolean).join(" | ")));
   } else {
@@ -5043,7 +5058,7 @@ function buildSessionEvidenceMarkdown(evidence) {
   lines.push("- Last keepAlive: " + (evidence?.heartbeat_summary?.last_keepalive_at || "-"));
   lines.push("- Max gap: " + fmtDurationMs(evidence?.heartbeat_summary?.max_gap_ms || 0));
   lines.push("- Notes: " + (evidence?.heartbeat_summary?.message || "-"));
-  lines.push("", "## Operator Drill", "");
+  lines.push("", "## Traffic Simulator", "");
   lines.push("- Source: " + (evidence?.operator_drill?.source || "-"));
   lines.push("- Drill events: " + String(evidence?.operator_drill?.drill_events || 0));
   lines.push("- Live events: " + String(evidence?.operator_drill?.live_events || 0));
@@ -5057,7 +5072,7 @@ function buildSessionEvidenceMarkdown(evidence) {
 function evidenceFilenameBase(evidence) {
   const hostID = String(evidence?.cabinet_profile?.host_id || "cabinet").replace(/[^A-Za-z0-9._-]+/g, "-");
   const stamp = new Date(evidence?.captured_at || Date.now()).toISOString().replace(/[:]/g, "-");
-  return hostID + "-session-evidence-" + stamp;
+  return hostID + "-evidence-" + stamp;
 }
 
 function parseSavedSessionEvidencePayload(record) {
@@ -5118,8 +5133,8 @@ function renderSelectedSavedSessionEvidence(record) {
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
-      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | System Check: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Run Phase: " + escapeHTML(workflowStep) + "</span></div>" +
-      "<div class=\"kv-inline\"><span>Issues: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | System Check: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Marker Phase: " + escapeHTML(workflowStep) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Issues: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Evidence markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Grouped EGMs (focused/all): " + escapeHTML(String(groupedFocusedCount)) + " / " + escapeHTML(String(groupedAllCount)) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
@@ -5198,12 +5213,12 @@ function exportAllSavedSessionEvidence() {
       const text = await response.text();
       const disposition = String(response.headers.get("Content-Disposition") || "");
       const match = disposition.match(/filename=\"([^\"]+)\"/i);
-      const filename = match && match[1] ? match[1] : "saved-session-evidence-archive.json";
+      const filename = match && match[1] ? match[1] : "saved-evidence-archive.json";
       downloadTextMaterial(filename, text);
       $("session-evidence-state").textContent = "saved";
       $("session-evidence-state").className = "source-pill source-file";
       $("session-evidence-message").textContent = "All saved evidence captures exported.";
-      setAlert("info", "Export All complete", "Saved session evidence archive downloaded.");
+      setAlert("info", "Export All complete", "Saved evidence archive downloaded.");
     })
     .catch((err) => {
       $("session-evidence-state").textContent = "blocked";
@@ -5216,8 +5231,8 @@ function exportAllSavedSessionEvidence() {
 function exportSessionPackage() {
   const snapshot = clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot();
   if (!snapshot?.status) {
-    $("session-package-export-message").textContent = "Session package export waits for a status snapshot.";
-    setAlert("warning", "Session package export unavailable", "Wait for status polling to complete before exporting.");
+    $("session-package-export-message").textContent = "Controller package export waits for a status snapshot.";
+    setAlert("warning", "Controller package export unavailable", "Wait for status polling to complete before exporting.");
     return;
   }
   const headers = {};
@@ -5225,24 +5240,24 @@ function exportSessionPackage() {
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
-  $("session-package-export-message").textContent = "Exporting session package.";
+  $("session-package-export-message").textContent = "Exporting controller package.";
   fetch(endpoints.sessionPackageExport, { cache: "no-store", headers: withEGMFocusHeader(headers) })
     .then(async (response) => {
       if (!response.ok) {
         const detail = sanitizeHTTPText(await response.text());
-        throw new Error("Session package export failed: HTTP " + response.status + (detail ? " " + detail : ""));
+        throw new Error("Controller package export failed: HTTP " + response.status + (detail ? " " + detail : ""));
       }
       const text = await response.text();
       const disposition = String(response.headers.get("Content-Disposition") || "");
       const match = disposition.match(/filename=\"([^\"]+)\"/i);
-      const filename = match && match[1] ? match[1] : "session-package-export.json";
+      const filename = match && match[1] ? match[1] : "controller-package-export.json";
       downloadTextMaterial(filename, text);
-      $("session-package-export-message").textContent = "Session package exported.";
-      setAlert("info", "Session package exported", "Full session package archive downloaded.");
+      $("session-package-export-message").textContent = "Controller package exported.";
+      setAlert("info", "Controller package exported", "Full controller package archive downloaded.");
     })
     .catch((err) => {
-      $("session-package-export-message").textContent = err && err.message ? err.message : "Session package export failed.";
-      setAlert("warning", "Session package export failed", "Unable to export session package.");
+      $("session-package-export-message").textContent = err && err.message ? err.message : "Controller package export failed.";
+      setAlert("warning", "Controller package export failed", "Unable to export controller package.");
     });
 }
 
@@ -5586,7 +5601,7 @@ function renderSessionEvidence(snapshot) {
   badge.textContent = ready ? "ready" : "waiting";
   badge.className = "source-pill " + (ready ? "source-file" : "source-mixed");
   $("session-evidence-message").textContent = ready
-    ? "Capture the current cabinet session state as JSON or Markdown."
+    ? "Capture the current controller state as JSON or Markdown."
     : "Waiting for appliance status before capture is available.";
   renderItems("session-evidence-history", snapshot?.sessionEvidence, "No saved captures yet", (item) =>
     "<div class=\"item session-evidence-history-item\"><div><strong>" + escapeHTML(item.overall_state || "-") + "</strong><span>" +
@@ -5675,8 +5690,8 @@ function currentCabinetProfileSnapshot() {
 function defaultRunMarkerTitle(markerType) {
   const profile = currentCabinetProfileSnapshot();
   const hostID = profile.host_id || "cabinet";
-  if (markerType === "start") return "Session start - " + hostID;
-  if (markerType === "end") return "Session end - " + hostID;
+  if (markerType === "start") return "Evidence start - " + hostID;
+  if (markerType === "end") return "Evidence end - " + hostID;
   return "Operator note - " + hostID;
 }
 
@@ -5851,20 +5866,20 @@ function renderRunMarkerControls(snapshot) {
   $("run-marker-note-button").disabled = tokenRequired && !tokenPresent;
   $("run-marker-end-button").disabled = tokenRequired && !tokenPresent;
   if (tokenRequired) {
-    setRunMarkerState("ready", "Run markers require an API token in this browser session.");
+    setRunMarkerState("ready", "Evidence markers require an API token in this browser session.");
   } else {
-    setRunMarkerState("ready", "Run markers are ready for trusted setup mode.");
+    setRunMarkerState("ready", "Evidence markers are ready for trusted setup mode.");
   }
 }
 
 async function submitRunMarker(markerType) {
   if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
-    setRunMarkerState("blocked", "Enter an API token before writing run markers.");
+    setRunMarkerState("blocked", "Enter an API token before writing evidence markers.");
     return;
   }
   const payload = runMarkerPayload(markerType);
   try {
-    setRunMarkerState("working", "Saving run marker.");
+    setRunMarkerState("working", "Saving evidence marker.");
     const token = getSetupToken() || getCertToken();
     const headers = { "Content-Type": "application/json" };
     if (token) {
@@ -5877,15 +5892,15 @@ async function submitRunMarker(markerType) {
     });
     if (!response.ok) {
       const detail = sanitizeHTTPText(await response.text());
-      setRunMarkerState("blocked", "Run marker failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setRunMarkerState("blocked", "Evidence marker failed: HTTP " + response.status + (detail ? " " + detail : ""));
       return;
     }
     $("run-marker-title").value = "";
     $("run-marker-notes").value = "";
-    setRunMarkerState("saved", "Run marker saved to cabinet timeline.");
+    setRunMarkerState("saved", "Evidence marker saved to cabinet timeline.");
     schedulePoll(0);
   } catch (err) {
-    setRunMarkerState("blocked", err && err.message ? err.message : "Run marker failed.");
+    setRunMarkerState("blocked", err && err.message ? err.message : "Evidence marker failed.");
   }
 }
 
@@ -5997,7 +6012,7 @@ function updateTimelineFilterLabels(total, filtered, heartbeatCount) {
       ? "Showing rolled-up heartbeat timeline events"
       : "Showing raw heartbeat timeline events",
     state: "Showing controller state timeline events",
-    marker: "Showing operator run markers"
+    marker: "Showing evidence markers"
   };
   $("timeline-count").textContent = filtered + " / " + total + " events";
   $("timeline-filter-label").textContent = (focusID ? ("Focus " + focusID + " | ") : "") + (map[clientState.timelineFilter] || map.all);
@@ -6023,7 +6038,7 @@ function timelineEntryHTML(item) {
 function renderGroupedTimelineAll(items) {
   const list = Array.isArray(items) ? items : [];
   if (list.length === 0) {
-    $("cabinet-run-timeline").innerHTML = "<div class=\"empty\">No cabinet run events captured yet</div>";
+    $("cabinet-run-timeline").innerHTML = "<div class=\"empty\">No cabinet signal events captured yet</div>";
     return;
   }
   const globalItems = [];
@@ -6039,7 +6054,7 @@ function renderGroupedTimelineAll(items) {
   });
   let html = "";
   if (globalItems.length > 0) {
-    html += "<div class=\"timeline-group-heading timeline-group-heading-global\">Global Session Events (" + String(globalItems.length) + ")</div>";
+    html += "<div class=\"timeline-group-heading timeline-group-heading-global\">Global Controller Events (" + String(globalItems.length) + ")</div>";
     html += globalItems.map((item) => timelineEntryHTML(item)).join("");
   }
   Object.keys(byEGM).sort((a, b) => a.localeCompare(b)).forEach((egmID) => {
@@ -6047,7 +6062,7 @@ function renderGroupedTimelineAll(items) {
     html += "<div class=\"timeline-group-heading timeline-group-heading-egm\">EGM " + escapeHTML(egmID) + " (" + String(records.length) + ")</div>";
     html += records.map((item) => timelineEntryHTML(item)).join("");
   });
-  $("cabinet-run-timeline").innerHTML = html || "<div class=\"empty\">No cabinet run events captured yet</div>";
+  $("cabinet-run-timeline").innerHTML = html || "<div class=\"empty\">No cabinet signal events captured yet</div>";
 }
 
 function markerLabel(marker) {
@@ -6185,14 +6200,13 @@ function buildRunReportMarkdown(report) {
   const nextActions = Array.isArray(report?.next_operator_actions) ? report.next_operator_actions : [];
   const selectedEGMDetail = report?.selected_egm_detail || {};
   const lines = [
-    "# Cabinet Run Report",
+    "# Evidence Window Report",
     "",
     "- Generated at: " + (report.generated_at || "-"),
     "- EGM focus: " + (report?.egm_focus?.label || "All EGMs"),
     "- EGM history scope: " + (report?.scope?.egm_history_scope || "FULL_SESSION"),
     "- Grouped summary scope: " + (report?.scope?.grouped_summary_scope || "FULL_SESSION"),
     "- System Check status: " + (report?.runbook_readiness?.state || "UNKNOWN"),
-    "- Setup can continue: " + String(report?.runbook_readiness?.can_continue_cabinet_prep === true),
     "- Mute path state: " + (report?.mute_path?.mute_path_state || "UNKNOWN"),
     "- Mute path note: " + (report?.mute_path?.mute_path_note || "-"),
     "- Host ID: " + (report.cabinet_profile.host_id || "-"),
@@ -6209,7 +6223,7 @@ function buildRunReportMarkdown(report) {
     "- EGM groups (all EGMs in window): " + String(report.summary.egm_groups_total || 0),
     "- Heartbeat events: " + String(report.summary.heartbeat_events || 0),
     "- State changes: " + String(report.summary.state_changes || 0),
-    "- Run markers: " + String(report.summary.run_markers || 0),
+    "- Evidence markers: " + String(report.summary.run_markers || 0),
     "- Saved evidence captures: " + String(report.summary.saved_evidence || 0),
     "- Heartbeat health: " + (report?.heartbeat_summary?.label || "-"),
     "- Heartbeat source: " + (report?.operator_drill?.source || "-"),
@@ -6222,7 +6236,7 @@ function buildRunReportMarkdown(report) {
     "- Max gap: " + fmtDurationMs(report?.heartbeat_summary?.max_gap_ms || 0),
     "- Notes: " + (report?.heartbeat_summary?.message || "-"),
     "",
-    "## Operator Drill",
+    "## Traffic Simulator",
     "",
     "- Source: " + (report?.operator_drill?.source || "-"),
     "- Drill events: " + String(report?.operator_drill?.drill_events || 0),
@@ -6243,29 +6257,29 @@ function buildRunReportMarkdown(report) {
     "- Advisory count: " + String(report?.runbook_readiness?.warning_count || 0),
     "- Next action: " + (report?.runbook_readiness?.next_action || "-"),
     "",
-    "## Run State",
+    "## Evidence Marker State",
     "",
-    "- Run phase: " + (report?.workflow?.current_step || "-"),
+    "- Marker phase: " + (report?.workflow?.current_step || "-"),
     "- Focus mode: " + (report?.workflow?.focus_mode || "-")
   ];
   if (workflowSteps.length > 0) {
     workflowSteps.forEach((step) => lines.push("- " + [step.title || "-", step.state || "-", step.detail || ""].filter(Boolean).join(" | ")));
   } else {
-    lines.push("- No run-state steps available");
+    lines.push("- No marker-state steps available");
   }
-  lines.push("", "## Action Items", "");
+  lines.push("", "## Operator Attention", "");
   if (actionItems.length > 0) {
     actionItems.forEach((item) => lines.push("- " + item));
   } else {
     lines.push("- None");
   }
-  lines.push("", "## Advisories", "");
+  lines.push("", "## Warnings", "");
   if (labWarnings.length > 0) {
     labWarnings.forEach((item) => lines.push("- " + item));
   } else {
     lines.push("- None");
   }
-  lines.push("", "## Next Operator Actions", "");
+  lines.push("", "## Recommended Action", "");
   if (nextActions.length > 0) {
     nextActions.forEach((item) => lines.push("- " + item));
   } else {
@@ -6285,7 +6299,7 @@ function buildRunReportMarkdown(report) {
     lines.push("- Last seen: " + (selectedEGMDetail.last_seen_at || "-"));
     lines.push("- Heartbeat: " + (selectedEGMDetail.heartbeat_label || "-"));
     lines.push("- Last keepAlive: " + (selectedEGMDetail.heartbeat_last_keepalive_at || "-"));
-    lines.push("- First-test set: " + String(selectedEGMDetail.in_first_test_set === true));
+    lines.push("- Test set: " + String(selectedEGMDetail.in_first_test_set === true));
   } else {
     lines.push("- " + (selectedEGMDetail?.message || "No selected EGM detail available."));
   }
@@ -6312,7 +6326,7 @@ function runReportFilenameBase(report) {
   const hostID = String(report?.cabinet_profile?.host_id || "cabinet-run").replace(/[^A-Za-z0-9._-]+/g, "-");
   const startID = report?.window?.start_marker?.id || "start";
   const endID = report?.window?.end_marker?.id || "end";
-  return hostID + "-run-report-" + startID + "-to-" + endID;
+  return hostID + "-evidence-window-" + startID + "-to-" + endID;
 }
 
 function renderRunReportControls(snapshot) {
@@ -6329,18 +6343,18 @@ function renderRunReportControls(snapshot) {
   $("run-report-json-button").disabled = !enabled;
   $("run-report-markdown-button").disabled = !enabled;
   if (!report) {
-    $("run-report-window-summary").textContent = "Need at least one saved run marker.";
+    $("run-report-window-summary").textContent = "Need at least one saved evidence marker.";
     $("run-report-count-summary").textContent = "-";
     $("run-report-state").textContent = "waiting";
     $("run-report-state").className = "source-pill source-mixed";
-    $("run-report-message").textContent = "Mark a run start/end before exporting a bounded report.";
+    $("run-report-message").textContent = "Mark a start/end before exporting a bounded evidence report.";
     return;
   }
   $("run-report-window-summary").textContent = fmtTime(report.window.started_at) + " -> " + fmtTime(report.window.ended_at) + " (" + report.window.duration_seconds + "s)";
   $("run-report-count-summary").textContent = "focus " + (report?.egm_focus?.label || "All EGMs") + " [" + (report?.scope?.egm_history_scope || "FULL_SESSION") + "], incidents " + report.summary.incidents + ", egm events " + report.summary.egm_events + "/" + report.summary.egm_events_total + ", egm groups " + report.summary.egm_groups + "/" + report.summary.egm_groups_total + ", heartbeat " + report.summary.heartbeat_events + " (" + (report?.operator_drill?.source || "-") + "), state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
   $("run-report-state").textContent = "ready";
   $("run-report-state").className = "source-pill source-file";
-  $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ". Run phase: " + (report?.workflow?.current_step || "-") + ".";
+  $("run-report-message").textContent = "Evidence window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ".";
 }
 
 function renderHeartbeatSummary(snapshot) {
@@ -6685,7 +6699,7 @@ function exportRunReportJSON() {
   downloadTextMaterial(runReportFilenameBase(report) + ".json", JSON.stringify(report, null, 2));
   $("run-report-state").textContent = "saved";
   $("run-report-state").className = "source-pill source-file";
-  $("run-report-message").textContent = "Run JSON report downloaded.";
+  $("run-report-message").textContent = "Evidence JSON report downloaded.";
 }
 
 function exportRunReportMarkdown() {
@@ -6697,7 +6711,7 @@ function exportRunReportMarkdown() {
   downloadTextMaterial(runReportFilenameBase(report) + ".md", buildRunReportMarkdown(report));
   $("run-report-state").textContent = "saved";
   $("run-report-state").className = "source-pill source-file";
-  $("run-report-message").textContent = "Run Markdown report downloaded.";
+  $("run-report-message").textContent = "Evidence Markdown report downloaded.";
 }
 
 function renderCabinetRunTimeline(snapshot) {
@@ -7102,10 +7116,10 @@ async function applySelectedToCabinetProfileFirstTest() {
     return;
   }
   if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
-    setEGMBulkActionMessage("Enter a setup or certificate API token before updating first-test EGM IDs.");
+    setEGMBulkActionMessage("Enter a setup or certificate API token before updating test EGM IDs.");
     return;
   }
-  setEGMBulkActionMessage("Applying selected EGMs to first-test EGM IDs...");
+  setEGMBulkActionMessage("Applying selected EGMs to test EGM IDs...");
   try {
     const response = await fetch(endpoints.egmRegistryApplyToCabinetProfile, {
       method: "POST",
@@ -7121,8 +7135,8 @@ async function applySelectedToCabinetProfileFirstTest() {
     }
     if (!response.ok) {
       const detail = sanitizeHTTPText(rawBody);
-      setEGMBulkActionMessage("Apply to first-test failed: HTTP " + response.status + (detail ? " " + detail : ""));
-      setAlert("warning", "Apply to first-test failed", "Unable to update cabinet profile first-test EGM IDs.");
+      setEGMBulkActionMessage("Apply to test EGMs failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Apply to test EGMs failed", "Unable to update cabinet profile test EGM IDs.");
       return;
     }
     const appliedIDs = Array.isArray(payload?.applied_first_test_egm_ids) ? payload.applied_first_test_egm_ids : ids;
@@ -7134,12 +7148,12 @@ async function applySelectedToCabinetProfileFirstTest() {
       $("setup-first-test-egm-ids").value = appliedIDs.join(", ");
       renderCabinetSetupValidation();
     }
-    setEGMBulkActionMessage("Applied " + appliedIDs.length + " EGM IDs to first-test profile values. Save Override to persist if needed.");
-    setAlert("info", "First-test EGM IDs updated", "Applied selected EGM IDs into cabinet profile override.");
+    setEGMBulkActionMessage("Applied " + appliedIDs.length + " EGM IDs to test profile values. Save Override to persist if needed.");
+    setAlert("info", "Test EGM IDs updated", "Applied selected EGM IDs into cabinet profile override.");
     schedulePoll(0);
   } catch (err) {
-    setEGMBulkActionMessage(err && err.message ? err.message : "Apply to first-test failed.");
-    setAlert("warning", "Apply to first-test failed", "Unable to update cabinet profile first-test EGM IDs.");
+    setEGMBulkActionMessage(err && err.message ? err.message : "Apply to test EGMs failed.");
+    setAlert("warning", "Apply to test EGMs failed", "Unable to update cabinet profile test EGM IDs.");
   }
 }
 
@@ -7307,7 +7321,7 @@ function renderCabinetProfileSuggestions(snapshot) {
     preview = "No observed EGMs yet; start cabinet traffic to generate suggestions.";
   }
   if (suggestions.placeholder_detected) {
-    preview += " Placeholder IDs detected in current first-test values.";
+    preview += " Placeholder IDs detected in current test EGM values.";
   }
   $("setup-observed-egms-preview").textContent = preview;
 }
@@ -8228,7 +8242,7 @@ function renderAlerts(snapshot) {
     return;
   }
   if (heartbeat.health === "ONLINE_ONLY") {
-    setAlert("info", "Heartbeat session online", heartbeat.message);
+    setAlert("info", "Heartbeat online", heartbeat.message);
     return;
   }
   if (Array.isArray(readiness.warnings) && readiness.warnings.length > 0) {
@@ -8470,11 +8484,11 @@ async function pollOnce() {
       settledFailureSummary("egm history", egmHistoryResult),
       settledFailureSummary("egm registry", egmRegistryResult),
       settledFailureSummary("state history", stateHistoryResult),
-      settledFailureSummary("run markers", runMarkersResult),
+      settledFailureSummary("evidence markers", runMarkersResult),
       settledFailureSummary("operator drill", operatorDrillResult),
       settledFailureSummary("certificates", certificatesResult),
       settledFailureSummary("operator audit", operatorAuditResult),
-      settledFailureSummary("session evidence", sessionEvidenceResult),
+      settledFailureSummary("evidence", sessionEvidenceResult),
       settledFailureSummary("cabinet profile", cabinetProfileResult),
       settledFailureSummary("cabinet profile suggestions", cabinetProfileSuggestionsResult),
       settledFailureSummary("heartbeat policy", heartbeatPolicyResult),
