@@ -94,7 +94,7 @@ const dashboardHTML = `<!doctype html>
           <button id="operator-actions-refresh-button" type="button">Refresh now</button>
           <button id="operator-actions-capture-evidence-button" type="button" class="secondary-button">Capture evidence</button>
           <button id="operator-actions-export-package-button" type="button" class="secondary-button">Export session package</button>
-          <button id="operator-actions-blocker-governance-button" type="button" class="secondary-button">Open Blocker Governance</button>
+          <button id="operator-actions-blocker-governance-button" type="button" class="secondary-button">Open System Check Rules</button>
         </div>
       </div>
       <div class="panel global-view-controls-panel">
@@ -299,7 +299,7 @@ const dashboardHTML = `<!doctype html>
             </label>
             <button id="runtime-overrides-restore-button" type="button">Restore Runtime Snapshot</button>
           </div>
-          <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, blocker policy, and EGM registry overrides.</div>
+          <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, system check rules policy, and EGM registry overrides.</div>
         </div>
         <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="settings">
           <p class="label">Runtime Preset Library</p>
@@ -640,13 +640,13 @@ const dashboardHTML = `<!doctype html>
         <div id="blocker-governance-anchor" class="anchor-target" data-dashboard-tab="diagnostics" aria-hidden="true"></div>
         <form id="blocker-policy-form" class="setup-form run-report-form blocker-governance-panel" data-dashboard-tab="diagnostics">
           <div class="panel-title-row">
-            <strong>Blocker Governance</strong>
+            <strong>System Check Rules</strong>
             <span id="blocker-policy-source" class="source-pill source-file">file</span>
           </div>
-          <span id="blocker-policy-message" class="muted-text">Only approved blocker IDs can block runbook readiness.</span>
+          <span id="blocker-policy-message" class="muted-text">Only approved stop-condition IDs can trigger setup stop conditions.</span>
           <div class="form-grid run-report-grid">
             <label>Updated<input id="blocker-policy-updated" type="text" disabled></label>
-            <label>Approved Blocker IDs (comma/newline)<textarea id="blocker-policy-approved-ids" rows="4" placeholder="service_readiness&#10;cabinet_profile"></textarea></label>
+            <label>Approved Stop-Condition IDs (comma/newline)<textarea id="blocker-policy-approved-ids" rows="4" placeholder="service_readiness&#10;cabinet_profile"></textarea></label>
           </div>
           <div id="blocker-policy-validation-list" class="validation-list"></div>
           <div class="setup-actions evidence-actions">
@@ -654,9 +654,9 @@ const dashboardHTML = `<!doctype html>
             <button id="blocker-policy-clear-button" type="button" class="secondary-button">Clear Override</button>
             <button id="blocker-policy-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
-          <div id="blocker-policy-summary" class="muted-text blocker-governance-summary">Waiting for blocker governance telemetry.</div>
+          <div id="blocker-policy-summary" class="muted-text blocker-governance-summary">Waiting for system check rules telemetry.</div>
           <label>Selected Finding ID<input id="blocker-policy-finding-id" type="text" placeholder="cabinet_profile"></label>
-          <label>Escalation Rationale<textarea id="blocker-policy-rationale" rows="3" placeholder="Required cabinet deployment reason for blocker escalation approval."></textarea></label>
+          <label>Escalation Rationale<textarea id="blocker-policy-rationale" rows="3" placeholder="Required cabinet deployment reason for stop-condition approval."></textarea></label>
           <div class="setup-actions evidence-actions">
             <button id="blocker-policy-approve-button" type="button">Approve Selected Finding</button>
             <button id="blocker-policy-revoke-button" type="button" class="secondary-button">Revoke Selected Finding</button>
@@ -666,7 +666,7 @@ const dashboardHTML = `<!doctype html>
             <div id="blocker-policy-suggestions-list" class="timeline blocker-governance-list"></div>
           </div>
           <div class="first-cabinet-session-blockers-wrap">
-            <p class="label">Active Approved Blockers</p>
+            <p class="label">Active Approved Stop Conditions</p>
             <div id="blocker-policy-active-blockers" class="timeline blocker-governance-list"></div>
           </div>
           <div class="first-cabinet-session-blockers-wrap">
@@ -768,8 +768,8 @@ const dashboardHTML = `<!doctype html>
               <option value="cabinet_profile.clear">cabinet_profile.clear</option>
               <option value="heartbeat_policy.save">heartbeat_policy.save</option>
               <option value="heartbeat_policy.clear">heartbeat_policy.clear</option>
-              <option value="blocker_policy.save">blocker_policy.save</option>
-              <option value="blocker_policy.clear">blocker_policy.clear</option>
+              <option value="blocker_policy.save">system_check_rules.save</option>
+              <option value="blocker_policy.clear">system_check_rules.clear</option>
               <option value="certificate.preview">certificate.preview</option>
               <option value="certificate.import">certificate.import</option>
               <option value="certificate.restore">certificate.restore</option>
@@ -4609,7 +4609,7 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   downgradedFindings.forEach((finding) => {
     const id = String(finding?.id || "").trim();
     if (!id) return;
-    pushUniqueString(labWarning, "System Check finding downgraded by blocker policy: " + id + ".");
+    pushUniqueString(labWarning, "System Check finding downgraded by stop-condition policy: " + id + ".");
     pushUniqueString(nextActions, "Review downgraded system check finding " + id + " before production deployment.");
   });
   const preflightProfileCheck = preflightCheckByID(preflight, "cabinet_profile");
@@ -5016,9 +5016,9 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- EGM-specific views filtered: " + String(evidence?.egm_focus?.egm_specific_views_filtered === true),
     "- Ready for session: " + String(evidence.session.ready_for_session === true),
     "- Readyz state: " + (evidence.session.readyz_state || "-"),
-    "- Preflight state: " + (evidence.session.preflight_state || "-"),
-    "- Runbook readiness state: " + (evidence?.runbook_readiness?.state || "UNKNOWN"),
-    "- Runbook prep can continue: " + String(evidence?.runbook_readiness?.can_continue_cabinet_prep === true),
+    "- System Check state: " + (evidence.session.preflight_state || "-"),
+    "- System Check status: " + (evidence?.runbook_readiness?.state || "UNKNOWN"),
+    "- Setup can continue: " + String(evidence?.runbook_readiness?.can_continue_cabinet_prep === true),
     "- Mute path state: " + (evidence?.mute_path?.mute_path_state || "UNKNOWN"),
     "- Mute path note: " + (evidence?.mute_path?.mute_path_note || "-"),
     "- API auth state: " + (evidence.session.api_auth_state || "-"),
@@ -5045,12 +5045,12 @@ function buildSessionEvidenceMarkdown(evidence) {
   lines.push("## Mute Path Note", "");
   lines.push("- " + (evidence?.mute_path?.mute_path_note || "Mute path status unavailable."));
   lines.push("- " + (evidence?.mute_path?.confidence_note || "Software signal only."));
-  lines.push("", "## Runbook Readiness", "");
+  lines.push("", "## System Check Status", "");
   lines.push("- State: " + (evidence?.runbook_readiness?.state || "UNKNOWN"));
-  lines.push("- Blocker count: " + String(evidence?.runbook_readiness?.blocker_count || 0));
+  lines.push("- Stop condition count: " + String(evidence?.runbook_readiness?.blocker_count || 0));
   lines.push("- Lab warning count: " + String(evidence?.runbook_readiness?.warning_count || 0));
   lines.push("- Next action: " + (evidence?.runbook_readiness?.next_action || "-"));
-  lines.push("", "## Runbook Blockers", "");
+  lines.push("", "## System Check Stop Conditions", "");
   if (Array.isArray(evidence.session.blockers) && evidence.session.blockers.length) {
     evidence.session.blockers.forEach((item) => lines.push("- " + item));
   } else {
@@ -6290,8 +6290,8 @@ function buildRunReportMarkdown(report) {
     "- EGM focus: " + (report?.egm_focus?.label || "All EGMs"),
     "- EGM history scope: " + (report?.scope?.egm_history_scope || "FULL_SESSION"),
     "- Grouped summary scope: " + (report?.scope?.grouped_summary_scope || "FULL_SESSION"),
-    "- Runbook readiness state: " + (report?.runbook_readiness?.state || "UNKNOWN"),
-    "- Runbook prep can continue: " + String(report?.runbook_readiness?.can_continue_cabinet_prep === true),
+    "- System Check status: " + (report?.runbook_readiness?.state || "UNKNOWN"),
+    "- Setup can continue: " + String(report?.runbook_readiness?.can_continue_cabinet_prep === true),
     "- Mute path state: " + (report?.mute_path?.mute_path_state || "UNKNOWN"),
     "- Mute path note: " + (report?.mute_path?.mute_path_note || "-"),
     "- Host ID: " + (report.cabinet_profile.host_id || "-"),
@@ -6335,10 +6335,10 @@ function buildRunReportMarkdown(report) {
     "- " + (report?.mute_path?.mute_path_note || "Mute path status unavailable."),
     "- " + (report?.mute_path?.confidence_note || "Software signal only."),
     "",
-    "## Runbook Readiness",
+    "## System Check Status",
     "",
     "- State: " + (report?.runbook_readiness?.state || "UNKNOWN"),
-    "- Blocker count: " + String(report?.runbook_readiness?.blocker_count || 0),
+    "- Stop condition count: " + String(report?.runbook_readiness?.blocker_count || 0),
     "- Lab warning count: " + String(report?.runbook_readiness?.warning_count || 0),
     "- Next action: " + (report?.runbook_readiness?.next_action || "-"),
     "",
@@ -6801,7 +6801,7 @@ function validateBlockerPolicyForm() {
   const pattern = /^[a-z0-9_]+$/;
   ids.forEach((id) => {
     if (!pattern.test(id)) {
-      problems.push("Approved blocker IDs must match ^[a-z0-9_]+$: " + id);
+      problems.push("Approved stop-condition IDs must match ^[a-z0-9_]+$: " + id);
     }
   });
   $("blocker-policy-validation-list").innerHTML = problems.map((item) => "<div class=\"validation-item\">" + escapeHTML(item) + "</div>").join("");
@@ -6850,8 +6850,8 @@ function renderBlockerGovernance(snapshot) {
   );
 
   const activeBlockers = Array.isArray(preflight?.blockers) ? preflight.blockers.map((item) => String(item || "").trim()).filter(Boolean) : [];
-  renderItems("blocker-policy-active-blockers", activeBlockers, "No active approved blockers.", (item) =>
-    "<div class=\"item blocker-governance-item\"><strong>BLOCKER</strong><span>" + escapeHTML(item) + "</span></div>"
+  renderItems("blocker-policy-active-blockers", activeBlockers, "No active approved stop conditions.", (item) =>
+    "<div class=\"item blocker-governance-item\"><strong>STOP CONDITION</strong><span>" + escapeHTML(item) + "</span></div>"
   );
 
   const downgraded = Array.isArray(preflight?.downgraded_findings) ? preflight.downgraded_findings : [];
@@ -6865,7 +6865,7 @@ function renderBlockerGovernance(snapshot) {
     "<div class=\"item blocker-governance-item\">" +
       "<strong>" + escapeHTML(item.id || "-") + "</strong>" +
       "<span>" + escapeHTML(item.message || "-") + "</span>" +
-      "<span class=\"muted-text\">" + escapeHTML((item.marker || "DOWNGRADED_BY_BLOCKER_POLICY") + (item.detail ? (" | " + item.detail) : "")) + "</span>" +
+      "<span class=\"muted-text\">" + escapeHTML((item.marker || "DOWNGRADED_BY_POLICY_RULES") + (item.detail ? (" | " + item.detail) : "")) + "</span>" +
     "</div>"
   );
 
@@ -6882,14 +6882,14 @@ function renderBlockerGovernance(snapshot) {
   const summaryParts = [
     "approved IDs " + String((policy.effective.approved_blocker_ids || []).length),
     "suggested escalations " + String(suggestions.length),
-    "active blockers " + String(activeBlockers.length),
+    "active stop conditions " + String(activeBlockers.length),
     "downgraded findings " + String(downgradedRows.length),
     "history rows " + String(history.length)
   ];
-  $("blocker-policy-summary").textContent = "Governance summary: " + summaryParts.join(" | ");
+  $("blocker-policy-summary").textContent = "Rules summary: " + summaryParts.join(" | ");
   $("blocker-policy-message").textContent = tokenRequired && !tokenPresent
-    ? "Enter a setup or certificate API token before changing blocker governance."
-    : "Only approved blocker IDs can block runbook readiness.";
+    ? "Enter a setup or certificate API token before changing system check rules."
+    : "Only approved stop-condition IDs can trigger setup stop conditions.";
 }
 
 function syncBlockerPolicyFromSnapshot(snapshot) {
@@ -6907,7 +6907,7 @@ function blockerPolicyMutationHeaders() {
 
 async function sendBlockerPolicyEscalationAction(endpoint, findingID, rationale, successMessage, failMessage) {
   if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
-    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before changing blocker governance.";
+    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before changing system check rules.";
     return;
   }
   const trimmedFindingID = String(findingID || "").trim();
@@ -6915,7 +6915,7 @@ async function sendBlockerPolicyEscalationAction(endpoint, findingID, rationale,
     $("blocker-policy-message").textContent = "finding_id is required.";
     return;
   }
-  $("blocker-policy-message").textContent = "Applying blocker governance change.";
+  $("blocker-policy-message").textContent = "Applying system check rules change.";
   const response = await fetch(endpoint, {
     method: "POST",
     headers: blockerPolicyMutationHeaders(),
@@ -6927,11 +6927,11 @@ async function sendBlockerPolicyEscalationAction(endpoint, findingID, rationale,
   if (!response.ok) {
     const detail = sanitizeHTTPText(await response.text());
     $("blocker-policy-message").textContent = failMessage + ": HTTP " + response.status + (detail ? " " + detail : "");
-    setAlert("warning", "Blocker governance update failed", failMessage + ".");
+    setAlert("warning", "System check rules update failed", failMessage + ".");
     return;
   }
   $("blocker-policy-message").textContent = successMessage;
-  setAlert("info", "Blocker governance updated", successMessage);
+  setAlert("info", "System check rules updated", successMessage);
   schedulePoll(0);
 }
 
@@ -6939,14 +6939,14 @@ async function approveSelectedBlockerFinding() {
   const findingID = String($("blocker-policy-finding-id").value || "").trim();
   const rationale = String($("blocker-policy-rationale").value || "").trim();
   if (!rationale) {
-    $("blocker-policy-message").textContent = "Rationale is required for blocker escalation approval.";
+    $("blocker-policy-message").textContent = "Rationale is required for stop-condition escalation approval.";
     return;
   }
   await sendBlockerPolicyEscalationAction(
     endpoints.blockerPolicyApprove,
     findingID,
     rationale,
-    "Blocker escalation approved.",
+    "Stop-condition escalation approved.",
     "Approve failed",
   );
 }
@@ -6958,7 +6958,7 @@ async function revokeSelectedBlockerFinding() {
     endpoints.blockerPolicyRevoke,
     findingID,
     rationale,
-    "Blocker escalation revoked.",
+    "Stop-condition escalation revoked.",
     "Revoke failed",
   );
 }
@@ -6969,10 +6969,10 @@ async function reloadBlockerPolicyForm() {
     fetch(endpoints.blockerPolicySuggestions, { cache: "no-store" })
   ]);
   if (!policyResponse.ok) {
-    throw new Error("Blocker policy reload failed: HTTP " + policyResponse.status);
+    throw new Error("System check rules reload failed: HTTP " + policyResponse.status);
   }
   if (!suggestionsResponse.ok) {
-    throw new Error("Blocker policy suggestions reload failed: HTTP " + suggestionsResponse.status);
+    throw new Error("System check rules suggestions reload failed: HTTP " + suggestionsResponse.status);
   }
   const payload = normalizeBlockerPolicyResponse(await policyResponse.json());
   const suggestionsPayload = normalizeBlockerPolicySuggestions(await suggestionsResponse.json());
@@ -6986,12 +6986,12 @@ async function reloadBlockerPolicyForm() {
 async function saveBlockerPolicyOverride(event) {
   event.preventDefault();
   if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
-    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before saving blocker governance.";
+    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before saving system check rules.";
     return;
   }
   const validation = validateBlockerPolicyForm();
   if (validation.problems.length > 0) {
-    $("blocker-policy-message").textContent = "Resolve blocker governance validation issues before saving.";
+    $("blocker-policy-message").textContent = "Resolve system check rules validation issues before saving.";
     return;
   }
   const headers = { "Content-Type": "application/json" };
@@ -7007,17 +7007,17 @@ async function saveBlockerPolicyOverride(event) {
   if (!response.ok) {
     const detail = sanitizeHTTPText(await response.text());
     $("blocker-policy-message").textContent = "Save failed: HTTP " + response.status + (detail ? " " + detail : "");
-    setAlert("warning", "Blocker governance save failed", "Unable to save approved blocker IDs.");
+    setAlert("warning", "System check rules save failed", "Unable to save approved stop-condition IDs.");
     return;
   }
-  $("blocker-policy-message").textContent = "Blocker governance saved.";
-  setAlert("info", "Blocker governance override saved", "Runbook blocking is now restricted to approved blocker IDs.");
+  $("blocker-policy-message").textContent = "System check rules saved.";
+  setAlert("info", "System check rules override saved", "Setup stop conditions are now restricted to approved stop-condition IDs.");
   schedulePoll(0);
 }
 
 async function clearBlockerPolicyOverride() {
   if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
-    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before clearing blocker governance.";
+    $("blocker-policy-message").textContent = "Enter a setup or certificate API token before clearing system check rules.";
     return;
   }
   const headers = {};
@@ -7032,11 +7032,11 @@ async function clearBlockerPolicyOverride() {
   if (!response.ok) {
     const detail = sanitizeHTTPText(await response.text());
     $("blocker-policy-message").textContent = "Clear failed: HTTP " + response.status + (detail ? " " + detail : "");
-    setAlert("warning", "Blocker governance clear failed", "Unable to clear blocker governance override.");
+    setAlert("warning", "System check rules clear failed", "Unable to clear system check rules override.");
     return;
   }
-  $("blocker-policy-message").textContent = "Blocker governance override cleared.";
-  setAlert("info", "Blocker governance override cleared", "Blocker governance reverted to file policy.");
+  $("blocker-policy-message").textContent = "System check rules override cleared.";
+  setAlert("info", "System check rules override cleared", "System check rules reverted to file policy.");
   schedulePoll(0);
 }
 
@@ -8920,8 +8920,8 @@ async function pollOnce() {
       settledFailureSummary("cabinet profile", cabinetProfileResult),
       settledFailureSummary("cabinet profile suggestions", cabinetProfileSuggestionsResult),
       settledFailureSummary("heartbeat policy", heartbeatPolicyResult),
-      settledFailureSummary("blocker policy", blockerPolicyResult),
-      settledFailureSummary("blocker policy suggestions", blockerPolicySuggestionsResult),
+      settledFailureSummary("system check rules", blockerPolicyResult),
+      settledFailureSummary("system check rules suggestions", blockerPolicySuggestionsResult),
       settledFailureSummary("system check", cabinetPreflightResult),
       settledFailureSummary("endpoint integrity alerts", endpointIntegrityAlertsResult),
       settledFailureSummary("runtime override presets", runtimeOverridePresetsResult)
@@ -9243,7 +9243,7 @@ function bindControls() {
   $("blocker-policy-clear-button").addEventListener("click", clearBlockerPolicyOverride);
   $("blocker-policy-reload-button").addEventListener("click", () => {
     reloadBlockerPolicyForm().catch((err) => {
-      $("blocker-policy-message").textContent = err && err.message ? err.message : "Blocker policy reload failed.";
+      $("blocker-policy-message").textContent = err && err.message ? err.message : "System check rules reload failed.";
     });
   });
   $("blocker-policy-approved-ids").addEventListener("input", () => {
