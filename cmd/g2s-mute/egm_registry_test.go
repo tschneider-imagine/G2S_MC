@@ -290,3 +290,221 @@ func TestEGMRegistryValidationAndPathHandling(t *testing.T) {
 		t.Fatalf("put invalid path status = %d, want 400", invalidPathRec.Code)
 	}
 }
+
+func TestEGMRegistryPromoteBulkPartialAndDefaults(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		ControllerID: "G2S-MC-REGISTRY-BULK",
+		EGMRoster:    []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+	}
+	eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eng.Start(runCtx)
+	now := time.Now().UTC()
+	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: now})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-02", At: now.Add(time.Second)})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-03", At: now.Add(2 * time.Second)})
+	waitForLastEvent(t, eng, string(engine.EventKeepAlive))
+
+	handler := egmRegistryPromoteBulkHandler(eng, auditStore, cfg)
+	req := httptest.NewRequest(http.MethodPost, "/api/egm-registry/promote-bulk", bytes.NewBufferString(`{
+		"egm_ids":["EGM-02","EGM-99","EGM-03","EGM-02",""],
+		"defaults":{"vendor":"BulkVendor","cabinet_family":"BulkFamily","notes":"bulk note"}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk promote status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body egmRegistryPromoteBulkResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode bulk promote: %v", err)
+	}
+	if body.PromotedCount != 2 {
+		t.Fatalf("promoted_count = %d, want 2", body.PromotedCount)
+	}
+	if !containsString(body.SkippedIDs, "EGM-99") {
+		t.Fatalf("expected EGM-99 in skipped_ids: %#v", body.SkippedIDs)
+	}
+	if !containsString(body.SkippedIDs, "EGM-02") {
+		t.Fatalf("expected duplicate EGM-02 in skipped_ids: %#v", body.SkippedIDs)
+	}
+	if len(body.Errors) == 0 {
+		t.Fatalf("expected partial errors in response")
+	}
+
+	overrides, err := auditStore.ListEGMRegistryOverrides(ctx)
+	if err != nil {
+		t.Fatalf("list overrides: %v", err)
+	}
+	if len(overrides) != 2 {
+		t.Fatalf("override count = %d, want 2", len(overrides))
+	}
+	for _, row := range overrides {
+		if row.EGMID != "EGM-02" && row.EGMID != "EGM-03" {
+			t.Fatalf("unexpected override id %q", row.EGMID)
+		}
+		if row.Vendor != "BulkVendor" {
+			t.Fatalf("%s vendor = %q, want BulkVendor", row.EGMID, row.Vendor)
+		}
+		if row.CabinetFamily != "BulkFamily" {
+			t.Fatalf("%s cabinet_family = %q, want BulkFamily", row.EGMID, row.CabinetFamily)
+		}
+		if row.Notes != "bulk note" {
+			t.Fatalf("%s notes = %q, want bulk note", row.EGMID, row.Notes)
+		}
+	}
+}
+
+func TestEGMRegistryApplyToCabinetProfile(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		ControllerID: "G2S-MC-REGISTRY-APPLY",
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://host-a.example/g2s",
+			ListenerDNSName: "host-a.example",
+			RequiredSANDNS:  []string{"host-a.example"},
+			HostID:          "HOST-TEST-001",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+		EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+	}
+	eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eng.Start(runCtx)
+	now := time.Now().UTC()
+	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: now})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-02", At: now.Add(time.Second)})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-03", At: now.Add(2 * time.Second)})
+	waitForLastEvent(t, eng, string(engine.EventKeepAlive))
+
+	handler := egmRegistryApplyToCabinetProfileHandler(eng, auditStore, cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/egm-registry/apply-to-cabinet-profile", bytes.NewBufferString(`{"egm_ids":["EGM-03","EGM-02","EGM-03"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply-to-profile status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body egmRegistryApplyToCabinetProfileResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode apply-to-profile: %v", err)
+	}
+	if len(body.AppliedFirstTestEGMIDs) != 2 || body.AppliedFirstTestEGMIDs[0] != "EGM-03" || body.AppliedFirstTestEGMIDs[1] != "EGM-02" {
+		t.Fatalf("applied_first_test_egm_ids = %#v, want [EGM-03 EGM-02]", body.AppliedFirstTestEGMIDs)
+	}
+	if len(body.CabinetProfile.Effective.FirstTestEGMIDs) != 2 || body.CabinetProfile.Effective.FirstTestEGMIDs[0] != "EGM-03" || body.CabinetProfile.Effective.FirstTestEGMIDs[1] != "EGM-02" {
+		t.Fatalf("effective.first_test_egm_ids = %#v, want [EGM-03 EGM-02]", body.CabinetProfile.Effective.FirstTestEGMIDs)
+	}
+
+	override, err := auditStore.GetCabinetProfileOverride(ctx)
+	if err != nil {
+		t.Fatalf("get profile override: %v", err)
+	}
+	if override == nil {
+		t.Fatalf("expected cabinet profile override after apply")
+	}
+	if len(override.Profile.FirstTestEGMIDs) != 2 || override.Profile.FirstTestEGMIDs[0] != "EGM-03" || override.Profile.FirstTestEGMIDs[1] != "EGM-02" {
+		t.Fatalf("override first_test_egm_ids = %#v, want [EGM-03 EGM-02]", override.Profile.FirstTestEGMIDs)
+	}
+
+	unknownReq := httptest.NewRequest(http.MethodPost, "/api/egm-registry/apply-to-cabinet-profile", bytes.NewBufferString(`{"egm_ids":["EGM-77"]}`))
+	unknownReq.Header.Set("Content-Type", "application/json")
+	unknownRec := httptest.NewRecorder()
+	handler(unknownRec, unknownReq)
+	if unknownRec.Code != http.StatusBadRequest {
+		t.Fatalf("apply-to-profile unknown id status = %d, want 400", unknownRec.Code)
+	}
+
+	emptyReq := httptest.NewRequest(http.MethodPost, "/api/egm-registry/apply-to-cabinet-profile", bytes.NewBufferString(`{"egm_ids":[]}`))
+	emptyReq.Header.Set("Content-Type", "application/json")
+	emptyRec := httptest.NewRecorder()
+	handler(emptyRec, emptyReq)
+	if emptyRec.Code != http.StatusBadRequest {
+		t.Fatalf("apply-to-profile empty ids status = %d, want 400", emptyRec.Code)
+	}
+}
+
+func TestEGMRegistryBulkMutationAuthMatrix(t *testing.T) {
+	ctx := context.Background()
+	auditStore, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
+
+	cfg := config.Config{
+		API: config.API{AuthToken: "lab-secret"},
+		CabinetProfile: config.CabinetProfile{
+			WireHostURL:     "https://host-a.example/g2s",
+			ListenerDNSName: "host-a.example",
+			RequiredSANDNS:  []string{"host-a.example"},
+			HostID:          "HOST-TEST-001",
+			FirstTestEGMIDs: []string{"EGM-01"},
+		},
+		EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
+	}
+	eng := engine.New("G2S-MC-REGISTRY-BULK-AUTH", cfg.EGMRoster)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eng.Start(runCtx)
+	now := time.Now().UTC()
+	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: now})
+	eng.Submit(engine.Event{Type: engine.EventKeepAlive, EGMID: "EGM-02", At: now.Add(time.Second)})
+	waitForLastEvent(t, eng, string(engine.EventKeepAlive))
+
+	bulkPromote := requireMutationAuthForMethods(egmRegistryPromoteBulkHandler(eng, auditStore, cfg), cfg, http.MethodPost)
+	applyFirstTest := requireMutationAuthForMethods(egmRegistryApplyToCabinetProfileHandler(eng, auditStore, cfg), cfg, http.MethodPost)
+
+	unauthPromote := httptest.NewRequest(http.MethodPost, "/api/egm-registry/promote-bulk", bytes.NewBufferString(`{"egm_ids":["EGM-02"]}`))
+	unauthPromote.Header.Set("Content-Type", "application/json")
+	unauthPromoteRec := httptest.NewRecorder()
+	bulkPromote(unauthPromoteRec, unauthPromote)
+	if !deniedByAuth(unauthPromoteRec.Code) {
+		t.Fatalf("bulk promote without token status = %d, want 401/403", unauthPromoteRec.Code)
+	}
+
+	authPromote := httptest.NewRequest(http.MethodPost, "/api/egm-registry/promote-bulk", bytes.NewBufferString(`{"egm_ids":["EGM-02"]}`))
+	authPromote.Header.Set("Content-Type", "application/json")
+	authPromote.Header.Set("Authorization", "Bearer lab-secret")
+	authPromoteRec := httptest.NewRecorder()
+	bulkPromote(authPromoteRec, authPromote)
+	if authPromoteRec.Code != http.StatusOK {
+		t.Fatalf("bulk promote with token status = %d: %s", authPromoteRec.Code, authPromoteRec.Body.String())
+	}
+
+	unauthApply := httptest.NewRequest(http.MethodPost, "/api/egm-registry/apply-to-cabinet-profile", bytes.NewBufferString(`{"egm_ids":["EGM-02"]}`))
+	unauthApply.Header.Set("Content-Type", "application/json")
+	unauthApplyRec := httptest.NewRecorder()
+	applyFirstTest(unauthApplyRec, unauthApply)
+	if !deniedByAuth(unauthApplyRec.Code) {
+		t.Fatalf("apply-to-profile without token status = %d, want 401/403", unauthApplyRec.Code)
+	}
+
+	authApply := httptest.NewRequest(http.MethodPost, "/api/egm-registry/apply-to-cabinet-profile", bytes.NewBufferString(`{"egm_ids":["EGM-02"]}`))
+	authApply.Header.Set("Content-Type", "application/json")
+	authApply.Header.Set("Authorization", "Bearer lab-secret")
+	authApplyRec := httptest.NewRecorder()
+	applyFirstTest(authApplyRec, authApply)
+	if authApplyRec.Code != http.StatusOK {
+		t.Fatalf("apply-to-profile with token status = %d: %s", authApplyRec.Code, authApplyRec.Body.String())
+	}
+}

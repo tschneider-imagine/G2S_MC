@@ -55,6 +55,32 @@ type egmRegistryUpdateRequest struct {
 	Notes           string `json:"notes"`
 }
 
+type egmRegistryPromoteBulkDefaults struct {
+	Vendor        string `json:"vendor"`
+	CabinetFamily string `json:"cabinet_family"`
+	Notes         string `json:"notes"`
+}
+
+type egmRegistryPromoteBulkRequest struct {
+	EGMIDs   []string                        `json:"egm_ids"`
+	Defaults *egmRegistryPromoteBulkDefaults `json:"defaults,omitempty"`
+}
+
+type egmRegistryPromoteBulkResponse struct {
+	PromotedCount int      `json:"promoted_count"`
+	SkippedIDs    []string `json:"skipped_ids"`
+	Errors        []string `json:"errors"`
+}
+
+type egmRegistryApplyToCabinetProfileRequest struct {
+	EGMIDs []string `json:"egm_ids"`
+}
+
+type egmRegistryApplyToCabinetProfileResponse struct {
+	AppliedFirstTestEGMIDs []string               `json:"applied_first_test_egm_ids"`
+	CabinetProfile         cabinetProfileResponse `json:"cabinet_profile"`
+}
+
 func egmRegistryHandler(eng *engine.Engine, auditStore *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -124,6 +150,216 @@ func egmRegistryPromoteHandler(eng *engine.Engine, auditStore *store.SQLiteStore
 
 		response, err := buildEGMRegistryResponse(r.Context(), eng, auditStore)
 		writeJSON(w, response, err)
+	}
+}
+
+func egmRegistryPromoteBulkHandler(eng *engine.Engine, auditStore *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		payload := egmRegistryPromoteBulkRequest{}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&payload); err != nil {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.promote_bulk", "fail", "EGM registry bulk promote rejected", "invalid JSON body")
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+
+		defaultVendor := ""
+		defaultCabinetFamily := ""
+		defaultNotes := ""
+		if payload.Defaults != nil {
+			defaultVendor = strings.TrimSpace(payload.Defaults.Vendor)
+			defaultCabinetFamily = strings.TrimSpace(payload.Defaults.CabinetFamily)
+			defaultNotes = strings.TrimSpace(payload.Defaults.Notes)
+		}
+		if err := validateEGMRegistryTextFields("", defaultVendor, defaultCabinetFamily, "", "", defaultNotes); err != nil {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.promote_bulk", "fail", "EGM registry bulk promote rejected", err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		uniqueIDs := make([]string, 0, len(payload.EGMIDs))
+		seenIDs := map[string]struct{}{}
+		response := egmRegistryPromoteBulkResponse{
+			PromotedCount: 0,
+			SkippedIDs:    []string{},
+			Errors:        []string{},
+		}
+		for idx, raw := range payload.EGMIDs {
+			egmID := strings.TrimSpace(raw)
+			if egmID == "" {
+				response.Errors = append(response.Errors, fmt.Sprintf("egm_ids[%d] is required", idx))
+				continue
+			}
+			if _, exists := seenIDs[egmID]; exists {
+				response.SkippedIDs = append(response.SkippedIDs, egmID)
+				response.Errors = append(response.Errors, fmt.Sprintf("egm_id %q is duplicated in request", egmID))
+				continue
+			}
+			seenIDs[egmID] = struct{}{}
+			uniqueIDs = append(uniqueIDs, egmID)
+		}
+		if len(uniqueIDs) == 0 {
+			if len(response.Errors) == 0 {
+				response.Errors = append(response.Errors, "egm_ids must contain at least one EGM ID")
+			}
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.promote_bulk", "fail", "EGM registry bulk promote rejected", strings.Join(response.Errors, "; "))
+			http.Error(w, response.Errors[0], http.StatusBadRequest)
+			return
+		}
+
+		overrides, err := auditStore.ListEGMRegistryOverrides(r.Context())
+		if err != nil {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.promote_bulk", "fail", "EGM registry bulk promote failed", err.Error())
+			writeJSON(w, nil, err)
+			return
+		}
+		overrideByID := map[string]store.EGMRegistryOverride{}
+		for _, row := range overrides {
+			id := strings.TrimSpace(row.EGMID)
+			if id != "" {
+				overrideByID[id] = row
+			}
+		}
+
+		snapshot := eng.Snapshot()
+		egmByID := snapshotEGMByIDMap(snapshot)
+		updatedBy := updateActorNameFromRequest(r)
+		for _, egmID := range uniqueIDs {
+			discovered, ok := egmByID[egmID]
+			if !ok {
+				response.SkippedIDs = append(response.SkippedIDs, egmID)
+				response.Errors = append(response.Errors, fmt.Sprintf("egm_id %q not found in runtime snapshot", egmID))
+				continue
+			}
+
+			existing := overrideByID[egmID]
+			override := store.EGMRegistryOverride{
+				EGMID:           egmID,
+				DisplayName:     firstNonEmpty(existing.DisplayName, discovered.DisplayName, discovered.ID),
+				Vendor:          firstNonEmpty(existing.Vendor, defaultVendor, discovered.Vendor),
+				CabinetFamily:   firstNonEmpty(existing.CabinetFamily, defaultCabinetFamily, discovered.CabinetFamily),
+				GameTitle:       firstNonEmpty(existing.GameTitle, discovered.GameTitle),
+				SoftwareVersion: firstNonEmpty(existing.SoftwareVersion, discovered.SoftwareVersion),
+				Notes:           firstNonEmpty(existing.Notes, defaultNotes, discovered.Notes),
+				UpdatedBy:       updatedBy,
+			}
+			if err := validateEGMRegistryTextFields(override.DisplayName, override.Vendor, override.CabinetFamily, override.GameTitle, override.SoftwareVersion, override.Notes); err != nil {
+				response.SkippedIDs = append(response.SkippedIDs, egmID)
+				response.Errors = append(response.Errors, fmt.Sprintf("egm_id %q rejected: %s", egmID, err.Error()))
+				continue
+			}
+			if err := auditStore.UpsertEGMRegistryOverride(r.Context(), override); err != nil {
+				response.SkippedIDs = append(response.SkippedIDs, egmID)
+				response.Errors = append(response.Errors, fmt.Sprintf("egm_id %q upsert failed: %s", egmID, err.Error()))
+				continue
+			}
+			response.PromotedCount++
+		}
+
+		result := "success"
+		summary := fmt.Sprintf("promoted=%d skipped=%d errors=%d", response.PromotedCount, len(response.SkippedIDs), len(response.Errors))
+		if response.PromotedCount == 0 && len(response.Errors) > 0 {
+			result = "fail"
+		}
+		recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.promote_bulk", result, "EGM registry bulk promote processed", summary)
+		writeJSON(w, response, nil)
+	}
+}
+
+func egmRegistryApplyToCabinetProfileHandler(eng *engine.Engine, auditStore *store.SQLiteStore, cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		payload := egmRegistryApplyToCabinetProfileRequest{}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&payload); err != nil {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.apply_to_cabinet_profile", "fail", "EGM apply-to-profile rejected", "invalid JSON body")
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+
+		uniqueIDs := make([]string, 0, len(payload.EGMIDs))
+		seenIDs := map[string]struct{}{}
+		for idx, raw := range payload.EGMIDs {
+			egmID := strings.TrimSpace(raw)
+			if egmID == "" {
+				recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.apply_to_cabinet_profile", "fail", "EGM apply-to-profile rejected", fmt.Sprintf("egm_ids[%d] is required", idx))
+				http.Error(w, fmt.Sprintf("egm_ids[%d] is required", idx), http.StatusBadRequest)
+				return
+			}
+			if _, exists := seenIDs[egmID]; exists {
+				continue
+			}
+			seenIDs[egmID] = struct{}{}
+			uniqueIDs = append(uniqueIDs, egmID)
+		}
+		if len(uniqueIDs) == 0 {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.apply_to_cabinet_profile", "fail", "EGM apply-to-profile rejected", "egm_ids must contain at least one EGM ID")
+			http.Error(w, "egm_ids must contain at least one EGM ID", http.StatusBadRequest)
+			return
+		}
+
+		egmByID := snapshotEGMByIDMap(eng.Snapshot())
+		unknown := make([]string, 0, len(uniqueIDs))
+		for _, egmID := range uniqueIDs {
+			if _, ok := egmByID[egmID]; !ok {
+				unknown = append(unknown, egmID)
+			}
+		}
+		if len(unknown) > 0 {
+			detail := "unknown egm_ids: " + strings.Join(unknown, ", ")
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.apply_to_cabinet_profile", "fail", "EGM apply-to-profile rejected", detail)
+			http.Error(w, detail, http.StatusBadRequest)
+			return
+		}
+
+		override, err := auditStore.GetCabinetProfileOverride(r.Context())
+		if err != nil {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.apply_to_cabinet_profile", "fail", "EGM apply-to-profile failed", err.Error())
+			writeJSON(w, nil, err)
+			return
+		}
+		overrideProfile := config.CabinetProfile{}
+		if override != nil {
+			overrideProfile = override.Profile
+		}
+		overrideProfile.FirstTestEGMIDs = append([]string{}, uniqueIDs...)
+		if err := auditStore.UpsertCabinetProfileOverride(r.Context(), overrideProfile, updateActorNameFromRequest(r)); err != nil {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.apply_to_cabinet_profile", "fail", "EGM apply-to-profile failed", err.Error())
+			writeJSON(w, nil, err)
+			return
+		}
+
+		resolved, err := resolveCabinetProfile(r.Context(), auditStore, cfg.CabinetProfile)
+		if err != nil {
+			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "egm_registry.apply_to_cabinet_profile", "fail", "EGM apply-to-profile failed", err.Error())
+			writeJSON(w, nil, err)
+			return
+		}
+		recordOperatorAuditEvent(
+			r.Context(),
+			auditStore,
+			r,
+			cfg,
+			"egm_registry.apply_to_cabinet_profile",
+			"success",
+			"Selected EGMs applied to first-test cabinet profile IDs",
+			fmt.Sprintf("first_test_egm_ids=%d", len(uniqueIDs)),
+		)
+		writeJSON(w, egmRegistryApplyToCabinetProfileResponse{
+			AppliedFirstTestEGMIDs: uniqueIDs,
+			CabinetProfile:         buildCabinetProfileResponse(resolved),
+		}, nil)
 	}
 }
 
@@ -241,6 +477,24 @@ func snapshotEGMByID(snapshot engine.Snapshot, egmID string) (bool, model.EGM) {
 		}
 	}
 	return false, model.EGM{}
+}
+
+func snapshotEGMByIDMap(snapshot engine.Snapshot) map[string]model.EGM {
+	rows := map[string]model.EGM{}
+	for _, row := range snapshot.EGMs {
+		id := strings.TrimSpace(row.ID)
+		if id == "" {
+			continue
+		}
+		if existing, ok := rows[id]; ok {
+			if row.LastSeen.After(existing.LastSeen) {
+				rows[id] = row
+			}
+			continue
+		}
+		rows[id] = row
+	}
+	return rows
 }
 
 func buildEGMRegistryResponse(ctx context.Context, eng *engine.Engine, auditStore *store.SQLiteStore) (egmRegistryResponse, error) {

@@ -135,6 +135,22 @@ func main() {
 		),
 	)
 	mux.HandleFunc(
+		"/api/egm-registry/promote-bulk",
+		requireMutationAuthForMethods(
+			egmRegistryPromoteBulkHandler(eng, auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
+	mux.HandleFunc(
+		"/api/egm-registry/apply-to-cabinet-profile",
+		requireMutationAuthForMethods(
+			egmRegistryApplyToCabinetProfileHandler(eng, auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
+	mux.HandleFunc(
 		"/api/egm-registry/",
 		requireMutationAuthForMethods(
 			egmRegistryByIDHandler(eng, auditStore, cfg),

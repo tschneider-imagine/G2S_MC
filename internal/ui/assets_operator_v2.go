@@ -379,11 +379,20 @@ const dashboardHTML = `<!doctype html>
             </div>
             <span id="egm-sort-label" class="muted-text">Sort: EGM ID asc</span>
           </div>
+          <div class="setup-actions egm-bulk-actions">
+            <button id="egm-select-all-visible-button" type="button" class="secondary-button">Select All Visible</button>
+            <button id="egm-clear-selection-button" type="button" class="secondary-button">Clear Selection</button>
+            <button id="egm-bulk-promote-button" type="button">Promote Selected</button>
+            <button id="egm-bulk-apply-profile-button" type="button" class="secondary-button">Add Selected to First-Test EGM IDs</button>
+            <span id="egm-bulk-selection-summary" class="muted-text">0 selected</span>
+          </div>
+          <span id="egm-bulk-action-message" class="muted-text">Select one or more EGMs to apply bulk actions.</span>
         </div>
         <div class="table-wrap table-wrap-scroll-safe">
           <table>
             <thead>
               <tr>
+                <th class="egm-row-select-cell"><input id="egm-select-all-checkbox" type="checkbox" aria-label="Select all visible EGMs"></th>
                 <th><button type="button" class="sort-button" data-sort-key="egm_id">EGM</button></th>
                 <th>Source</th>
                 <th><button type="button" class="sort-button" data-sort-key="status">Status</button></th>
@@ -396,7 +405,7 @@ const dashboardHTML = `<!doctype html>
               </tr>
             </thead>
             <tbody id="egm-table">
-              <tr><td colspan="9">Loading...</td></tr>
+              <tr><td colspan="10">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1886,6 +1895,22 @@ th {
   font-size: 12px;
 }
 
+.egm-bulk-actions {
+  align-items: center;
+  margin-top: 8px;
+}
+
+.egm-row-select-cell {
+  width: 38px;
+  text-align: center;
+}
+
+.egm-row-select-checkbox,
+#egm-select-all-checkbox {
+  inline-size: 16px;
+  block-size: 16px;
+}
+
 .endpoint-integrity-sections {
   display: grid;
   gap: 10px;
@@ -2468,6 +2493,8 @@ const dashboardJS = `const endpoints = {
   egmHistory: "/api/egms/history",
   egmRegistry: "/api/egm-registry",
   egmRegistryPromote: "/api/egm-registry/promote",
+  egmRegistryPromoteBulk: "/api/egm-registry/promote-bulk",
+  egmRegistryApplyToCabinetProfile: "/api/egm-registry/apply-to-cabinet-profile",
   stateHistory: "/api/state-history?limit=30",
   runMarkers: "/api/run-markers?limit=30",
   operatorDrill: "/api/operator-drill",
@@ -2529,6 +2556,8 @@ const clientState = {
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
   selectedEGMRegistryID: "",
+  egmBulkSelection: {},
+  egmVisibleRowIDs: [],
   workflowProgressLoaded: false,
   workflowProgressBaseline: null,
   endpointIntegrityActionInFlight: false
@@ -6785,13 +6814,188 @@ async function deleteSelectedEGMRegistryOverride() {
   }
 }
 
+function selectedEGMBulkIDSet() {
+  const selection = clientState.egmBulkSelection && typeof clientState.egmBulkSelection === "object"
+    ? clientState.egmBulkSelection
+    : {};
+  const ids = Object.keys(selection).filter((id) => selection[id] === true && String(id || "").trim() !== "");
+  return new Set(ids);
+}
+
+function selectedEGMBulkIDs() {
+  return Array.from(selectedEGMBulkIDSet()).sort();
+}
+
+function setEGMBulkSelectionForID(egmID, selected) {
+  const id = String(egmID || "").trim();
+  if (!id) return;
+  const next = Object.assign({}, clientState.egmBulkSelection || {});
+  if (selected) {
+    next[id] = true;
+  } else {
+    delete next[id];
+  }
+  clientState.egmBulkSelection = next;
+}
+
+function clearEGMBulkSelection() {
+  clientState.egmBulkSelection = {};
+}
+
+function reconcileEGMBulkSelection(allEGMs) {
+  const valid = new Set((Array.isArray(allEGMs) ? allEGMs : [])
+    .map((egm) => String(egm?.id || "").trim())
+    .filter(Boolean));
+  const next = {};
+  const current = clientState.egmBulkSelection && typeof clientState.egmBulkSelection === "object"
+    ? clientState.egmBulkSelection
+    : {};
+  Object.keys(current).forEach((id) => {
+    if (current[id] === true && valid.has(id)) {
+      next[id] = true;
+    }
+  });
+  clientState.egmBulkSelection = next;
+}
+
+function setAllVisibleEGMBulkSelection(selected) {
+  const visibleIDs = Array.isArray(clientState.egmVisibleRowIDs) ? clientState.egmVisibleRowIDs : [];
+  if (visibleIDs.length === 0) {
+    return;
+  }
+  visibleIDs.forEach((id) => {
+    setEGMBulkSelectionForID(id, selected);
+  });
+}
+
+function renderEGMBulkSelectionSummary(visibleCount) {
+  const selected = selectedEGMBulkIDs();
+  const selectedCount = selected.length;
+  const focusID = currentEGMFocusID();
+  const focusLabel = focusID ? ("focus " + focusID) : "all EGMs";
+  $("egm-bulk-selection-summary").textContent = selectedCount + " selected (" + focusLabel + ", " + visibleCount + " visible)";
+  $("egm-bulk-promote-button").disabled = selectedCount === 0;
+  $("egm-bulk-apply-profile-button").disabled = selectedCount === 0;
+  $("egm-clear-selection-button").disabled = selectedCount === 0;
+}
+
+function setEGMBulkActionMessage(message) {
+  $("egm-bulk-action-message").textContent = message;
+}
+
+async function promoteSelectedEGMBulk() {
+  const ids = selectedEGMBulkIDs();
+  if (ids.length === 0) {
+    setEGMBulkActionMessage("Select one or more EGMs before bulk promote.");
+    return;
+  }
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setEGMBulkActionMessage("Enter a setup or certificate API token before bulk promote.");
+    return;
+  }
+  setEGMBulkActionMessage("Promoting selected EGMs...");
+  try {
+    const response = await fetch(endpoints.egmRegistryPromoteBulk, {
+      method: "POST",
+      headers: egmRegistryMutationHeaders(),
+      body: JSON.stringify({ egm_ids: ids })
+    });
+    const rawBody = await response.text();
+    let payload = {};
+    try {
+      payload = rawBody ? JSON.parse(rawBody) : {};
+    } catch (_) {
+      payload = {};
+    }
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(rawBody);
+      setEGMBulkActionMessage("Bulk promote failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Bulk promote failed", "Unable to promote selected EGMs.");
+      return;
+    }
+    const promotedCount = Number(payload?.promoted_count || 0);
+    const skippedIDs = Array.isArray(payload?.skipped_ids) ? payload.skipped_ids : [];
+    const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+    setEGMBulkActionMessage("Bulk promote complete: promoted " + promotedCount + ", skipped " + skippedIDs.length + ", errors " + errors.length + ".");
+    if (errors.length > 0) {
+      setAlert("warning", "Bulk promote completed with skips", "Promoted " + promotedCount + ", skipped " + skippedIDs.length + ".");
+    } else {
+      setAlert("info", "Bulk promote complete", "Promoted " + promotedCount + " selected EGMs.");
+    }
+    schedulePoll(0);
+  } catch (err) {
+    setEGMBulkActionMessage(err && err.message ? err.message : "Bulk promote failed.");
+    setAlert("warning", "Bulk promote failed", "Unable to promote selected EGMs.");
+  }
+}
+
+async function applySelectedToCabinetProfileFirstTest() {
+  const ids = selectedEGMBulkIDs();
+  if (ids.length === 0) {
+    setEGMBulkActionMessage("Select one or more EGMs before applying to cabinet profile.");
+    return;
+  }
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setEGMBulkActionMessage("Enter a setup or certificate API token before updating first-test EGM IDs.");
+    return;
+  }
+  setEGMBulkActionMessage("Applying selected EGMs to first-test EGM IDs...");
+  try {
+    const response = await fetch(endpoints.egmRegistryApplyToCabinetProfile, {
+      method: "POST",
+      headers: egmRegistryMutationHeaders(),
+      body: JSON.stringify({ egm_ids: ids })
+    });
+    const rawBody = await response.text();
+    let payload = {};
+    try {
+      payload = rawBody ? JSON.parse(rawBody) : {};
+    } catch (_) {
+      payload = {};
+    }
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(rawBody);
+      setEGMBulkActionMessage("Apply to first-test failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Apply to first-test failed", "Unable to update cabinet profile first-test EGM IDs.");
+      return;
+    }
+    const appliedIDs = Array.isArray(payload?.applied_first_test_egm_ids) ? payload.applied_first_test_egm_ids : ids;
+    const profile = payload?.cabinet_profile?.effective;
+    if (profile && typeof profile === "object") {
+      fillCabinetSetupForm(profile);
+      renderCabinetProfileSuggestions(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    } else {
+      $("setup-first-test-egm-ids").value = appliedIDs.join(", ");
+      renderCabinetSetupValidation();
+    }
+    setEGMBulkActionMessage("Applied " + appliedIDs.length + " EGM IDs to first-test profile values. Save Override to persist if needed.");
+    setAlert("info", "First-test EGM IDs updated", "Applied selected EGM IDs into cabinet profile override.");
+    schedulePoll(0);
+  } catch (err) {
+    setEGMBulkActionMessage(err && err.message ? err.message : "Apply to first-test failed.");
+    setAlert("warning", "Apply to first-test failed", "Unable to update cabinet profile first-test EGM IDs.");
+  }
+}
+
 function renderEGMTable(status) {
   const all = Array.isArray(status?.egms) ? status.egms.slice() : [];
+  reconcileEGMBulkSelection(all);
   const focusScoped = filterStatusEGMsByFocus(all);
   const sectionFiltered = applyEGMFilter(focusScoped);
   const filtered = sectionFiltered.filter((egm) => egmMatchesGlobalFilters(egm));
-  const rows = filtered.sort(compareEGM).map((egm) =>
+  const sorted = filtered.sort(compareEGM);
+  const selectedSet = selectedEGMBulkIDSet();
+  const visibleEGMIDs = sorted
+    .map((egm) => String(egm?.id || "").trim())
+    .filter(Boolean);
+  clientState.egmVisibleRowIDs = visibleEGMIDs;
+  const selectAllChecked = visibleEGMIDs.length > 0 && visibleEGMIDs.every((id) => selectedSet.has(id));
+  $("egm-select-all-checkbox").checked = selectAllChecked;
+  renderEGMBulkSelectionSummary(visibleEGMIDs.length);
+  const rows = sorted.map((egm) =>
     (() => {
+      const egmID = String(egm.id || "").trim();
+      const checked = selectedSet.has(egmID) ? " checked" : "";
       const configuredAddress = (egm.ip_address || "-") + ":" + (egm.port || "-");
       const endpointAddress = (egm.last_endpoint_ip || "-") + ":" + (egm.last_endpoint_port || "-");
       const driftLabel = egm.endpoint_drift_warning === true
@@ -6812,6 +7016,7 @@ function renderEGMTable(status) {
         "</div>";
       return "" +
     "<tr>" +
+      "<td class=\"egm-row-select-cell\"><input type=\"checkbox\" class=\"egm-row-select-checkbox\" data-egm-id=\"" + escapeHTML(egmID) + "\"" + checked + "></td>" +
       "<td><strong>" + escapeHTML(egm.display_name || egm.id) + "</strong><br><span class=\"minor\">" + escapeHTML((egm.vendor || "") + " " + (egm.cabinet_family || "")).trim() + "</span><br><span class=\"minor\">" + escapeHTML("id " + (egm.id || "-")) + (egm.registry_override === true ? " | override" : "") + "</span></td>" +
       "<td>" + egmSourcePill(egm.source) + "</td>" +
       "<td>" + statusPill(egm.status) + "</td>" +
@@ -6833,7 +7038,7 @@ function renderEGMTable(status) {
   $("egm-count").textContent = focusID
     ? ("Focus " + focusID + " | " + filtered.length + " / " + all.length + " EGMs" + globalSuffix)
     : (filtered.length + " / " + all.length + " EGMs" + globalSuffix);
-  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"9\">No EGMs match current filter</td></tr>";
+  $("egm-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"10\">No EGMs match current filter</td></tr>";
   updateSortLabels();
 }
 
@@ -8195,6 +8400,28 @@ function bindControls() {
     const button = event.target.closest(".endpoint-integrity-action-button");
     if (!button) return;
     handleEndpointIntegrityAlertActionFromUI(button);
+  });
+  $("egm-select-all-visible-button").addEventListener("click", () => {
+    setAllVisibleEGMBulkSelection(true);
+    renderEGMTable((clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot()).status || {});
+  });
+  $("egm-clear-selection-button").addEventListener("click", () => {
+    clearEGMBulkSelection();
+    renderEGMTable((clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot()).status || {});
+    setEGMBulkActionMessage("Selection cleared.");
+  });
+  $("egm-bulk-promote-button").addEventListener("click", promoteSelectedEGMBulk);
+  $("egm-bulk-apply-profile-button").addEventListener("click", applySelectedToCabinetProfileFirstTest);
+  $("egm-select-all-checkbox").addEventListener("change", (event) => {
+    setAllVisibleEGMBulkSelection(event.target.checked === true);
+    renderEGMTable((clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot()).status || {});
+  });
+  $("egm-table").addEventListener("change", (event) => {
+    const checkbox = event.target.closest(".egm-row-select-checkbox");
+    if (!checkbox) return;
+    const egmID = checkbox.getAttribute("data-egm-id") || "";
+    setEGMBulkSelectionForID(egmID, checkbox.checked === true);
+    renderEGMTable((clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot()).status || {});
   });
   $("egm-table").addEventListener("click", async (event) => {
     const button = event.target.closest(".egm-row-action-button");
