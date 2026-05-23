@@ -6,7 +6,7 @@ const dashboardHTML = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="/static/dashboard.css">
+  <link rel="stylesheet" href="{{.DashboardCSSURL}}">
 </head>
 <body>
   <header class="topbar">
@@ -869,7 +869,7 @@ const dashboardHTML = `<!doctype html>
     </section>
   </main>
 
-  <script src="/static/dashboard.js"></script>
+  <script src="{{.DashboardJSURL}}"></script>
 </body>
 </html>`
 

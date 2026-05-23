@@ -3,6 +3,7 @@ package ui
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,12 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "G2S Muting Controller") {
 		t.Fatalf("expected dashboard title")
+	}
+	if !regexp.MustCompile(`/static/dashboard\.css\?v=[0-9a-f]+`).MatchString(rr.Body.String()) {
+		t.Fatalf("expected cache-busted dashboard css url")
+	}
+	if !regexp.MustCompile(`/static/dashboard\.js\?v=[0-9a-f]+`).MatchString(rr.Body.String()) {
+		t.Fatalf("expected cache-busted dashboard js url")
 	}
 	if !strings.Contains(rr.Body.String(), "Appliance Readiness") {
 		t.Fatalf("expected appliance readiness panel")
@@ -480,6 +487,65 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "~/.g2s_api_token") || strings.Contains(rr.Body.String(), "cat ~/.g2s_api_token") {
 		t.Fatalf("dashboard should not expose local token file instructions")
+	}
+}
+
+func TestDashboardRouteNoCacheHeaders(t *testing.T) {
+	server, err := NewServer()
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	cacheControl := rr.Header().Get("Cache-Control")
+	if !strings.Contains(cacheControl, "no-store") || !strings.Contains(cacheControl, "no-cache") {
+		t.Fatalf("expected no-cache dashboard headers, got %q", cacheControl)
+	}
+	if rr.Header().Get("Pragma") != "no-cache" {
+		t.Fatalf("expected Pragma no-cache, got %q", rr.Header().Get("Pragma"))
+	}
+	if rr.Header().Get("Expires") != "0" {
+		t.Fatalf("expected Expires 0, got %q", rr.Header().Get("Expires"))
+	}
+}
+
+func TestDashboardScriptRevalidationHeaders(t *testing.T) {
+	server, err := NewServer()
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+
+	firstReq := httptest.NewRequest(http.MethodGet, "/static/dashboard.js", nil)
+	firstRec := httptest.NewRecorder()
+	mux.ServeHTTP(firstRec, firstReq)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d", firstRec.Code, http.StatusOK)
+	}
+	cacheControl := firstRec.Header().Get("Cache-Control")
+	if !strings.Contains(cacheControl, "no-cache") || !strings.Contains(cacheControl, "must-revalidate") {
+		t.Fatalf("expected revalidation cache headers, got %q", cacheControl)
+	}
+	etag := firstRec.Header().Get("ETag")
+	if strings.TrimSpace(etag) == "" {
+		t.Fatalf("expected script etag")
+	}
+
+	secondReq := httptest.NewRequest(http.MethodGet, "/static/dashboard.js", nil)
+	secondReq.Header.Set("If-None-Match", etag)
+	secondRec := httptest.NewRecorder()
+	mux.ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusNotModified {
+		t.Fatalf("revalidation status = %d, want %d", secondRec.Code, http.StatusNotModified)
 	}
 }
 
