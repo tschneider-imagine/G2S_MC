@@ -5006,7 +5006,7 @@ function buildSessionEvidence(snapshot) {
 
 function buildSessionEvidenceMarkdown(evidence) {
   const lines = [
-    "# Session Evidence Capture",
+    "# Evidence Capture",
     "",
     "- Captured at: " + (evidence.captured_at || "-"),
     "- Session state: " + (evidence.session.overall_state || "-"),
@@ -5652,7 +5652,7 @@ async function deleteSavedSessionEvidence(id) {
     $("session-evidence-state").textContent = "saved";
     $("session-evidence-state").className = "source-pill source-file";
     $("session-evidence-message").textContent = "Saved evidence deleted.";
-    setAlert("info", "Saved capture deleted", "Session evidence capture #" + numericID + " was removed.");
+    setAlert("info", "Saved capture deleted", "Evidence capture #" + numericID + " was removed.");
     schedulePoll(0);
   } catch (err) {
     $("session-evidence-state").textContent = "blocked";

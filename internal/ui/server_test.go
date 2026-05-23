@@ -136,6 +136,7 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 		"First Cabinet Session",
 		"Operator Readiness Model",
 		"Runbook Readiness",
+		"Session Evidence Capture",
 		"Session Complete",
 	} {
 		if strings.Contains(rr.Body.String(), legacy) {
@@ -623,6 +624,12 @@ func TestDashboardAssets(t *testing.T) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}
 			}
+			if strings.Contains(body, "# Session Evidence Capture") {
+				t.Fatalf("%s should not include legacy evidence heading", path)
+			}
+			if !strings.Contains(body, "# Evidence Capture") {
+				t.Fatalf("%s missing evidence capture heading marker", path)
+			}
 		}
 		if path == "/static/dashboard.css" {
 			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "trusted-bypass-hidden", "validation-list", "secondary-button", "operator-toolbar-grid", "operator-actions-bar", "operator-actions-buttons", "global-view-controls-panel", "global-view-controls", "global-compact-toggle", "table-wrap-scroll-safe", "panel-scroll-safe", "panel-scroll-safe-audit", "panel-scroll-safe-history", "panel-scroll-safe-integrity", "anchor-target", "compact-mode", "cert-manager-form", "cert-role-summary", "cert-preview-wrap", "cert-preview-detail", "cert-preview-list", "cert-backup-history", "cert-backup-list", "cert-backup-item", "cert-backup-item-head", "cert-backup-meta", "cert-backup-actions", "operator-audit-filters", "operator-audit-summary", "operator-audit-list", "operator-audit-entry", "operator-audit-head", "operator-audit-meta", "operator-audit-detail", "operator-audit-pill-success", "operator-audit-pill-fail", "endpoint-integrity-panel", "egm-registry-drawer", "egm-registry-drawer-hidden", "egm-row-actions", "egm-bulk-actions", "egm-row-select-cell", "egm-row-select-checkbox", "runtime-overrides-upload-label", "endpoint-integrity-sections", "endpoint-integrity-section", "endpoint-integrity-section-head", "endpoint-integrity-custom-snooze-label", "endpoint-integrity-warning", "endpoint-integrity-warning-head", "endpoint-integrity-warning-meta", "endpoint-integrity-warning-actions", "cert-manager-details", "cert-manager-detail", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers", "first-cabinet-session-workflow", "first-cabinet-session-workflow-step", "first-cabinet-session-workflow-progress-wrap", "workflow-progress-meta", "workflow-progress-unsaved", "workflow-progress-unsaved-dirty", "workflow-progress-steps", "workflow-progress-step", "first-cabinet-session-actions-wrap", "mute-path-status-wrap", "mute-path-summary-grid", "mute-path-status-card", "runbook-readiness-status-card", "operator-action-summary-grid", "operator-readiness-model", "operator-readiness-group", "focus-selected-egm-wrap", "selected-egm-detail", "evidence-capture-panel", "evidence-actions", "session-evidence-history-item", "session-evidence-history-actions", "session-evidence-selected-detail", "timeline-entry", "timeline-entry-head", "timeline-entry-tags", "timeline-group-heading", "timeline-egm-chip", "timeline-scope-global", "timeline-kind", "timeline-kind-marker", "timeline-kind-heartbeat", "cabinet-run-panel", "timeline-toolbar", "timeline-filter-tabs", "timeline-rollup-controls", "timeline-toggle", "run-marker-form", "run-marker-grid", "run-marker-notes-label", "operator-drill-form", "operator-drill-grid", "operator-drill-actions", "run-report-form", "run-report-grid", "run-report-details", "heartbeat-summary-wrap", "heartbeat-summary-grid", "heartbeat-summary-message", "blocker-governance-panel", "blocker-governance-summary", "blocker-governance-list", "blocker-governance-item", "blocker-governance-actions", "egm-source", "egm-source-discovered", "focus-controls", "focus-egm-summary-wrap", "egm-grouped-summary", "egm-focus-panel"} {
@@ -795,6 +802,7 @@ func TestDashboardTabLayoutMarkers(t *testing.T) {
 		"Runbook Readiness",
 		"Operator Readiness Model",
 		"First Cabinet Session",
+		"Session Evidence Capture",
 	} {
 		if strings.Contains(htmlBody, legacy) {
 			t.Fatalf("expected legacy label removed from dashboard html: %q", legacy)
@@ -827,6 +835,7 @@ func TestDashboardTabLayoutMarkers(t *testing.T) {
 		"Runbook Readiness",
 		"Operator Readiness Model",
 		"First Cabinet Session",
+		"Session Evidence Capture",
 	} {
 		if strings.Contains(jsBody, legacy) {
 			t.Fatalf("expected legacy label removed from dashboard.js: %q", legacy)
