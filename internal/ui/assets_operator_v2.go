@@ -288,6 +288,21 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, blocker policy, and EGM registry overrides.</div>
         </div>
+        <div class="first-cabinet-session-actions-wrap">
+          <p class="label">Runtime Preset Library</p>
+          <div class="workflow-progress-grid">
+            <label>Preset Name<input id="runtime-preset-name" type="text" maxlength="64" placeholder="lab_baseline"></label>
+          </div>
+          <label class="cert-textarea-label">Preset Note (optional)
+            <textarea id="runtime-preset-note" rows="3" maxlength="2000" placeholder="Optional operator note for this preset."></textarea>
+          </label>
+          <div class="setup-actions">
+            <button id="runtime-preset-save-button" type="button">Save Current as Preset</button>
+            <button id="runtime-preset-refresh-button" type="button" class="secondary-button">Refresh Presets</button>
+          </div>
+          <div id="runtime-preset-message" class="muted-text">Saved presets can be loaded to restore runtime overrides quickly.</div>
+          <div id="runtime-presets-list" class="timeline panel-scroll-safe panel-scroll-safe-history"></div>
+        </div>
       </div>
 
       <div class="panel evidence-capture-panel">
@@ -2072,6 +2087,33 @@ th {
   max-inline-size: 240px;
 }
 
+.runtime-preset-item {
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.runtime-preset-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.runtime-preset-item-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.runtime-preset-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .secondary-button {
   background: #fff;
   color: var(--ink);
@@ -2533,6 +2575,9 @@ const dashboardJS = `const endpoints = {
   sessionPackageExport: "/api/session-package/export",
   runtimeOverridesSnapshot: "/api/runtime-overrides/snapshot",
   runtimeOverridesRestore: "/api/runtime-overrides/restore",
+  runtimeOverridePresets: "/api/runtime-overrides/presets",
+  runtimeOverridePresetSave: "/api/runtime-overrides/presets/save",
+  runtimeOverridePresetLoad: "/api/runtime-overrides/presets/load",
   sessionEvidence: "/api/session-evidence?limit=20",
   sessionEvidenceExportAll: "/api/session-evidence/export-all",
   sessionWorkflow: "/api/session-workflow",
@@ -2638,6 +2683,7 @@ function emptySnapshot() {
     cabinetProfile: null,
     cabinetProfileSuggestions: null,
     heartbeatPolicy: null,
+    runtimeOverridePresets: null,
     blockerPolicy: null,
     blockerPolicySuggestions: null,
     cabinetPreflight: null,
@@ -2668,6 +2714,7 @@ function copySnapshot(snapshot) {
     cabinetProfile: snapshot.cabinetProfile || null,
     cabinetProfileSuggestions: snapshot.cabinetProfileSuggestions || null,
     heartbeatPolicy: snapshot.heartbeatPolicy || null,
+    runtimeOverridePresets: snapshot.runtimeOverridePresets || null,
     blockerPolicy: snapshot.blockerPolicy || null,
     blockerPolicySuggestions: snapshot.blockerPolicySuggestions || null,
     cabinetPreflight: snapshot.cabinetPreflight || null,
@@ -4565,11 +4612,15 @@ function renderFirstCabinetSession(snapshot) {
   $("session-package-export-button").disabled = !snapshot?.status;
   $("runtime-overrides-save-snapshot-button").disabled = !snapshot?.status;
   $("runtime-overrides-restore-button").disabled = mutationTokenRequired() && !getSetupToken() && !getCertToken();
+  $("runtime-preset-save-button").disabled = !snapshot?.status || (mutationTokenRequired() && !getSetupToken() && !getCertToken());
+  $("runtime-preset-refresh-button").disabled = !snapshot?.status;
   if (!snapshot?.status) {
     $("session-package-export-message").textContent = "Session package export waits for a status snapshot.";
     $("runtime-overrides-message").textContent = "Runtime snapshot/restore waits for a status snapshot.";
+    $("runtime-preset-message").textContent = "Runtime preset library waits for a status snapshot.";
   } else if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
     $("runtime-overrides-message").textContent = "Enter a setup or certificate API token before restoring runtime overrides.";
+    $("runtime-preset-message").textContent = "Enter a setup or certificate API token before saving/loading/deleting presets.";
   }
 
   $("first-cabinet-overall").textContent = session.overallState;
@@ -5140,6 +5191,173 @@ async function restoreRuntimeOverridesSnapshot() {
   } catch (err) {
     setRuntimeOverridesMessage(err && err.message ? err.message : "Restore failed.");
     setAlert("warning", "Runtime restore failed", "Unable to restore runtime override snapshot.");
+  }
+}
+
+function normalizeRuntimeOverridePresetListResponse(payload) {
+  const data = payload && typeof payload === "object" ? payload : {};
+  const presets = Array.isArray(data.presets) ? data.presets.map((item) => {
+    const row = item && typeof item === "object" ? item : {};
+    return {
+      name: String(row.name || "").trim(),
+      note: String(row.note || "").trim(),
+      created_at: String(row.created_at || "").trim(),
+      updated_at: String(row.updated_at || "").trim()
+    };
+  }).filter((row) => row.name) : [];
+  return {
+    generated_at: String(data.generated_at || "").trim(),
+    presets: presets
+  };
+}
+
+function runtimeOverridePresetsFromSnapshot(snapshot) {
+  return normalizeRuntimeOverridePresetListResponse(snapshot?.runtimeOverridePresets);
+}
+
+function setRuntimePresetMessage(text) {
+  $("runtime-preset-message").textContent = text;
+}
+
+function renderRuntimePresetLibrary(snapshot) {
+  const payload = runtimeOverridePresetsFromSnapshot(snapshot);
+  const rows = Array.isArray(payload.presets) ? payload.presets : [];
+  if (rows.length === 0) {
+    $("runtime-presets-list").innerHTML = "<div class=\"item\">No runtime presets saved yet.</div>";
+    return;
+  }
+  $("runtime-presets-list").innerHTML = rows.map((row) => {
+    const note = row.note ? ("<div class=\"runtime-preset-item-meta\">" + escapeHTML(row.note) + "</div>") : "";
+    return "" +
+      "<div class=\"runtime-preset-item\">" +
+        "<div class=\"runtime-preset-item-head\"><strong>" + escapeHTML(row.name) + "</strong><span class=\"muted-text\">Updated " + escapeHTML(fmtTime(row.updated_at)) + "</span></div>" +
+        note +
+        "<div class=\"runtime-preset-item-meta\">Created " + escapeHTML(fmtTime(row.created_at)) + "</div>" +
+        "<div class=\"runtime-preset-item-actions\">" +
+          "<button type=\"button\" class=\"secondary-button runtime-preset-action-button\" data-runtime-preset-action=\"load\" data-runtime-preset-name=\"" + escapeHTML(row.name) + "\">Load</button>" +
+          "<button type=\"button\" class=\"secondary-button runtime-preset-action-button\" data-runtime-preset-action=\"delete\" data-runtime-preset-name=\"" + escapeHTML(row.name) + "\">Delete</button>" +
+        "</div>" +
+      "</div>";
+  }).join("");
+}
+
+async function reloadRuntimePresetList() {
+  try {
+    const response = await fetch(endpoints.runtimeOverridePresets, { cache: "no-store", headers: withEGMFocusHeader({}) });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setRuntimePresetMessage("Runtime preset refresh failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      return;
+    }
+    const payload = await response.json();
+    const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    snapshot.runtimeOverridePresets = normalizeRuntimeOverridePresetListResponse(payload);
+    clientState.displaySnapshot = snapshot;
+    renderRuntimePresetLibrary(snapshot);
+    setRuntimePresetMessage("Runtime preset list refreshed.");
+  } catch (err) {
+    setRuntimePresetMessage(err && err.message ? err.message : "Runtime preset refresh failed.");
+  }
+}
+
+async function saveCurrentRuntimePreset() {
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setRuntimePresetMessage("Enter a setup or certificate API token before saving presets.");
+    return;
+  }
+  const name = String($("runtime-preset-name").value || "").trim();
+  const note = String($("runtime-preset-note").value || "").trim();
+  if (!name) {
+    setRuntimePresetMessage("Preset name is required.");
+    return;
+  }
+  setRuntimePresetMessage("Saving runtime preset " + name + ".");
+  try {
+    const response = await fetch(endpoints.runtimeOverridePresetSave, {
+      method: "POST",
+      headers: runtimeOverridesRestoreHeaders(),
+      body: JSON.stringify({ name: name, note: note })
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setRuntimePresetMessage("Preset save failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Preset save failed", "Unable to save runtime preset.");
+      return;
+    }
+    const payload = await response.json();
+    const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    snapshot.runtimeOverridePresets = normalizeRuntimeOverridePresetListResponse(payload);
+    clientState.displaySnapshot = snapshot;
+    renderRuntimePresetLibrary(snapshot);
+    setRuntimePresetMessage("Preset saved: " + name + ".");
+    setAlert("info", "Runtime preset saved", "Saved runtime preset " + name + ".");
+  } catch (err) {
+    setRuntimePresetMessage(err && err.message ? err.message : "Preset save failed.");
+    setAlert("warning", "Preset save failed", "Unable to save runtime preset.");
+  }
+}
+
+async function loadRuntimePresetByName(name) {
+  const presetName = String(name || "").trim();
+  if (!presetName) return;
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setRuntimePresetMessage("Enter a setup or certificate API token before loading presets.");
+    return;
+  }
+  setRuntimePresetMessage("Loading preset " + presetName + ".");
+  try {
+    const response = await fetch(endpoints.runtimeOverridePresetLoad, {
+      method: "POST",
+      headers: runtimeOverridesRestoreHeaders(),
+      body: JSON.stringify({ name: presetName })
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setRuntimePresetMessage("Preset load failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Preset load failed", "Unable to load runtime preset.");
+      return;
+    }
+    setRuntimePresetMessage("Preset loaded: " + presetName + ". Refreshing console state.");
+    setAlert("info", "Runtime preset loaded", "Loaded runtime preset " + presetName + ".");
+    schedulePoll(0);
+  } catch (err) {
+    setRuntimePresetMessage(err && err.message ? err.message : "Preset load failed.");
+    setAlert("warning", "Preset load failed", "Unable to load runtime preset.");
+  }
+}
+
+async function deleteRuntimePresetByName(name) {
+  const presetName = String(name || "").trim();
+  if (!presetName) return;
+  if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    setRuntimePresetMessage("Enter a setup or certificate API token before deleting presets.");
+    return;
+  }
+  if (!window.confirm("Delete runtime preset " + presetName + "?")) {
+    return;
+  }
+  setRuntimePresetMessage("Deleting preset " + presetName + ".");
+  try {
+    const response = await fetch(endpoints.runtimeOverridePresets + "/" + encodeURIComponent(presetName), {
+      method: "DELETE",
+      headers: runtimeOverridesRestoreHeaders()
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setRuntimePresetMessage("Preset delete failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Preset delete failed", "Unable to delete runtime preset.");
+      return;
+    }
+    const payload = await response.json();
+    const snapshot = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
+    snapshot.runtimeOverridePresets = normalizeRuntimeOverridePresetListResponse(payload);
+    clientState.displaySnapshot = snapshot;
+    renderRuntimePresetLibrary(snapshot);
+    setRuntimePresetMessage("Preset deleted: " + presetName + ".");
+    setAlert("info", "Runtime preset deleted", "Deleted runtime preset " + presetName + ".");
+  } catch (err) {
+    setRuntimePresetMessage(err && err.message ? err.message : "Preset delete failed.");
+    setAlert("warning", "Preset delete failed", "Unable to delete runtime preset.");
   }
 }
 
@@ -8119,6 +8337,7 @@ function renderStatus(snapshot) {
   renderCertificateManager(snapshot);
   renderCabinetProfile(status);
   renderFirstCabinetSession(snapshot);
+  renderRuntimePresetLibrary(snapshot);
   renderSessionEvidence(snapshot);
   syncCabinetSetupFromSnapshot(snapshot);
   syncHeartbeatPolicyFromSnapshot(snapshot);
@@ -8326,10 +8545,11 @@ async function pollOnce() {
       fetchJSON(endpoints.blockerPolicy),
       fetchJSON(endpoints.blockerPolicySuggestions),
       fetchJSON(endpoints.cabinetPreflight),
-      fetchJSON(endpoints.endpointIntegrityAlerts)
+      fetchJSON(endpoints.endpointIntegrityAlerts),
+      fetchJSON(endpoints.runtimeOverridePresets)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, egmRegistryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, blockerPolicySuggestionsResult, cabinetPreflightResult, endpointIntegrityAlertsResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, egmRegistryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, blockerPolicyResult, blockerPolicySuggestionsResult, cabinetPreflightResult, endpointIntegrityAlertsResult, runtimeOverridePresetsResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -8369,6 +8589,7 @@ async function pollOnce() {
     if (blockerPolicySuggestionsResult.status === "fulfilled") snapshot.blockerPolicySuggestions = normalizeBlockerPolicySuggestions(blockerPolicySuggestionsResult.value);
     if (cabinetPreflightResult.status === "fulfilled") snapshot.cabinetPreflight = cabinetPreflightResult.value;
     if (endpointIntegrityAlertsResult.status === "fulfilled") snapshot.endpointIntegrityAlerts = normalizeEndpointIntegrityAlertsResponse(endpointIntegrityAlertsResult.value);
+    if (runtimeOverridePresetsResult.status === "fulfilled") snapshot.runtimeOverridePresets = normalizeRuntimeOverridePresetListResponse(runtimeOverridePresetsResult.value);
 
     if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
     if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
@@ -8387,6 +8608,7 @@ async function pollOnce() {
     if (blockerPolicySuggestionsResult.status !== "fulfilled") failures.push("blocker policy suggestions unavailable");
     if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
     if (endpointIntegrityAlertsResult.status !== "fulfilled") failures.push("endpoint integrity alerts unavailable");
+    if (runtimeOverridePresetsResult.status !== "fulfilled") failures.push("runtime override presets unavailable");
 
     clientState.displaySnapshot = snapshot;
     renderStatus(snapshot);
@@ -8580,6 +8802,22 @@ function bindControls() {
   $("runtime-overrides-save-snapshot-button").addEventListener("click", saveRuntimeOverridesSnapshot);
   $("runtime-overrides-restore-button").addEventListener("click", restoreRuntimeOverridesSnapshot);
   $("runtime-overrides-restore-file").addEventListener("change", loadRuntimeOverridesRestoreFile);
+  $("runtime-preset-save-button").addEventListener("click", saveCurrentRuntimePreset);
+  $("runtime-preset-refresh-button").addEventListener("click", reloadRuntimePresetList);
+  $("runtime-presets-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".runtime-preset-action-button");
+    if (!button) return;
+    const action = String(button.getAttribute("data-runtime-preset-action") || "").trim();
+    const presetName = String(button.getAttribute("data-runtime-preset-name") || "").trim();
+    if (!action || !presetName) return;
+    if (action === "load") {
+      loadRuntimePresetByName(presetName);
+      return;
+    }
+    if (action === "delete") {
+      deleteRuntimePresetByName(presetName);
+    }
+  });
   $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
   $("workflow-progress-clear-button").addEventListener("click", clearSessionWorkflowProgress);
   $("workflow-progress-phase").addEventListener("change", updateWorkflowProgressDirtyState);
@@ -8819,6 +9057,7 @@ renderSelectedEGMDetail(emptySnapshot());
 renderOperatorAuditTimeline(emptySnapshot());
 renderCertificateManager(emptySnapshot());
 renderFirstCabinetSession(emptySnapshot());
+renderRuntimePresetLibrary(emptySnapshot());
 renderSessionEvidence(emptySnapshot());
 renderRunMarkerControls(emptySnapshot());
 renderRunReportControls(emptySnapshot());

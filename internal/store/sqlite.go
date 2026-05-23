@@ -84,6 +84,14 @@ type RuntimeOverridesReplaceInput struct {
 	EGMRegistryOverrides    []EGMRegistryOverride
 }
 
+type RuntimeOverridePreset struct {
+	Name        string
+	Note        string
+	PayloadJSON string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
 	if path == "" {
 		return nil, fmt.Errorf("database path is required")
@@ -994,6 +1002,93 @@ func (s *SQLiteStore) ReplaceRuntimeOverrides(ctx context.Context, input Runtime
 	return nil
 }
 
+func (s *SQLiteStore) ListRuntimeOverridePresets(ctx context.Context) ([]RuntimeOverridePreset, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT name, COALESCE(note, ''), payload_json, created_at, updated_at
+		 FROM runtime_override_presets
+		 ORDER BY updated_at DESC, name ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []RuntimeOverridePreset{}
+	for rows.Next() {
+		var record RuntimeOverridePreset
+		if err := rows.Scan(
+			&record.Name,
+			&record.Note,
+			&record.PayloadJSON,
+			&record.CreatedAt,
+			&record.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s *SQLiteStore) GetRuntimeOverridePreset(ctx context.Context, name string) (*RuntimeOverridePreset, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT name, COALESCE(note, ''), payload_json, created_at, updated_at
+		 FROM runtime_override_presets
+		 WHERE name = ?`,
+		strings.TrimSpace(name),
+	)
+
+	var record RuntimeOverridePreset
+	if err := row.Scan(
+		&record.Name,
+		&record.Note,
+		&record.PayloadJSON,
+		&record.CreatedAt,
+		&record.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (s *SQLiteStore) UpsertRuntimeOverridePreset(ctx context.Context, preset RuntimeOverridePreset) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO runtime_override_presets (
+		    name, note, payload_json, created_at, updated_at
+		 ) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		 ON CONFLICT(name) DO UPDATE SET
+		    note = excluded.note,
+		    payload_json = excluded.payload_json,
+		    updated_at = CURRENT_TIMESTAMP`,
+		strings.TrimSpace(preset.Name),
+		strings.TrimSpace(preset.Note),
+		preset.PayloadJSON,
+	)
+	return err
+}
+
+func (s *SQLiteStore) DeleteRuntimeOverridePreset(ctx context.Context, name string) (bool, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM runtime_override_presets WHERE name = ?`,
+		strings.TrimSpace(name),
+	)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return deleted > 0, nil
+}
+
 func (s *SQLiteStore) RecordBlockerPolicyEscalationEvent(ctx context.Context, event BlockerPolicyEscalationEvent) (int64, error) {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -1477,7 +1572,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides", "blocker_policy_escalation_events", "endpoint_integrity_alert_states", "egm_registry_overrides":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "blocker_policy_overrides", "blocker_policy_escalation_events", "endpoint_integrity_alert_states", "egm_registry_overrides", "runtime_override_presets":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}

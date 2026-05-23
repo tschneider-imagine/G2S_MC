@@ -172,4 +172,12 @@ CREATE TABLE IF NOT EXISTS egm_registry_overrides (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by TEXT
 );
+
+CREATE TABLE IF NOT EXISTS runtime_override_presets (
+    name TEXT PRIMARY KEY,
+    note TEXT,
+    payload_json TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `

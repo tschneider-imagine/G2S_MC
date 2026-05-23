@@ -188,6 +188,31 @@ func main() {
 			http.MethodPost,
 		),
 	)
+	mux.HandleFunc("/api/runtime-overrides/presets", runtimeOverridesPresetsHandler(auditStore))
+	mux.HandleFunc(
+		"/api/runtime-overrides/presets/save",
+		requireMutationAuthForMethods(
+			runtimeOverridesPresetsSaveHandler(auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
+	mux.HandleFunc(
+		"/api/runtime-overrides/presets/load",
+		requireMutationAuthForMethods(
+			runtimeOverridesPresetsLoadHandler(eng, auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
+	mux.HandleFunc(
+		"/api/runtime-overrides/presets/",
+		requireMutationAuthForMethods(
+			runtimeOverridesPresetByNameHandler(auditStore, cfg),
+			cfg,
+			http.MethodDelete,
+		),
+	)
 	mux.HandleFunc(
 		"/api/session-evidence/",
 		requireMutationAuthForMethods(

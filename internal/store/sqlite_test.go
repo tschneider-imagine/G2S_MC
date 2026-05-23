@@ -652,6 +652,97 @@ func TestReplaceRuntimeOverridesAtomicRejectsDuplicateRegistryIDs(t *testing.T) 
 	}
 }
 
+func TestRuntimeOverridePresetCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	presets, err := store.ListRuntimeOverridePresets(ctx)
+	if err != nil {
+		t.Fatalf("list empty presets: %v", err)
+	}
+	if len(presets) != 0 {
+		t.Fatalf("expected no presets initially, got %d", len(presets))
+	}
+
+	payload := `{"generated_at":"2026-05-22T00:00:00Z","egm_registry_overrides":[]}`
+	if err := store.UpsertRuntimeOverridePreset(ctx, RuntimeOverridePreset{
+		Name:        "lab-a",
+		Note:        "first preset",
+		PayloadJSON: payload,
+	}); err != nil {
+		t.Fatalf("upsert preset: %v", err)
+	}
+	assertCount(t, store, "runtime_override_presets", 1)
+
+	row, err := store.GetRuntimeOverridePreset(ctx, "lab-a")
+	if err != nil {
+		t.Fatalf("get preset: %v", err)
+	}
+	if row == nil {
+		t.Fatalf("expected preset row")
+	}
+	if row.Note != "first preset" || row.PayloadJSON != payload {
+		t.Fatalf("unexpected preset row: %+v", row)
+	}
+	createdAt := row.CreatedAt
+
+	if err := store.UpsertRuntimeOverridePreset(ctx, RuntimeOverridePreset{
+		Name:        "lab-a",
+		Note:        "updated preset",
+		PayloadJSON: `{"generated_at":"2026-05-22T01:00:00Z","egm_registry_overrides":[{"egm_id":"EGM-02"}]}`,
+	}); err != nil {
+		t.Fatalf("update preset: %v", err)
+	}
+	row, err = store.GetRuntimeOverridePreset(ctx, "lab-a")
+	if err != nil {
+		t.Fatalf("get updated preset: %v", err)
+	}
+	if row == nil {
+		t.Fatalf("expected updated preset row")
+	}
+	if row.Note != "updated preset" {
+		t.Fatalf("note = %q, want updated preset", row.Note)
+	}
+	if row.CreatedAt.Before(createdAt) {
+		t.Fatalf("created_at moved backwards: before=%s after=%s", createdAt, row.CreatedAt)
+	}
+
+	if err := store.UpsertRuntimeOverridePreset(ctx, RuntimeOverridePreset{
+		Name:        "lab-b",
+		Note:        "",
+		PayloadJSON: `{"generated_at":"2026-05-22T02:00:00Z","egm_registry_overrides":[]}`,
+	}); err != nil {
+		t.Fatalf("upsert second preset: %v", err)
+	}
+	presets, err = store.ListRuntimeOverridePresets(ctx)
+	if err != nil {
+		t.Fatalf("list presets: %v", err)
+	}
+	if len(presets) != 2 {
+		t.Fatalf("expected 2 presets, got %d", len(presets))
+	}
+
+	deleted, err := store.DeleteRuntimeOverridePreset(ctx, "lab-a")
+	if err != nil {
+		t.Fatalf("delete preset: %v", err)
+	}
+	if !deleted {
+		t.Fatalf("expected delete preset true for existing row")
+	}
+	deleted, err = store.DeleteRuntimeOverridePreset(ctx, "lab-a")
+	if err != nil {
+		t.Fatalf("delete missing preset: %v", err)
+	}
+	if deleted {
+		t.Fatalf("expected delete preset false for missing row")
+	}
+	assertCount(t, store, "runtime_override_presets", 1)
+}
+
 func TestSessionWorkflowProgressCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")
