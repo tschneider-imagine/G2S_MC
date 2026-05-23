@@ -20,6 +20,8 @@ const dashboardHTML = `<!doctype html>
       <div id="api-connection-indicator" class="api-connection-indicator api-connection-disconnected">
         <strong id="api-connection-state">disconnected</strong>
         <span id="api-connection-last-success">last success: never</span>
+        <span id="api-connection-poll-attempts">poll attempts: 0</span>
+        <span id="api-connection-startup">JS loaded at: - | poll started: no</span>
         <span id="api-connection-last-error">last error: none</span>
       </div>
       <button id="refresh-button" type="button">Refresh</button>
@@ -953,6 +955,12 @@ body.console-degraded .topbar {
   border-color: #6fb28a;
   background: #edf9f1;
   color: #1f6d40;
+}
+
+.api-connection-attempting {
+  border-color: #b7ab75;
+  background: #fdf7e5;
+  color: #6e5a12;
 }
 
 .api-connection-disconnected {
@@ -2642,6 +2650,9 @@ const clientState = {
   lastGoodStatus: null,
   lastGoodAt: 0,
   lastStatusPollAt: 0,
+  pollAttempts: 0,
+  pollStarted: false,
+  jsLoadedAt: new Date().toISOString(),
   lastError: "",
   inFlight: false,
   pollIntervalMs: 3000,
@@ -8561,6 +8572,10 @@ async function fetchReadyz() {
 }
 
 function schedulePoll(delayMs) {
+  if (!clientState.pollStarted) {
+    clientState.pollStarted = true;
+    updateAPIConnectionIndicator("disconnected");
+  }
   if (clientState.timerId) {
     clearTimeout(clientState.timerId);
   }
@@ -8590,16 +8605,34 @@ function updateRefreshText(ok) {
   $("last-refresh").textContent = "Last poll issue: " + (clientState.lastError || "unknown");
 }
 
-function updateAPIConnectionIndicator(connected) {
+function fmtClockTime(value) {
+  const ts = numericTime(value);
+  if (!ts) return "-";
+  return new Date(ts).toLocaleTimeString();
+}
+
+function updateAPIConnectionIndicator(state) {
   const indicator = $("api-connection-indicator");
-  const state = $("api-connection-state");
+  const stateValue = String(state || "disconnected").trim().toLowerCase();
+  const stateEl = $("api-connection-state");
   const lastSuccess = $("api-connection-last-success");
+  const attempts = $("api-connection-poll-attempts");
+  const startup = $("api-connection-startup");
   const lastError = $("api-connection-last-error");
-  indicator.className = "api-connection-indicator " + (connected ? "api-connection-connected" : "api-connection-disconnected");
-  state.textContent = connected ? "connected" : "disconnected";
+  let className = "api-connection-disconnected";
+  if (stateValue === "connected") {
+    className = "api-connection-connected";
+  } else if (stateValue === "attempting") {
+    className = "api-connection-attempting";
+  }
+  indicator.className = "api-connection-indicator " + className;
+  stateEl.textContent = stateValue;
   lastSuccess.textContent = clientState.lastStatusPollAt
     ? ("last success: " + new Date(clientState.lastStatusPollAt).toLocaleTimeString())
     : "last success: never";
+  attempts.textContent = "poll attempts: " + String(clientState.pollAttempts || 0);
+  startup.textContent = "JS loaded at: " + fmtClockTime(clientState.jsLoadedAt) +
+    " | poll started: " + (clientState.pollStarted ? "yes" : "no");
   lastError.textContent = clientState.lastError
     ? ("last error: " + clientState.lastError)
     : "last error: none";
@@ -8627,11 +8660,28 @@ function hideAPIFailureBanner() {
   $("api-failure-banner").classList.add("api-banner-hidden");
 }
 
+function safePollRender(label, renderFn) {
+  try {
+    renderFn();
+    return true;
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err || "unknown render error");
+    clientState.lastError = label + ": " + detail;
+    showAPIFailureBanner(clientState.lastError);
+    return false;
+  }
+}
+
 async function pollOnce() {
   if (clientState.inFlight) return;
+  clientState.pollAttempts = Number(clientState.pollAttempts || 0) + 1;
   clientState.inFlight = true;
-  $("refresh-button").disabled = true;
-  syncOperatorActionsFromCurrentState();
+  updateAPIConnectionIndicator("attempting");
+  const refreshButton = $("refresh-button");
+  if (refreshButton) {
+    refreshButton.disabled = true;
+  }
+  safePollRender("syncOperatorActionsFromCurrentState failed", () => syncOperatorActionsFromCurrentState());
 
   const baseline = copySnapshot(clientState.displaySnapshot || clientState.lastGoodStatus || emptySnapshot());
   const failures = [];
@@ -8728,28 +8778,31 @@ async function pollOnce() {
     failures.push(...settledFailures);
 
     clientState.displaySnapshot = snapshot;
-    renderStatus(snapshot);
-    renderAlerts(snapshot);
+    const renderStatusOK = safePollRender("renderStatus failed", () => renderStatus(snapshot));
+    const renderAlertsOK = safePollRender("renderAlerts failed", () => renderAlerts(snapshot));
+    const renderOK = renderStatusOK && renderAlertsOK;
     if (failures.length > 0) {
       showAPIFailureBanner(failures.join("; "));
     } else {
       hideAPIFailureBanner();
     }
 
-    const goodPoll = statusOK && readyzOK;
+    const goodPoll = statusOK && readyzOK && renderOK;
     if (goodPoll) {
       clientState.lastGoodStatus = copySnapshot(snapshot);
       clientState.lastGoodAt = Date.now();
       clientState.lastError = "";
       resetBackoff();
       updateRefreshText(true);
-      updateAPIConnectionIndicator(true);
+      updateAPIConnectionIndicator("connected");
       updateStaleBadge();
       schedulePoll(clientState.pollIntervalMs);
     } else {
-      clientState.lastError = failures.filter(Boolean).join("; ");
+      if (!clientState.lastError) {
+        clientState.lastError = failures.filter(Boolean).join("; ") || "poll incomplete";
+      }
       updateRefreshText(false);
-      updateAPIConnectionIndicator(statusOK);
+      updateAPIConnectionIndicator("disconnected");
       updateStaleBadge();
       schedulePoll(nextBackoffMs());
     }
@@ -8758,17 +8811,20 @@ async function pollOnce() {
     showAPIFailureBanner(clientState.lastError);
     if (clientState.lastGoodStatus && !clientState.displaySnapshot) {
       clientState.displaySnapshot = copySnapshot(clientState.lastGoodStatus);
-      renderStatus(clientState.displaySnapshot);
-      renderAlerts(clientState.displaySnapshot);
+      safePollRender("renderStatus failed", () => renderStatus(clientState.displaySnapshot));
+      safePollRender("renderAlerts failed", () => renderAlerts(clientState.displaySnapshot));
     }
     updateRefreshText(false);
-    updateAPIConnectionIndicator(false);
+    updateAPIConnectionIndicator("disconnected");
     updateStaleBadge();
     schedulePoll(nextBackoffMs());
   } finally {
     clientState.inFlight = false;
-    $("refresh-button").disabled = false;
-    syncOperatorActionsFromCurrentState();
+    if (refreshButton) {
+      refreshButton.disabled = false;
+    }
+    safePollRender("syncOperatorActionsFromCurrentState failed", () => syncOperatorActionsFromCurrentState());
+    updateAPIConnectionIndicator(clientState.lastError ? "disconnected" : "connected");
   }
 }
 
@@ -9166,28 +9222,47 @@ function bindControls() {
   });
 }
 
-loadCompactModePreference();
-bindControls();
-renderGlobalViewControls();
-updateSortLabels();
-updateStaleBadge();
-updateAPIConnectionIndicator(false);
-renderEGMFocusControl(emptySnapshot());
-renderEGMGroupedSummary(emptySnapshot());
-renderSelectedEGMDetail(emptySnapshot());
-renderOperatorAuditTimeline(emptySnapshot());
-renderCertificateManager(emptySnapshot());
-renderFirstCabinetSession(emptySnapshot());
-renderRuntimePresetLibrary(emptySnapshot());
-renderSessionEvidence(emptySnapshot());
-renderRunMarkerControls(emptySnapshot());
-renderRunReportControls(emptySnapshot());
-renderHeartbeatPolicy(emptySnapshot());
-renderBlockerGovernance(emptySnapshot());
-renderOperatorDrill(emptySnapshot());
-renderHeartbeatSummary(emptySnapshot());
-renderCabinetRunTimeline(emptySnapshot());
-renderEGMHistory(emptySnapshot());
-syncOperatorActionsFromCurrentState();
-schedulePoll(0);
-setInterval(updateStaleBadge, 1000);`
+function runStartupStep(label, fn) {
+  try {
+    fn();
+    return true;
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err || "startup error");
+    clientState.lastError = label + ": " + detail;
+    showAPIFailureBanner(clientState.lastError);
+    updateRefreshText(false);
+    updateAPIConnectionIndicator("disconnected");
+    return false;
+  }
+}
+
+function bootstrapDashboard() {
+  const empty = emptySnapshot();
+  runStartupStep("loadCompactModePreference failed", loadCompactModePreference);
+  runStartupStep("bindControls failed", bindControls);
+  runStartupStep("renderGlobalViewControls failed", renderGlobalViewControls);
+  runStartupStep("updateSortLabels failed", updateSortLabels);
+  runStartupStep("updateStaleBadge failed", updateStaleBadge);
+  runStartupStep("updateAPIConnectionIndicator failed", () => updateAPIConnectionIndicator("disconnected"));
+  runStartupStep("renderEGMFocusControl failed", () => renderEGMFocusControl(empty));
+  runStartupStep("renderEGMGroupedSummary failed", () => renderEGMGroupedSummary(empty));
+  runStartupStep("renderSelectedEGMDetail failed", () => renderSelectedEGMDetail(empty));
+  runStartupStep("renderOperatorAuditTimeline failed", () => renderOperatorAuditTimeline(empty));
+  runStartupStep("renderCertificateManager failed", () => renderCertificateManager(empty));
+  runStartupStep("renderFirstCabinetSession failed", () => renderFirstCabinetSession(empty));
+  runStartupStep("renderRuntimePresetLibrary failed", () => renderRuntimePresetLibrary(empty));
+  runStartupStep("renderSessionEvidence failed", () => renderSessionEvidence(empty));
+  runStartupStep("renderRunMarkerControls failed", () => renderRunMarkerControls(empty));
+  runStartupStep("renderRunReportControls failed", () => renderRunReportControls(empty));
+  runStartupStep("renderHeartbeatPolicy failed", () => renderHeartbeatPolicy(empty));
+  runStartupStep("renderBlockerGovernance failed", () => renderBlockerGovernance(empty));
+  runStartupStep("renderOperatorDrill failed", () => renderOperatorDrill(empty));
+  runStartupStep("renderHeartbeatSummary failed", () => renderHeartbeatSummary(empty));
+  runStartupStep("renderCabinetRunTimeline failed", () => renderCabinetRunTimeline(empty));
+  runStartupStep("renderEGMHistory failed", () => renderEGMHistory(empty));
+  runStartupStep("syncOperatorActionsFromCurrentState failed", syncOperatorActionsFromCurrentState);
+  runStartupStep("poll startup failed", () => schedulePoll(0));
+  runStartupStep("stale badge timer failed", () => setInterval(updateStaleBadge, 1000));
+}
+
+bootstrapDashboard();`

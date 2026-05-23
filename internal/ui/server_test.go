@@ -149,6 +149,12 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"api-connection-last-success\"") {
 		t.Fatalf("expected api connection last success marker")
 	}
+	if !strings.Contains(rr.Body.String(), "id=\"api-connection-poll-attempts\"") {
+		t.Fatalf("expected api connection poll attempts marker")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"api-connection-startup\"") {
+		t.Fatalf("expected api connection startup marker")
+	}
 	if !strings.Contains(rr.Body.String(), "id=\"api-connection-last-error\"") {
 		t.Fatalf("expected api connection last error marker")
 	}
@@ -657,7 +663,19 @@ func TestDashboardJSUsesRelativeAPIPaths(t *testing.T) {
 		"fetchJSON(endpoints.cabinetPreflight)",
 		"fetchReadyz()",
 		"api-connection-indicator",
+		"api-connection-poll-attempts",
+		"api-connection-startup",
 		"updateAPIConnectionIndicator",
+		"updateAPIConnectionIndicator(\"attempting\")",
+		"updateAPIConnectionIndicator(clientState.lastError ? \"disconnected\" : \"connected\")",
+		"pollAttempts",
+		"pollStarted",
+		"jsLoadedAt",
+		"safePollRender",
+		"runStartupStep",
+		"bootstrapDashboard",
+		"poll startup failed",
+		"schedulePoll(0)",
 		"settledFailureSummary",
 	} {
 		if !strings.Contains(body, marker) {
