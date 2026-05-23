@@ -683,3 +683,41 @@ func TestDashboardJSUsesRelativeAPIPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardJSSyntaxQuoteRegression(t *testing.T) {
+	server, err := NewServer()
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/static/dashboard.js", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+
+	for _, broken := range []string{
+		`escapeHTML(item.message || \"-\")`,
+		`escapeHTML((item.action || \"-\") + \" \" + (item.finding_id || \"\"))`,
+		`escapeHTML(\"at \" + fmtTime(item.created_at)`,
+		`<span class=\\\"muted-text\\\">`,
+	} {
+		if strings.Contains(body, broken) {
+			t.Fatalf("dashboard.js contains broken escaped quote fragment %q", broken)
+		}
+	}
+	for _, expected := range []string{
+		`escapeHTML(item.message || "-")`,
+		`escapeHTML((item.action || "-") + " " + (item.finding_id || ""))`,
+		`escapeHTML("at " + fmtTime(item.created_at)`,
+		`<span class=\"muted-text\">`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("dashboard.js missing expected quote fragment %q", expected)
+		}
+	}
+}

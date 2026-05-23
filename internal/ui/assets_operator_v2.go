@@ -6689,8 +6689,8 @@ function renderBlockerGovernance(snapshot) {
   renderItems("blocker-policy-suggestions-list", suggestions, "No suggested escalations.", (item) =>
     "<div class=\"item blocker-governance-item\">" +
       "<strong>" + escapeHTML(item.finding_id) + "</strong>" +
-      "<span>" + escapeHTML(item.message || \"-\") + "</span>" +
-      "<span class=\"muted-text\">" + escapeHTML(item.downgraded_by_policy ? \"downgraded_by_policy=true\" : \"downgraded_by_policy=false\") + "</span>" +
+      "<span>" + escapeHTML(item.message || "-") + "</span>" +
+      "<span class=\"muted-text\">" + escapeHTML(item.downgraded_by_policy ? "downgraded_by_policy=true" : "downgraded_by_policy=false") + "</span>" +
       "<div class=\"setup-actions evidence-actions blocker-governance-actions\">" +
         "<button type=\"button\" class=\"secondary-button blocker-policy-select-suggestion\" data-finding-id=\"" + escapeHTML(item.finding_id) + "\">Use</button>" +
         "<button type=\"button\" class=\"blocker-policy-approve-suggestion\" data-finding-id=\"" + escapeHTML(item.finding_id) + "\">Approve</button>" +
@@ -6721,10 +6721,10 @@ function renderBlockerGovernance(snapshot) {
   const history = Array.isArray(policy?.escalation_history) ? policy.escalation_history : [];
   renderItems("blocker-policy-history-list", history, "No escalation history yet.", (item) =>
     "<div class=\"item blocker-governance-item\">" +
-      "<strong>" + escapeHTML((item.action || \"-\") + \" \" + (item.finding_id || \"\")) + "</strong>" +
-      "<span>" + escapeHTML(\"at \" + fmtTime(item.created_at) + \" | actor_scope=\" + (item.actor_scope || \"-\") + \" | by=\" + (item.updated_by || \"lab-api\")) + "</span>" +
-      (item.rationale ? ("<span>" + escapeHTML(\"rationale: \" + item.rationale) + "</span>") : \"\") +
-      (item.egm_focus ? ("<span class=\\\"muted-text\\\">" + escapeHTML(\"egm_focus=\" + item.egm_focus) + \"</span>\") : \"\") +
+      "<strong>" + escapeHTML((item.action || "-") + " " + (item.finding_id || "")) + "</strong>" +
+      "<span>" + escapeHTML("at " + fmtTime(item.created_at) + " | actor_scope=" + (item.actor_scope || "-") + " | by=" + (item.updated_by || "lab-api")) + "</span>" +
+      (item.rationale ? ("<span>" + escapeHTML("rationale: " + item.rationale) + "</span>") : "") +
+      (item.egm_focus ? ("<span class=\"muted-text\">" + escapeHTML("egm_focus=" + item.egm_focus) + "</span>") : "") +
     "</div>"
   );
 
