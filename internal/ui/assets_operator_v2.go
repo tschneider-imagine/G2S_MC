@@ -2996,14 +2996,19 @@ function egmFocusScope(snapshot) {
 function renderEGMFocusControl(snapshot) {
   const select = $("egm-focus-select");
   const focus = egmFocusScope(snapshot);
+  const telemetry = telemetryReadinessForSnapshot(snapshot);
   const options = ["<option value=\"\">All EGMs</option>"]
     .concat(focus.available_egm_ids.map((id) => "<option value=\"" + escapeHTML(id) + "\">" + escapeHTML(id) + "</option>"));
   select.innerHTML = options.join("");
   select.value = focus.selected_egm_id;
   $("egm-focus-summary").textContent = focus.selected_egm_id ? ("Focused: " + focus.selected_egm_id) : "All EGMs";
-  $("egm-focus-description").textContent = focus.selected_egm_id
-    ? ("EGM-specific sections are filtered to " + focus.selected_egm_id + "; global sections remain visible.")
-    : "Use this to scope EGM-specific views while keeping global context visible.";
+  if (focus.selected_egm_id && telemetry.selected_not_active_warning) {
+    $("egm-focus-description").textContent = "Selected EGM not active; global telemetry is healthy. Choose an active EGM or switch to All EGMs.";
+  } else {
+    $("egm-focus-description").textContent = focus.selected_egm_id
+      ? ("EGM-specific sections are filtered to " + focus.selected_egm_id + "; global sections remain visible.")
+      : "Use this to scope EGM-specific views while keeping global context visible.";
+  }
   $("egm-history-scope").textContent = "Scope: " + focus.label;
   $("egm-history-grouping").textContent = focus.selected_egm_id
     ? "Single EGM rows with global context retained in timeline"
@@ -3140,6 +3145,44 @@ function groupedRowsForCurrentFocus(rows) {
     return list;
   }
   return list.filter((item) => String(item?.egm_id || "").trim() === focusID);
+}
+
+function telemetryRecentThresholdMS(snapshot) {
+  const policy = currentHeartbeatPolicy(snapshot);
+  const intervalMS = Math.max(0, Number(policy?.interval_ms || 0));
+  return Math.max(intervalMS > 0 ? intervalMS * 3 : 0, 30000);
+}
+
+function rowHasRecentTelemetry(row, thresholdMS, referenceMS) {
+  const lastSeenMS = numericTime(row?.last_seen_at);
+  if (lastSeenMS <= 0) return false;
+  const nowMS = Number.isFinite(referenceMS) ? referenceMS : Date.now();
+  return Math.max(0, nowMS - lastSeenMS) <= Math.max(0, Number(thresholdMS || 0));
+}
+
+function telemetryReadinessForSnapshot(snapshot) {
+  const groupedRows = groupedSummaryRowsForSnapshot(snapshot);
+  const focus = egmFocusScope(snapshot);
+  const thresholdMS = telemetryRecentThresholdMS(snapshot);
+  const referenceMS = Date.now();
+  const recentRows = groupedRows.filter((row) => rowHasRecentTelemetry(row, thresholdMS, referenceMS));
+  const focusedRow = focus.selected_egm_id
+    ? groupedRows.find((row) => String(row?.egm_id || "").trim() === focus.selected_egm_id) || null
+    : null;
+  const focusedRecent = focusedRow ? rowHasRecentTelemetry(focusedRow, thresholdMS, referenceMS) : false;
+  const selectedMissing = !!focus.selected_egm_id && !focusedRow;
+  const selectedStale = !!focus.selected_egm_id && !!focusedRow && !focusedRecent;
+  const anyRecentGlobal = recentRows.length > 0;
+  const selectedNotActiveWarning = !!focus.selected_egm_id && anyRecentGlobal && (selectedMissing || selectedStale);
+  return {
+    threshold_ms: thresholdMS,
+    any_recent_global: anyRecentGlobal,
+    recent_global_count: recentRows.length,
+    focused_recent: focusedRecent,
+    selected_missing: selectedMissing,
+    selected_stale: selectedStale,
+    selected_not_active_warning: selectedNotActiveWarning
+  };
 }
 
 function renderEGMGroupedSummary(snapshot) {
@@ -3504,6 +3547,7 @@ function firstTestEGMIDSet(snapshot) {
 
 function selectedEGMDetailForSnapshot(snapshot) {
   const focus = egmFocusScope(snapshot);
+  const telemetry = telemetryReadinessForSnapshot(snapshot);
   const rows = groupedSummaryRowsForSnapshot(snapshot);
   const firstTestIDs = firstTestEGMIDSet(snapshot);
   const focusedID = focus.selected_egm_id || "";
@@ -3536,7 +3580,9 @@ function selectedEGMDetailForSnapshot(snapshot) {
       in_first_test_set: false,
       focus_mode: focus.mode,
       message: focusedID
-        ? ("No telemetry has been observed yet for " + focusedID + ".")
+        ? (telemetry.selected_not_active_warning
+          ? ("Selected EGM not active: " + focusedID + ". Global telemetry is healthy; choose an active EGM or All EGMs.")
+          : ("No telemetry has been observed yet for " + focusedID + "."))
         : "Select one EGM focus to view cabinet-level detail."
     };
   }
@@ -4005,21 +4051,20 @@ function cabinetSessionStepStateClass(value) {
 }
 
 function buildCabinetSessionWorkflow(snapshot, session) {
-  const status = snapshot?.status || {};
   const focus = egmFocusScope(snapshot);
-  const groupedRows = groupedSummaryRowsForSnapshot(snapshot);
-  const focusedRows = groupedRowsForCurrentFocus(groupedRows);
-  const focusedObserved = focusedRows.some((row) => row.total_events > 0 || numericTime(row.last_seen_at) > 0);
-  const anyObserved = groupedRows.some((row) => row.total_events > 0 || numericTime(row.last_seen_at) > 0);
+  const telemetry = telemetryReadinessForSnapshot(snapshot);
+  const readyzOK = snapshot?.readyz?.ok === true || String(session?.readyzState || "").toUpperCase() === "READY";
+  const preflightPASS = String(snapshot?.cabinetPreflight?.overall || session?.preflightState || "").toUpperCase() === "PASS";
   const runActive = runWindowIsActive(snapshot);
   const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
   const startCount = markers.filter((item) => String(item?.marker_type || "").toLowerCase() === "start").length;
   const endCount = markers.filter((item) => String(item?.marker_type || "").toLowerCase() === "end").length;
   const evidenceCount = Array.isArray(snapshot?.sessionEvidence) ? snapshot.sessionEvidence.length : 0;
-  const focusTarget = focus.selected_egm_id || "current cabinet set";
+  const focusTarget = focus.selected_egm_id || "all active EGMs";
+  const readinessSignalReady = preflightPASS || readyzOK;
 
-  const precheckComplete = session.readyForSession === true;
-  const connectComplete = focus.selected_egm_id ? focusedObserved : anyObserved;
+  const precheckComplete = session.readyForSession === true && readinessSignalReady;
+  const connectComplete = telemetry.any_recent_global;
   const runComplete = !runActive && startCount > 0 && endCount > 0;
   const captureComplete = evidenceCount > 0;
   const sessionComplete = runComplete && captureComplete;
@@ -4030,7 +4075,7 @@ function buildCabinetSessionWorkflow(snapshot, session) {
       title: "Pre-check",
       state: precheckComplete ? "COMPLETE" : "ACTION_NEEDED",
       detail: precheckComplete
-        ? "Readyz, preflight, profile, certificate, and auth gates are ready."
+        ? "Preflight or readyz is healthy; profile/certificate/auth checks are ready for runbook prep."
         : "Resolve readiness blockers before starting cabinet session traffic."
     },
     {
@@ -4038,8 +4083,10 @@ function buildCabinetSessionWorkflow(snapshot, session) {
       title: "Connect/Observe",
       state: connectComplete ? "COMPLETE" : "ACTION_NEEDED",
       detail: connectComplete
-        ? ("Traffic observed for " + focusTarget + ".")
-        : ("No commsOnLine/keepAlive observed yet for " + focusTarget + ".")
+        ? (telemetry.selected_not_active_warning
+          ? ("Selected EGM not active: " + focusTarget + ". Global telemetry is healthy; choose an active EGM or All EGMs.")
+          : ("Recent commsOnLine/keepAlive observed for " + focusTarget + "."))
+        : ("No recent commsOnLine/keepAlive observed (threshold " + fmtDurationMs(telemetry.threshold_ms) + ").")
     },
     {
       id: "run_active",
@@ -4079,7 +4126,7 @@ function buildCabinetSessionWorkflow(snapshot, session) {
     current_step: currentStep,
     focus_label: focus.label,
     focus_mode: focus.mode,
-    status_state: status.state || "",
+    status_state: snapshot?.status?.state || "",
     steps: steps
   };
 }
@@ -4335,7 +4382,7 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   const readyz = snapshot?.readyz || null;
   const preflight = snapshot?.cabinetPreflight || null;
   const certificates = Array.isArray(snapshot?.certificates) ? snapshot.certificates : [];
-  const groupedRows = groupedSummaryRowsForSnapshot(snapshot);
+  const telemetry = telemetryReadinessForSnapshot(snapshot);
   const focus = egmFocusScope(snapshot);
   const selectedEGM = selectedEGMDetailForSnapshot(snapshot);
   const markers = Array.isArray(snapshot?.runMarkers) ? snapshot.runMarkers : [];
@@ -4436,10 +4483,10 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
     pushUniqueString(informational, "Mutation auth is disabled for current runtime.");
   }
 
-  if (groupedRows.length > 0) {
-    pushUniqueString(readyNow, "EGM traffic observed across " + String(groupedRows.length) + " EGM(s).");
+  if (telemetry.any_recent_global) {
+    pushUniqueString(readyNow, "Recent EGM telemetry observed across " + String(telemetry.recent_global_count) + " EGM(s) within " + fmtDurationMs(telemetry.threshold_ms) + ".");
   } else {
-    pushUniqueString(informational, "No EGM traffic observed yet.");
+    pushUniqueString(informational, "No recent EGM telemetry observed yet.");
     pushUniqueString(nextActions, "Start cabinet session and confirm commsOnLine/keepAlive traffic.");
   }
   const endpointIntegrity = status?.endpoint_collision_summary || {};
@@ -4456,6 +4503,9 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   if (!focus.selected_egm_id) {
     pushUniqueString(informational, "All-EGMs focus is active for session-wide monitoring.");
     pushUniqueString(nextActions, "Select one EGM focus for cabinet-level validation detail.");
+  } else if (telemetry.selected_not_active_warning) {
+    pushUniqueString(labWarning, "Selected EGM not active; global telemetry is healthy.");
+    pushUniqueString(nextActions, "Choose an active EGM focus or switch to All EGMs.");
   } else if (!selectedEGM.egm_id || selectedEGM.message.indexOf("No telemetry") >= 0) {
     pushUniqueString(informational, "Focused EGM has no telemetry yet.");
     pushUniqueString(nextActions, "Trigger commsOnLine for " + focus.selected_egm_id + " and confirm heartbeat.");

@@ -520,3 +520,34 @@ func TestDashboardAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardTelemetryReadinessFocusMarkers(t *testing.T) {
+	server, err := NewServer()
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/static/dashboard.js", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	for _, marker := range []string{
+		"telemetryRecentThresholdMS",
+		"rowHasRecentTelemetry",
+		"telemetryReadinessForSnapshot",
+		"Preflight or readyz is healthy; profile/certificate/auth checks are ready for runbook prep.",
+		"No recent commsOnLine/keepAlive observed (threshold ",
+		"Selected EGM not active; global telemetry is healthy.",
+		"Selected EGM not active: ",
+		"Recent EGM telemetry observed across ",
+	} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("dashboard.js missing marker %q", marker)
+		}
+	}
+}
