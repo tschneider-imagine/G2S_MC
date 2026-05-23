@@ -89,8 +89,8 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "data-export-role=\"g2s_client_cert\"") {
 		t.Fatalf("expected quick certificate export actions")
 	}
-	if !strings.Contains(rr.Body.String(), "First Cabinet Session") {
-		t.Fatalf("expected first cabinet session panel")
+	if !strings.Contains(rr.Body.String(), "Cabinet Signal Monitor") {
+		t.Fatalf("expected cabinet signal monitor panel")
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"first-cabinet-overall\"") {
 		t.Fatalf("expected first cabinet session state marker")
@@ -98,8 +98,8 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"first-cabinet-endpoint-alerts\"") {
 		t.Fatalf("expected first cabinet endpoint integrity marker")
 	}
-	if !strings.Contains(rr.Body.String(), "Mute Path vs Runbook Readiness") {
-		t.Fatalf("expected mute path separation panel")
+	if !strings.Contains(rr.Body.String(), "Mute Path and System Check") {
+		t.Fatalf("expected mute path/system check separation panel")
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"mute-path-state\"") {
 		t.Fatalf("expected mute path state marker")
@@ -110,8 +110,36 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"mute-path-prep-status\"") {
 		t.Fatalf("expected cabinet prep status marker")
 	}
-	if !strings.Contains(rr.Body.String(), "Session Evidence Capture") {
-		t.Fatalf("expected session evidence capture panel")
+	if !strings.Contains(rr.Body.String(), "Evidence Capture") {
+		t.Fatalf("expected evidence capture panel")
+	}
+	for _, marker := range []string{
+		"Overview",
+		"EGMs",
+		"Cabinet Signal",
+		"Certificates",
+		"Evidence",
+		"Settings",
+		"Diagnostics",
+		"id=\"dashboard-tab-menu\"",
+		"data-dashboard-tab-button=\"overview\"",
+		"data-dashboard-tab-button=\"diagnostics\"",
+		"System Status",
+		"Next Action",
+	} {
+		if !strings.Contains(rr.Body.String(), marker) {
+			t.Fatalf("expected dashboard tab/status marker %q", marker)
+		}
+	}
+	for _, legacy := range []string{
+		"First Cabinet Session",
+		"Operator Readiness Model",
+		"Runbook Readiness",
+		"Session Complete",
+	} {
+		if strings.Contains(rr.Body.String(), legacy) {
+			t.Fatalf("expected legacy label to be removed from main html: %q", legacy)
+		}
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"session-evidence-json-button\"") {
 		t.Fatalf("expected session evidence export button")
@@ -452,8 +480,8 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"cabinet-wire-host-url\"") {
 		t.Fatalf("expected cabinet profile field markers")
 	}
-	if !strings.Contains(rr.Body.String(), "Cabinet Setup") {
-		t.Fatalf("expected cabinet setup panel")
+	if !strings.Contains(rr.Body.String(), "Cabinet Profile Settings") {
+		t.Fatalf("expected cabinet profile settings panel")
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"setup-api-token\"") {
 		t.Fatalf("expected cabinet setup auth token field")
@@ -624,7 +652,7 @@ func TestDashboardTelemetryReadinessFocusMarkers(t *testing.T) {
 		"telemetryRecentThresholdMS",
 		"rowHasRecentTelemetry",
 		"telemetryReadinessForSnapshot",
-		"Preflight or readyz is healthy; profile/certificate/auth checks are ready for runbook prep.",
+		"System Check or readyz is healthy; profile/certificate/auth checks are ready.",
 		"No recent commsOnLine/keepAlive observed (threshold ",
 		"Selected EGM not active; global telemetry is healthy.",
 		"Selected EGM not active: ",
@@ -718,6 +746,85 @@ func TestDashboardJSSyntaxQuoteRegression(t *testing.T) {
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("dashboard.js missing expected quote fragment %q", expected)
+		}
+	}
+}
+
+func TestDashboardTabLayoutMarkers(t *testing.T) {
+	server, err := NewServer()
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+
+	htmlReq := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	htmlRec := httptest.NewRecorder()
+	mux.ServeHTTP(htmlRec, htmlReq)
+	if htmlRec.Code != http.StatusOK {
+		t.Fatalf("dashboard status = %d, want %d", htmlRec.Code, http.StatusOK)
+	}
+	htmlBody := htmlRec.Body.String()
+	for _, marker := range []string{
+		"id=\"dashboard-tab-menu\"",
+		"data-dashboard-tab-button=\"overview\"",
+		"data-dashboard-tab-button=\"egms\"",
+		"data-dashboard-tab-button=\"cabinet-signal\"",
+		"data-dashboard-tab-button=\"certificates\"",
+		"data-dashboard-tab-button=\"evidence\"",
+		"data-dashboard-tab-button=\"settings\"",
+		"data-dashboard-tab-button=\"diagnostics\"",
+		"data-dashboard-tab=\"overview,cabinet-signal\"",
+		"data-dashboard-tab=\"certificates\"",
+		"data-dashboard-tab=\"diagnostics\"",
+		"Cabinet Signal Monitor",
+		"Evidence Capture",
+		"System Status",
+		"Next Action",
+	} {
+		if !strings.Contains(htmlBody, marker) {
+			t.Fatalf("dashboard html missing marker %q", marker)
+		}
+	}
+
+	jsReq := httptest.NewRequest(http.MethodGet, "/static/dashboard.js", nil)
+	jsRec := httptest.NewRecorder()
+	mux.ServeHTTP(jsRec, jsReq)
+	if jsRec.Code != http.StatusOK {
+		t.Fatalf("dashboard.js status = %d, want %d", jsRec.Code, http.StatusOK)
+	}
+	jsBody := jsRec.Body.String()
+	for _, marker := range []string{
+		"dashboardTabStorageKey",
+		"dashboardTabs",
+		"normalizeDashboardTab",
+		"setDashboardTab",
+		"applyDashboardTabVisibility",
+		"dashboard-tab-button",
+		"dashboard-tab-hidden",
+		"dashboard-tab-section-hidden",
+	} {
+		if !strings.Contains(jsBody, marker) {
+			t.Fatalf("dashboard.js missing tab marker %q", marker)
+		}
+	}
+
+	cssReq := httptest.NewRequest(http.MethodGet, "/static/dashboard.css", nil)
+	cssRec := httptest.NewRecorder()
+	mux.ServeHTTP(cssRec, cssReq)
+	if cssRec.Code != http.StatusOK {
+		t.Fatalf("dashboard.css status = %d, want %d", cssRec.Code, http.StatusOK)
+	}
+	cssBody := cssRec.Body.String()
+	for _, marker := range []string{
+		"dashboard-tab-menu",
+		"dashboard-tab-button",
+		"dashboard-tab-hidden",
+		"dashboard-tab-section-hidden",
+		"system-status-grid",
+	} {
+		if !strings.Contains(cssBody, marker) {
+			t.Fatalf("dashboard.css missing tab marker %q", marker)
 		}
 	}
 }

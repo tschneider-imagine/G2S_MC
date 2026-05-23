@@ -69,9 +69,21 @@ const dashboardHTML = `<!doctype html>
       </div>
     </section>
 
+    <section class="dashboard-tab-menu-wrap">
+      <nav id="dashboard-tab-menu" class="dashboard-tab-menu" aria-label="Operator console sections">
+        <button type="button" class="dashboard-tab-button is-active" data-dashboard-tab-button="overview">Overview</button>
+        <button type="button" class="dashboard-tab-button" data-dashboard-tab-button="egms">EGMs</button>
+        <button type="button" class="dashboard-tab-button" data-dashboard-tab-button="cabinet-signal">Cabinet Signal</button>
+        <button type="button" class="dashboard-tab-button" data-dashboard-tab-button="certificates">Certificates</button>
+        <button type="button" class="dashboard-tab-button" data-dashboard-tab-button="evidence">Evidence</button>
+        <button type="button" class="dashboard-tab-button" data-dashboard-tab-button="settings">Settings</button>
+        <button type="button" class="dashboard-tab-button" data-dashboard-tab-button="diagnostics">Diagnostics</button>
+      </nav>
+    </section>
+
     <section class="grid two operator-toolbar-grid">
       <div class="panel operator-actions-bar">
-        <div class="panel-head panel-head-stack">
+        <div class="panel-head panel-head-stack" data-dashboard-tab="cabinet-signal,diagnostics">
           <div class="panel-title-row">
             <h2>Operator Actions</h2>
             <span class="muted-text">Quick controls</span>
@@ -114,7 +126,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid">
-      <div class="panel egm-focus-panel">
+      <div class="panel egm-focus-panel" data-dashboard-tab="egms,cabinet-signal,evidence">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>EGM Focus</h2>
@@ -142,12 +154,12 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel wide">
+      <div class="panel wide" data-dashboard-tab="overview">
         <div class="panel-head">
           <h2>Appliance Readiness</h2>
           <span id="uptime">-</span>
         </div>
-        <dl class="kv-list">
+        <dl class="kv-list" data-dashboard-tab="overview,cabinet-signal">
           <div><dt>Bind</dt><dd id="bind-address">-</dd></div>
           <div><dt>Database</dt><dd id="database-path">-</dd></div>
           <div><dt>G2S endpoint</dt><dd id="g2s-endpoint">-</dd></div>
@@ -158,7 +170,7 @@ const dashboardHTML = `<!doctype html>
         </dl>
       </div>
 
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="overview">
         <div class="panel-head">
           <h2>Certificate Summary</h2>
         </div>
@@ -167,7 +179,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid">
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="overview,settings">
         <div class="panel-head">
           <h2>Cabinet Identity Profile</h2>
           <span id="cabinet-profile-source" class="source-pill source-file">file</span>
@@ -187,30 +199,30 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel first-cabinet-session-panel">
+      <div class="panel first-cabinet-session-panel" data-dashboard-tab="overview,cabinet-signal,settings">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
-            <h2>First Cabinet Session</h2>
+            <h2>Cabinet Signal Monitor</h2>
             <span id="first-cabinet-session-state" class="source-pill source-file">checking</span>
           </div>
-          <span id="first-cabinet-session-message" class="muted-text">Waiting for first cabinet readiness telemetry.</span>
+          <span id="first-cabinet-session-message" class="muted-text">Waiting for cabinet signal telemetry.</span>
         </div>
         <dl class="kv-list">
           <div><dt>Overall Session State</dt><dd id="first-cabinet-overall">-</dd></div>
           <div><dt>Last Checked</dt><dd id="first-cabinet-last-checked">-</dd></div>
           <div><dt>Readyz State</dt><dd id="first-cabinet-readyz">-</dd></div>
-          <div><dt>Cabinet Preflight State</dt><dd id="first-cabinet-preflight">-</dd></div>
+          <div><dt>Cabinet System Check State</dt><dd id="first-cabinet-preflight">-</dd></div>
           <div><dt>Cabinet Profile Source</dt><dd id="first-cabinet-profile-source">-</dd></div>
           <div><dt>Wire Host URL</dt><dd id="first-cabinet-wire-host-url">-</dd></div>
           <div><dt>Host ID</dt><dd id="first-cabinet-host-id">-</dd></div>
           <div><dt>First Test EGM IDs</dt><dd id="first-cabinet-egm-ids">-</dd></div>
           <div><dt>Certificate Blocking Count</dt><dd id="first-cabinet-cert-blocking">-</dd></div>
-          <div><dt>Lab Optional Certificate Count</dt><dd id="first-cabinet-cert-lab-optional">-</dd></div>
+          <div><dt>Setup Optional Certificate Count</dt><dd id="first-cabinet-cert-lab-optional">-</dd></div>
           <div><dt>Endpoint Integrity Alerts</dt><dd id="first-cabinet-endpoint-alerts">-</dd></div>
           <div><dt>API Auth State</dt><dd id="first-cabinet-auth-state">-</dd></div>
         </dl>
-        <div class="mute-path-status-wrap">
-          <p class="label">Mute Path vs Runbook Readiness</p>
+        <div class="mute-path-status-wrap" data-dashboard-tab="overview,cabinet-signal">
+          <p class="label">Mute Path and System Check</p>
           <div id="mute-path-summary-grid" class="mute-path-summary-grid">
             <div id="mute-path-status-card" class="operator-readiness-group group-informational mute-path-status-card">
               <strong id="mute-path-state">-</strong>
@@ -219,35 +231,36 @@ const dashboardHTML = `<!doctype html>
             </div>
             <div id="runbook-readiness-status-card" class="operator-readiness-group group-informational runbook-readiness-status-card">
               <strong id="runbook-readiness-state">-</strong>
-              <span id="runbook-readiness-message" class="muted-text">Runbook readiness status will appear with telemetry.</span>
+              <span id="runbook-readiness-message" class="muted-text">System check status will appear with telemetry.</span>
               <span id="runbook-readiness-next" class="muted-text">Next action will appear here.</span>
             </div>
           </div>
           <div id="mute-path-prep-status" class="muted-text">Cabinet prep status will appear with telemetry.</div>
         </div>
-        <div class="first-cabinet-session-blockers-wrap">
-          <p class="label">Runbook Blockers and Signals</p>
+        <div class="first-cabinet-session-blockers-wrap" data-dashboard-tab="overview,cabinet-signal">
+          <p class="label">System Check Issues and Signals</p>
           <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
         </div>
-        <div class="first-cabinet-session-actions-wrap">
-          <p class="label">Operator Readiness Model</p>
-          <div class="operator-action-summary-grid">
-            <div><p class="label">Ready Now</p><strong id="operator-action-ready-count">0</strong></div>
-            <div><p class="label">Needs Operator Action</p><strong id="operator-action-needed-count">0</strong></div>
-            <div><p class="label">Lab Warning</p><strong id="operator-action-lab-warning-count">0</strong></div>
-            <div><p class="label">Informational</p><strong id="operator-action-info-count">0</strong></div>
+        <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="overview,cabinet-signal">
+          <p class="label">System Status</p>
+          <div class="operator-action-summary-grid system-status-grid">
+            <div><p class="label">Service</p><strong id="system-status-service">-</strong></div>
+            <div><p class="label">EGM Traffic</p><strong id="system-status-egm-traffic">-</strong></div>
+            <div><p class="label">Cabinet Setup</p><strong id="system-status-cabinet-setup">-</strong></div>
+            <div><p class="label">Certificates</p><strong id="system-status-certificates">-</strong></div>
+            <div><p class="label">Security Mode</p><strong id="system-status-security-mode">-</strong></div>
           </div>
           <div id="operator-readiness-model" class="operator-readiness-model"></div>
         </div>
-        <div class="first-cabinet-session-actions-wrap">
-          <p class="label">Next Operator Actions</p>
+        <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="overview,cabinet-signal">
+          <p class="label">Next Action</p>
           <div id="next-operator-actions" class="operator-readiness-model"></div>
         </div>
-        <div class="first-cabinet-session-workflow-wrap">
-          <p class="label">Operator Workflow</p>
+        <div class="first-cabinet-session-workflow-wrap" data-dashboard-tab="settings,diagnostics">
+          <p class="label">Operational Flow</p>
           <div id="first-cabinet-session-workflow" class="first-cabinet-session-workflow"></div>
         </div>
-        <div class="first-cabinet-session-workflow-progress-wrap">
+        <div class="first-cabinet-session-workflow-progress-wrap" data-dashboard-tab="settings">
           <p class="label">Workflow Progress</p>
           <div class="workflow-progress-meta">
             <span id="workflow-progress-last-saved">Last saved: not saved</span>
@@ -260,7 +273,7 @@ const dashboardHTML = `<!doctype html>
                 <option value="connect_observe">Connect/Observe</option>
                 <option value="run_active">Run Active</option>
                 <option value="capture_evidence">Capture Evidence</option>
-                <option value="session_complete">Session Complete</option>
+                <option value="session_complete">Wrap-up</option>
               </select>
             </label>
           </div>
@@ -274,14 +287,7 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="workflow-progress-message" class="muted-text">Workflow progress is not saved yet.</div>
         </div>
-        <div class="first-cabinet-session-actions-wrap">
-          <p class="label">Session Package Export</p>
-          <div class="setup-actions">
-            <button id="session-package-export-button" type="button" class="secondary-button">Export Session Package</button>
-          </div>
-          <div id="session-package-export-message" class="muted-text">Download one JSON package with current status, preflight, workflow, heartbeat policy, operator audit, and saved capture metadata.</div>
-        </div>
-        <div class="first-cabinet-session-actions-wrap">
+        <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="settings">
           <p class="label">Runtime Override Snapshot</p>
           <label class="cert-textarea-label">Restore Snapshot JSON
             <textarea id="runtime-overrides-restore-json" rows="6" placeholder="Paste runtime override snapshot JSON here before restore."></textarea>
@@ -295,7 +301,7 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, blocker policy, and EGM registry overrides.</div>
         </div>
-        <div class="first-cabinet-session-actions-wrap">
+        <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="settings">
           <p class="label">Runtime Preset Library</p>
           <div class="workflow-progress-grid">
             <label>Preset Name<input id="runtime-preset-name" type="text" maxlength="64" placeholder="lab_baseline"></label>
@@ -312,10 +318,10 @@ const dashboardHTML = `<!doctype html>
         </div>
       </div>
 
-      <div class="panel evidence-capture-panel">
+      <div class="panel evidence-capture-panel" data-dashboard-tab="evidence">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
-            <h2>Session Evidence Capture</h2>
+            <h2>Evidence Capture</h2>
             <span id="session-evidence-state" class="source-pill source-file">ready</span>
           </div>
           <span id="session-evidence-message" class="muted-text">Capture the current cabinet session state as JSON or Markdown.</span>
@@ -342,6 +348,13 @@ const dashboardHTML = `<!doctype html>
           <button id="session-evidence-markdown-button" type="button" class="secondary-button">Download Markdown Evidence</button>
           <button id="session-evidence-export-all-button" type="button" class="secondary-button">Export All Captures</button>
         </div>
+        <div class="first-cabinet-session-actions-wrap">
+          <p class="label">Session Package Export</p>
+          <div class="setup-actions">
+            <button id="session-package-export-button" type="button" class="secondary-button">Export Session Package</button>
+          </div>
+          <div id="session-package-export-message" class="muted-text">Download one JSON package with current status, system check, workflow, heartbeat policy, operator audit, and saved capture metadata.</div>
+        </div>
         <div class="first-cabinet-session-blockers-wrap">
           <p class="label">Recent Captures</p>
           <div id="session-evidence-history" class="timeline"></div>
@@ -354,10 +367,10 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid">
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="settings">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
-            <h2>Cabinet Setup</h2>
+            <h2>Cabinet Profile Settings</h2>
             <span id="cabinet-setup-state" class="source-pill source-file">ready</span>
           </div>
           <span id="cabinet-setup-message" class="muted-text">Current values loaded from the appliance.</span>
@@ -400,7 +413,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel wide">
+      <div class="panel wide" data-dashboard-tab="egms,settings">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>EGM Roster</h2>
@@ -483,7 +496,7 @@ const dashboardHTML = `<!doctype html>
         </div>
       </div>
 
-      <div class="panel endpoint-integrity-panel">
+      <div class="panel endpoint-integrity-panel" data-dashboard-tab="egms,diagnostics">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Endpoint Integrity</h2>
@@ -523,7 +536,7 @@ const dashboardHTML = `<!doctype html>
         </div>
       </div>
 
-      <div class="panel cabinet-run-panel">
+      <div class="panel cabinet-run-panel" data-dashboard-tab="cabinet-signal,settings,diagnostics">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Cabinet Run Timeline</h2>
@@ -547,7 +560,7 @@ const dashboardHTML = `<!doctype html>
           <span id="timeline-heartbeat-mode-label" class="muted-text">Heartbeat mode: rolled up</span>
           <span id="timeline-grouping-label" class="muted-text">All EGM rows grouped by EGM ID; global rows remain grouped as global.</span>
         </div>
-        <form id="run-marker-form" class="setup-form run-marker-form">
+        <form id="run-marker-form" class="setup-form run-marker-form" data-dashboard-tab="cabinet-signal">
           <div class="panel-title-row">
             <strong>Run Markers</strong>
             <span id="run-marker-state" class="source-pill source-file">ready</span>
@@ -566,7 +579,7 @@ const dashboardHTML = `<!doctype html>
             <button id="run-marker-end-button" type="button" class="secondary-button">Mark End</button>
           </div>
         </form>
-        <form id="run-report-form" class="setup-form run-report-form">
+        <form id="run-report-form" class="setup-form run-report-form" data-dashboard-tab="cabinet-signal">
           <div class="panel-title-row">
             <strong>Run Window Report</strong>
             <span id="run-report-state" class="source-pill source-file">ready</span>
@@ -595,7 +608,7 @@ const dashboardHTML = `<!doctype html>
             <button id="run-report-markdown-button" type="button" class="secondary-button">Download Run Markdown</button>
           </div>
         </form>
-        <form id="heartbeat-policy-form" class="setup-form run-report-form">
+        <form id="heartbeat-policy-form" class="setup-form run-report-form" data-dashboard-tab="settings">
           <div class="panel-title-row">
             <strong>Heartbeat Policy</strong>
             <span id="heartbeat-policy-source" class="source-pill source-file">file</span>
@@ -624,8 +637,8 @@ const dashboardHTML = `<!doctype html>
             <button id="heartbeat-policy-reload-button" type="button" class="secondary-button">Reload</button>
           </div>
         </form>
-        <div id="blocker-governance-anchor" class="anchor-target" aria-hidden="true"></div>
-        <form id="blocker-policy-form" class="setup-form run-report-form blocker-governance-panel">
+        <div id="blocker-governance-anchor" class="anchor-target" data-dashboard-tab="diagnostics" aria-hidden="true"></div>
+        <form id="blocker-policy-form" class="setup-form run-report-form blocker-governance-panel" data-dashboard-tab="diagnostics">
           <div class="panel-title-row">
             <strong>Blocker Governance</strong>
             <span id="blocker-policy-source" class="source-pill source-file">file</span>
@@ -665,7 +678,7 @@ const dashboardHTML = `<!doctype html>
             <div id="blocker-policy-history-list" class="timeline blocker-governance-list"></div>
           </div>
         </form>
-        <form id="operator-drill-form" class="setup-form operator-drill-form">
+        <form id="operator-drill-form" class="setup-form operator-drill-form" data-dashboard-tab="cabinet-signal,diagnostics">
           <div class="panel-title-row">
             <strong>Operator Drill</strong>
             <span id="operator-drill-state" class="source-pill source-file">ready</span>
@@ -698,7 +711,7 @@ const dashboardHTML = `<!doctype html>
             <button id="operator-drill-clear-button" type="button" class="secondary-button">Clear Drill State</button>
           </div>
         </form>
-        <div class="heartbeat-summary-wrap">
+        <div class="heartbeat-summary-wrap" data-dashboard-tab="cabinet-signal,egms">
           <p class="label">Heartbeat Summary</p>
           <div class="heartbeat-summary-grid">
             <div><p class="label">Scope</p><strong id="heartbeat-scope">All EGMs</strong></div>
@@ -709,10 +722,10 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="heartbeat-summary-message" class="muted-text heartbeat-summary-message">Waiting for heartbeat telemetry.</div>
         </div>
-        <div id="cabinet-run-timeline" class="timeline"></div>
+        <div id="cabinet-run-timeline" class="timeline" data-dashboard-tab="cabinet-signal,diagnostics"></div>
       </div>
 
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="cabinet-signal,diagnostics">
         <div class="panel-head">
           <h2>Recent Incidents</h2>
         </div>
@@ -721,7 +734,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="egms,cabinet-signal,diagnostics">
         <div class="panel-head panel-head-stack">
           <h2>EGM History</h2>
           <span id="egm-history-scope" class="muted-text">Scope: All EGMs</span>
@@ -730,7 +743,7 @@ const dashboardHTML = `<!doctype html>
         <div id="egm-history" class="timeline panel-scroll-safe panel-scroll-safe-history"></div>
       </div>
 
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="diagnostics">
         <div class="panel-head">
           <h2>State History</h2>
         </div>
@@ -739,7 +752,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid">
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="diagnostics">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Operator Audit Timeline</h2>
@@ -783,7 +796,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="certificates">
         <div class="panel-head panel-head-stack">
           <div class="panel-title-row">
             <h2>Certificate Manager</h2>
@@ -867,7 +880,7 @@ const dashboardHTML = `<!doctype html>
         <div id="cert-manager-detail" class="cert-manager-detail muted-text"></div>
       </div>
 
-      <div class="panel">
+      <div class="panel" data-dashboard-tab="certificates">
         <div class="panel-head">
           <h2>Certificate Inventory</h2>
         </div>
@@ -1079,6 +1092,42 @@ h2 { font-size: 18px; }
   width: min(1440px, 100%);
   margin: 0 auto;
   padding: 24px 36px 40px;
+}
+
+.dashboard-tab-menu-wrap {
+  margin: 14px 0 18px;
+}
+
+.dashboard-tab-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.dashboard-tab-button {
+  border: 1px solid var(--line);
+  background: #f7faf7;
+  color: var(--ink);
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dashboard-tab-button.is-active {
+  border-color: #255f91;
+  background: #255f91;
+  color: #fff;
+}
+
+.dashboard-tab-hidden,
+.dashboard-tab-section-hidden {
+  display: none !important;
 }
 
 .operator-toolbar-grid {
@@ -2375,6 +2424,10 @@ button:disabled {
   margin-bottom: 10px;
 }
 
+.system-status-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .operator-action-summary-grid > div {
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -2645,6 +2698,8 @@ const unhealthyStates = new Set(["RED", "GREY"]);
 const healthyStates = new Set(["GREEN", "YELLOW"]);
 const heartbeatEventTypes = new Set(["G2S_SESSION_ONLINE", "G2S_KEEPALIVE"]);
 const compactModeStorageKey = "g2s.dashboard.compact_mode";
+const dashboardTabStorageKey = "g2s.dashboard.tab";
+const dashboardTabs = ["overview", "egms", "cabinet-signal", "certificates", "evidence", "settings", "diagnostics"];
 
 const clientState = {
   lastGoodStatus: null,
@@ -2676,6 +2731,7 @@ const clientState = {
   globalSeverityFilter: "all",
   globalTextFilter: "",
   compactMode: false,
+  dashboardTab: "overview",
   selectedSessionEvidenceID: 0,
   selectedRunReportStartID: 0,
   selectedRunReportEndID: 0,
@@ -2939,6 +2995,73 @@ function saveCompactModePreference() {
   } catch (_) {
     // Keep compact mode runtime-only when localStorage is unavailable.
   }
+}
+
+function normalizeDashboardTab(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (dashboardTabs.indexOf(normalized) >= 0) return normalized;
+  return "overview";
+}
+
+function loadDashboardTabPreference() {
+  try {
+    const value = window.localStorage ? window.localStorage.getItem(dashboardTabStorageKey) : "";
+    clientState.dashboardTab = normalizeDashboardTab(value || clientState.dashboardTab);
+  } catch (_) {
+    clientState.dashboardTab = "overview";
+  }
+}
+
+function saveDashboardTabPreference() {
+  try {
+    if (!window.localStorage) return;
+    window.localStorage.setItem(dashboardTabStorageKey, clientState.dashboardTab);
+  } catch (_) {
+    // Keep tab selection runtime-only when localStorage is unavailable.
+  }
+}
+
+function dashboardTabTargets(rawValue) {
+  const text = String(rawValue || "").trim();
+  if (!text) return [];
+  return text.split(",").map((item) => normalizeDashboardTab(item)).filter((item, idx, arr) => arr.indexOf(item) === idx);
+}
+
+function matchesDashboardTab(el, tab) {
+  if (!el) return false;
+  const targets = dashboardTabTargets(el.getAttribute("data-dashboard-tab"));
+  if (targets.length === 0) return true;
+  return targets.indexOf(tab) >= 0;
+}
+
+function applyDashboardTabVisibility() {
+  const activeTab = normalizeDashboardTab(clientState.dashboardTab);
+  clientState.dashboardTab = activeTab;
+  document.querySelectorAll("[data-dashboard-tab]").forEach((el) => {
+    const visible = matchesDashboardTab(el, activeTab);
+    el.classList.toggle("dashboard-tab-hidden", !visible);
+  });
+  document.querySelectorAll("main.shell > section").forEach((section) => {
+    const scopedChildren = Array.from(section.querySelectorAll("[data-dashboard-tab]"));
+    if (scopedChildren.length === 0) {
+      section.classList.remove("dashboard-tab-section-hidden");
+      return;
+    }
+    const anyVisible = scopedChildren.some((el) => !el.classList.contains("dashboard-tab-hidden"));
+    section.classList.toggle("dashboard-tab-section-hidden", !anyVisible);
+  });
+  document.querySelectorAll(".dashboard-tab-button").forEach((button) => {
+    const tab = normalizeDashboardTab(button.getAttribute("data-dashboard-tab-button"));
+    const selected = tab === activeTab;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+  });
+}
+
+function setDashboardTab(value) {
+  clientState.dashboardTab = normalizeDashboardTab(value);
+  saveDashboardTabPreference();
+  applyDashboardTabVisibility();
 }
 
 function renderGlobalViewControls() {
@@ -3938,7 +4061,7 @@ function certExplanation(item, runtime) {
   const required = certRequired(runtime, item.role);
   if (state === "OK" || state === "VALID") return "Loaded and valid for current runtime.";
   if (state === "EXPIRING_SOON") return "Rotation needed soon to avoid readiness degradation.";
-  if (state === "NOT_CONFIGURED") return "Expected in lab mode when TLS and mTLS are not required.";
+  if (state === "NOT_CONFIGURED") return "Expected in setup mode when TLS and mTLS are not required.";
   if (state === "MISSING") return required ? "Blocking: required certificate file is missing." : "Missing, but currently not required.";
   if (state === "INVALID") return required ? "Blocking: certificate failed validation for a required role." : "Invalid, but currently not required.";
   if (state === "EXPIRED") return required ? "Blocking: required certificate is expired." : "Expired, but currently not required.";
@@ -3963,7 +4086,7 @@ function renderCertificateSummary(summary, certificates, runtime) {
   $("certificate-summary").innerHTML = [
     "<div class=\"summary-cell summary-blocking\"><strong>" + counts.blocking + "</strong><span>Blocking</span><p>Required cert failures in current runtime.</p></div>",
     "<div class=\"summary-cell summary-warning\"><strong>" + counts.warning + "</strong><span>Expiring Soon</span><p>Plan rotation before expiry.</p></div>",
-    "<div class=\"summary-cell summary-lab\"><strong>" + counts.lab + "</strong><span>Lab Optional</span><p>Not required in current lab mode.</p></div>",
+    "<div class=\"summary-cell summary-lab\"><strong>" + counts.lab + "</strong><span>Setup Optional</span><p>Not required in current non-production mode.</p></div>",
     "<div class=\"summary-cell summary-healthy\"><strong>" + counts.healthy + "</strong><span>Healthy</span><p>Ready for configured runtime.</p></div>"
   ].join("");
 }
@@ -4079,7 +4202,7 @@ function buildFirstCabinetSessionState(snapshot) {
   return {
     overallState: overallState,
     readyForSession: readyForSession,
-    message: readyForSession ? "Ready for first cabinet lab session" : "Resolve readiness issues before first cabinet runbook session.",
+    message: readyForSession ? "Ready for cabinet signal operations." : "Resolve system check issues before cabinet signal operations.",
     lastCheckedValue: lastCheckedValue,
     readyzState: readyzState,
     preflightState: preflightState,
@@ -4122,8 +4245,8 @@ function buildCabinetSessionWorkflow(snapshot, session) {
       title: "Pre-check",
       state: precheckComplete ? "COMPLETE" : "ACTION_NEEDED",
       detail: precheckComplete
-        ? "Preflight or readyz is healthy; profile/certificate/auth checks are ready for runbook prep."
-        : "Resolve readiness blockers before starting cabinet session traffic."
+        ? "System Check or readyz is healthy; profile/certificate/auth checks are ready."
+        : "Resolve system check issues before starting cabinet signal traffic."
     },
     {
       id: "connect_observe",
@@ -4153,7 +4276,7 @@ function buildCabinetSessionWorkflow(snapshot, session) {
     },
     {
       id: "session_complete",
-      title: "Session Complete",
+      title: "Wrap-up",
       state: sessionComplete ? "COMPLETE" : "ACTION_NEEDED",
       detail: sessionComplete
         ? "Run markers and saved evidence are complete for this cabinet session."
@@ -4161,7 +4284,7 @@ function buildCabinetSessionWorkflow(snapshot, session) {
     }
   ];
 
-  let currentStep = "Session Complete";
+  let currentStep = "Wrap-up";
   for (let i = 0; i < steps.length; i++) {
     if (steps[i].state === "ACTION_NEEDED" || steps[i].state === "ACTIVE") {
       currentStep = steps[i].title;
@@ -4183,7 +4306,7 @@ const workflowProgressSteps = [
   { id: "connect_observe", label: "Connect/Observe complete" },
   { id: "run_active", label: "Run Active complete" },
   { id: "capture_evidence", label: "Capture Evidence complete" },
-  { id: "session_complete", label: "Session Complete" }
+  { id: "session_complete", label: "Wrap-up complete" }
 ];
 
 function defaultSessionWorkflowProgress() {
@@ -4318,7 +4441,7 @@ function renderSessionWorkflowProgress(snapshot, workflow) {
   if (progress.persisted) {
     setWorkflowProgressMessage("Workflow progress saved. Current phase: " + String(progress.current_phase || "pre_check").replace(/_/g, " ") + ".");
   } else {
-    setWorkflowProgressMessage("Workflow progress is not saved yet. Current workflow step: " + (workflow?.current_step || "Pre-check") + ".");
+    setWorkflowProgressMessage("Workflow progress is not saved yet. Next flow state: " + (workflow?.current_step || "Pre-check") + ".");
   }
 
   const tokenRequired = setupActionsRequireToken();
@@ -4452,10 +4575,10 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
   }
 
   if (!preflight) {
-    pushUniqueString(needsAction, "Cabinet preflight API is unavailable.");
-    pushUniqueString(nextActions, "Restore /api/cabinet-preflight and rerun pre-check.");
+    pushUniqueString(needsAction, "System Check API is unavailable.");
+    pushUniqueString(nextActions, "Restore /api/cabinet-preflight and rerun system check.");
   } else if (String(preflight?.overall || "").toUpperCase() === "PASS") {
-    pushUniqueString(readyNow, "Cabinet preflight checks are passing.");
+    pushUniqueString(readyNow, "System Check is passing.");
   } else {
     const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
     checks.filter((item) => item?.result === "FAIL").forEach((check) => {
@@ -4473,21 +4596,21 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
           pushUniqueString(nextActions, "Regenerate/import certificate matching wire_host_url and required SAN fields.");
           break;
         default:
-          pushUniqueString(needsAction, "Preflight check failed: " + (check?.id || "unknown") + ".");
+          pushUniqueString(needsAction, "System Check failed: " + (check?.id || "unknown") + ".");
           break;
       }
     });
     if (needsAction.length === 0) {
-      pushUniqueString(needsAction, "Cabinet preflight has unresolved failures.");
-      pushUniqueString(nextActions, "Review failed preflight checks and resolve blocking items.");
+      pushUniqueString(needsAction, "System Check has unresolved failures.");
+      pushUniqueString(nextActions, "Review failed system checks and resolve setup issues.");
     }
   }
   const downgradedFindings = Array.isArray(preflight?.downgraded_findings) ? preflight.downgraded_findings : [];
   downgradedFindings.forEach((finding) => {
     const id = String(finding?.id || "").trim();
     if (!id) return;
-    pushUniqueString(labWarning, "Preflight finding downgraded by blocker policy: " + id + ".");
-    pushUniqueString(nextActions, "Review downgraded preflight finding " + id + " before production deployment.");
+    pushUniqueString(labWarning, "System Check finding downgraded by blocker policy: " + id + ".");
+    pushUniqueString(nextActions, "Review downgraded system check finding " + id + " before production deployment.");
   });
   const preflightProfileCheck = preflightCheckByID(preflight, "cabinet_profile");
   const placeholderFirstTestWarning = String(preflightProfileCheck?.detail || "").indexOf("lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER") >= 0;
@@ -4581,17 +4704,39 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
     pushUniqueString(informational, "Heartbeat signal: no traffic yet.");
   }
 
+  const serviceStatus = (readyz?.ok === true || session?.readyzState === "READY") ? "Healthy" : "Needs Setup";
+  const egmTrafficStatus = telemetry.any_recent_global ? "Live" : "Waiting";
+  const cabinetSetupReady = String(preflight?.overall || "").toUpperCase() === "PASS" &&
+    !!(session?.profile?.wire_host_url) &&
+    !!(session?.profile?.host_id) &&
+    Array.isArray(session?.firstEGMIDs) &&
+    session.firstEGMIDs.length > 0;
+  const cabinetSetupStatus = cabinetSetupReady ? "Ready" : "Needs Setup";
+  const certificateStatus = blockingRoles.length > 0 ? "Issue" : (expiringSoon > 0 ? "Warning" : "Ready");
+  const securityModeStatus = runtime.api_mutation_auth_required === true
+    ? "Token Required"
+    : (runtime.trusted_mutation_bypass_active === true ? "Setup Mode Bypass" : "Auth Disabled");
+  const primaryNextAction = nextActions[0] || "No immediate operator action needed.";
+
   return {
     ready_now: readyNow,
     needs_operator_action: needsAction,
     lab_warning: labWarning,
     informational: informational,
     next_actions: nextActions,
+    primary_next_action: primaryNextAction,
+    system_status: {
+      service: serviceStatus,
+      egm_traffic: egmTrafficStatus,
+      cabinet_setup: cabinetSetupStatus,
+      certificates: certificateStatus,
+      security_mode: securityModeStatus
+    },
     groups: [
-      { key: "ready_now", label: "Ready Now", items: readyNow },
-      { key: "needs_operator_action", label: "Needs Operator Action", items: needsAction },
-      { key: "lab_warning", label: "Lab Warning", items: labWarning },
-      { key: "informational", label: "Informational", items: informational }
+      { key: "needs_operator_action", label: "Needs Setup", items: needsAction },
+      { key: "lab_warning", label: "Setup Warnings", items: labWarning },
+      { key: "informational", label: "Details", items: informational },
+      { key: "ready_now", label: "Healthy Signals", items: readyNow }
     ],
     counts: {
       ready_now: readyNow.length,
@@ -4625,18 +4770,18 @@ function buildMutePathStatus(snapshot, session, readinessModel, workflow) {
 
   const mutePathState = "NOT_GATED_BY_RUNBOOK";
   const mutePathNote = runbookBlocked
-    ? "Mute path is not gated by runbook readiness; this BLOCKED state applies to runbook prep only."
-    : "Mute path is not gated by runbook readiness.";
+    ? "Mute path is not gated by system check status; this BLOCKED state applies to setup checks only."
+    : "Mute path is not gated by system check status.";
   const confidenceNote = "Software signal only; physical mute-actuator verification is outside this dashboard.";
   const runbookMessage = runbookBlocked
-    ? "Runbook readiness is blocked for first cabinet session."
-    : "Runbook readiness is clear for first cabinet session.";
+    ? "System check has unresolved setup issues."
+    : "System check is clear for cabinet signal operations.";
   const prepStatus = runbookBlocked
-    ? "Cabinet prep can continue by resolving runbook actions."
-    : "Cabinet prep can continue and first cabinet session can start.";
+    ? "Resolve setup issues listed in System Check."
+    : "No blocking setup issues in System Check.";
   const nextAction = nextActions[0] || (runbookBlocked
-    ? "Resolve listed runbook actions before first cabinet session."
-    : "Start cabinet session and capture evidence.");
+    ? "Resolve listed setup issues before cabinet signal operations."
+    : "Start cabinet signal monitoring and capture evidence.");
 
   return {
     mute_path_state: mutePathState,
@@ -4664,37 +4809,43 @@ function renderMutePathStatus(model) {
   muteCard.className = "operator-readiness-group mute-path-status-card " + mutePathClassForState(summary.mute_path_state || "UNKNOWN");
 
   $("runbook-readiness-state").textContent = summary.runbook_readiness_state || "UNKNOWN";
-  $("runbook-readiness-message").textContent = (summary.runbook_message || "Runbook readiness status unavailable.") +
-    " Blockers: " + String(summary.runbook_blocker_count || 0) +
-    " | Lab warnings: " + String(summary.runbook_warning_count || 0);
+  $("runbook-readiness-message").textContent = (summary.runbook_message || "System check status unavailable.") +
+    " Issues: " + String(summary.runbook_blocker_count || 0) +
+    " | Warnings: " + String(summary.runbook_warning_count || 0);
   $("runbook-readiness-next").textContent = "Next action: " + (summary.next_action || "-");
 
   const runbookCard = $("runbook-readiness-status-card");
   runbookCard.className = "operator-readiness-group runbook-readiness-status-card " + runbookReadinessClassForState(summary.runbook_readiness_state || "UNKNOWN");
 
-  const prepStatus = summary.can_continue_cabinet_prep === true ? "YES" : "NO";
-  $("mute-path-prep-status").textContent = "Cabinet prep can continue: " + prepStatus +
-    ". " + (summary.cabinet_prep_status || "-") +
-    " Current workflow step: " + (summary.workflow_step || "-") +
-    ". Observed EGMs: " + String(summary.observed_egm_count || 0) + ".";
+  $("mute-path-prep-status").textContent = "System check context: " + (summary.cabinet_prep_status || "-") +
+    " Observed EGMs: " + String(summary.observed_egm_count || 0) + ".";
 }
 
 function renderOperatorReadinessModel(model) {
-  const readiness = model || { groups: [], counts: {}, next_actions: [] };
-  $("operator-action-ready-count").textContent = String(readiness?.counts?.ready_now || 0);
-  $("operator-action-needed-count").textContent = String(readiness?.counts?.needs_operator_action || 0);
-  $("operator-action-lab-warning-count").textContent = String(readiness?.counts?.lab_warning || 0);
-  $("operator-action-info-count").textContent = String(readiness?.counts?.informational || 0);
-  renderItems("operator-readiness-model", readiness.groups, "No readiness classification available yet.", (group) => {
+  const readiness = model || { groups: [], counts: {}, next_actions: [], system_status: {}, primary_next_action: "" };
+  const systemStatus = readiness.system_status || {};
+  $("system-status-service").textContent = systemStatus.service || "-";
+  $("system-status-egm-traffic").textContent = systemStatus.egm_traffic || "-";
+  $("system-status-cabinet-setup").textContent = systemStatus.cabinet_setup || "-";
+  $("system-status-certificates").textContent = systemStatus.certificates || "-";
+  $("system-status-security-mode").textContent = systemStatus.security_mode || "-";
+
+  const detailGroups = (Array.isArray(readiness.groups) ? readiness.groups : []).filter((group) => {
+    const items = Array.isArray(group?.items) ? group.items : [];
+    return items.length > 0;
+  });
+  renderItems("operator-readiness-model", detailGroups, "No additional warnings or details.", (group) => {
     const items = Array.isArray(group?.items) ? group.items : [];
     const listHTML = items.length > 0
       ? ("<ul class=\"operator-readiness-items\">" + items.map((item) => "<li>" + escapeHTML(item) + "</li>").join("") + "</ul>")
       : "<span class=\"muted-text\">No items.</span>";
     return "<div class=\"operator-readiness-group group-" + groupedReadinessClass(group?.key) + "\"><strong>" + escapeHTML(group?.label || "-") + "</strong>" + listHTML + "</div>";
   });
-  renderItems("next-operator-actions", readiness?.next_actions, "No immediate operator action required.", (item) =>
-    "<div class=\"operator-readiness-group group-needs_operator_action\"><strong>Action</strong><ul class=\"operator-readiness-items\"><li>" + escapeHTML(item) + "</li></ul></div>"
-  );
+  const nextAction = String(readiness?.primary_next_action || "").trim() || "No immediate operator action needed.";
+  const nextActionClass = nextAction === "No immediate operator action needed." ? "group-ready_now" : "group-needs_operator_action";
+  $("next-operator-actions").innerHTML =
+    "<div class=\"operator-readiness-group " + nextActionClass + "\"><strong>Action</strong><ul class=\"operator-readiness-items\"><li>" +
+    escapeHTML(nextAction) + "</li></ul></div>";
 }
 
 function renderFirstCabinetSession(snapshot) {
@@ -4705,7 +4856,7 @@ function renderFirstCabinetSession(snapshot) {
   const stateBadge = $("first-cabinet-session-state");
   stateBadge.textContent = session.overallState;
   stateBadge.className = "source-pill " + (session.readyForSession ? "source-file" : "source-mixed");
-  $("first-cabinet-session-message").textContent = session.message + " Current workflow step: " + workflow.current_step + ". Runbook readiness is separate from mute-path status.";
+  $("first-cabinet-session-message").textContent = session.message + " System Check status is separate from mute-path status.";
   $("session-package-export-button").disabled = !snapshot?.status;
   $("runtime-overrides-save-snapshot-button").disabled = !snapshot?.status;
   $("runtime-overrides-restore-button").disabled = mutationTokenRequired() && !getSetupToken() && !getCertToken();
@@ -4739,7 +4890,7 @@ function renderFirstCabinetSession(snapshot) {
 
   const blockerList = $("first-cabinet-session-blockers");
   if (session.blockers.length === 0) {
-    blockerList.innerHTML = "<div class=\"first-cabinet-session-blocker first-cabinet-session-blockers-empty\">Ready for first cabinet lab session</div>";
+    blockerList.innerHTML = "<div class=\"first-cabinet-session-blocker first-cabinet-session-blockers-empty\">No immediate setup issues.</div>";
   } else {
     blockerList.innerHTML = session.blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
   }
@@ -5066,8 +5217,8 @@ function renderSelectedSavedSessionEvidence(record) {
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
-      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | Preflight: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Workflow: " + escapeHTML(workflowStep) + "</span></div>" +
-      "<div class=\"kv-inline\"><span>Blockers: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | System Check: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Flow: " + escapeHTML(workflowStep) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Issues: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Grouped EGMs (focused/all): " + escapeHTML(String(groupedFocusedCount)) + " / " + escapeHTML(String(groupedAllCount)) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
@@ -5801,7 +5952,7 @@ function renderRunMarkerControls(snapshot) {
   if (tokenRequired) {
     setRunMarkerState("ready", "Run markers require an API token in this browser session.");
   } else {
-    setRunMarkerState("ready", "Run markers are ready for trusted lab mode.");
+    setRunMarkerState("ready", "Run markers are ready for trusted setup mode.");
   }
 }
 
@@ -8424,7 +8575,7 @@ function renderStatus(snapshot) {
   $("bind-address").textContent = runtime.bind_address || "-";
   $("database-path").textContent = runtime.database_path || "-";
   $("g2s-endpoint").textContent = runtime.g2s_host_url ? (runtime.g2s_host_url + " " + (runtime.g2s_endpoint_path || "")) : "-";
-  $("tls-mode").textContent = runtime.tls_required ? "TLS required" : "HTTP lab mode";
+  $("tls-mode").textContent = runtime.tls_required ? "TLS required" : "HTTP setup mode";
   $("readyz-http").textContent = readyz.statusCode ? (readyz.statusCode + (readyz.ok ? " OK" : " DEGRADED")) : "-";
   $("readyz-issues").textContent = Array.isArray(readyz.issues) && readyz.issues.length ? readyz.issues.join("; ") : "None";
   $("readiness-warnings").textContent = Array.isArray(readiness.warnings) && readiness.warnings.length ? readiness.warnings.join("; ") : "None";
@@ -8516,7 +8667,7 @@ function renderAlerts(snapshot) {
     return;
   }
   if (Array.isArray(readiness.warnings) && readiness.warnings.length > 0) {
-    setAlert("info", "Lab mode warnings", readiness.warnings.join("; "));
+    setAlert("info", "Setup mode warnings", readiness.warnings.join("; "));
     return;
   }
   setAlert("healthy", "Console healthy", "Readiness is stable with no active operator alerts.");
@@ -8771,7 +8922,7 @@ async function pollOnce() {
       settledFailureSummary("heartbeat policy", heartbeatPolicyResult),
       settledFailureSummary("blocker policy", blockerPolicyResult),
       settledFailureSummary("blocker policy suggestions", blockerPolicySuggestionsResult),
-      settledFailureSummary("cabinet preflight", cabinetPreflightResult),
+      settledFailureSummary("system check", cabinetPreflightResult),
       settledFailureSummary("endpoint integrity alerts", endpointIntegrityAlertsResult),
       settledFailureSummary("runtime override presets", runtimeOverridePresetsResult)
     ].filter(Boolean);
@@ -8872,6 +9023,11 @@ function setSort(key) {
 }
 
 function bindControls() {
+  document.querySelectorAll(".dashboard-tab-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      setDashboardTab(button.getAttribute("data-dashboard-tab-button") || "overview");
+    });
+  });
   $("refresh-button").addEventListener("click", () => {
     schedulePoll(0);
   });
@@ -8885,6 +9041,7 @@ function bindControls() {
     exportSessionPackage();
   });
   $("operator-actions-blocker-governance-button").addEventListener("click", () => {
+    setDashboardTab("diagnostics");
     const anchor = $("blocker-governance-anchor") || $("blocker-policy-form");
     if (!anchor) return;
     anchor.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -9239,7 +9396,9 @@ function runStartupStep(label, fn) {
 function bootstrapDashboard() {
   const empty = emptySnapshot();
   runStartupStep("loadCompactModePreference failed", loadCompactModePreference);
+  runStartupStep("loadDashboardTabPreference failed", loadDashboardTabPreference);
   runStartupStep("bindControls failed", bindControls);
+  runStartupStep("applyDashboardTabVisibility failed", applyDashboardTabVisibility);
   runStartupStep("renderGlobalViewControls failed", renderGlobalViewControls);
   runStartupStep("updateSortLabels failed", updateSortLabels);
   runStartupStep("updateStaleBadge failed", updateStaleBadge);
