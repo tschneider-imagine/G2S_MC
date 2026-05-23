@@ -486,6 +486,172 @@ func TestBlockerPolicyEscalationHistoryCRUD(t *testing.T) {
 	}
 }
 
+func TestReplaceRuntimeOverridesAtomic(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertCabinetProfileOverride(ctx, config.CabinetProfile{
+		WireHostURL:     "https://before.example/g2s",
+		ListenerDNSName: "before.example",
+		RequiredSANDNS:  []string{"before.example"},
+		HostID:          "HOST-BEFORE",
+		FirstTestEGMIDs: []string{"EGM-BEFORE"},
+	}, "before"); err != nil {
+		t.Fatalf("seed cabinet profile override: %v", err)
+	}
+	if err := store.UpsertHeartbeatPolicyOverride(ctx, 5000, 3, 6, "before"); err != nil {
+		t.Fatalf("seed heartbeat policy override: %v", err)
+	}
+	if err := store.UpsertBlockerPolicyOverrideWithMeta(ctx, []string{"service_readiness"}, "before", "save_override", "seed", "token"); err != nil {
+		t.Fatalf("seed blocker policy override: %v", err)
+	}
+	if err := store.UpsertEGMRegistryOverride(ctx, EGMRegistryOverride{
+		EGMID:       "EGM-OLD",
+		DisplayName: "Old",
+		UpdatedBy:   "before",
+	}); err != nil {
+		t.Fatalf("seed egm registry override: %v", err)
+	}
+
+	input := RuntimeOverridesReplaceInput{
+		CabinetProfileOverride: &CabinetProfileOverride{
+			Profile: config.CabinetProfile{
+				WireHostURL:     "https://after.example/g2s",
+				ListenerDNSName: "after.example",
+				ListenerIP:      "10.20.30.40",
+				RequiredSANDNS:  []string{"after.example"},
+				RequiredSANIPs:  []string{"10.20.30.40"},
+				HostID:          "HOST-AFTER",
+				FirstTestEGMIDs: []string{"EGM-02", "EGM-03"},
+			},
+			UpdatedBy: "restore-op",
+		},
+		HeartbeatPolicyOverride: &HeartbeatPolicyOverride{
+			IntervalMS:         7000,
+			WarningAfterMissed: 4,
+			BlockAfterMissed:   8,
+			UpdatedBy:          "restore-op",
+		},
+		BlockerPolicyOverride: &BlockerPolicyOverride{
+			ApprovedBlockerIDs:   []string{"service_readiness", "cabinet_profile"},
+			UpdatedBy:            "restore-op",
+			LastChangeAction:     "restore_snapshot",
+			LastChangeRationale:  "restore",
+			LastChangeActorScope: "token",
+		},
+		EGMRegistryOverrides: []EGMRegistryOverride{
+			{EGMID: "EGM-02", DisplayName: "Cabinet 2", Vendor: "Acme", UpdatedBy: "restore-op"},
+			{EGMID: "EGM-03", DisplayName: "Cabinet 3", Vendor: "Acme", UpdatedBy: "restore-op"},
+		},
+	}
+	if err := store.ReplaceRuntimeOverrides(ctx, input); err != nil {
+		t.Fatalf("replace runtime overrides: %v", err)
+	}
+
+	profile, err := store.GetCabinetProfileOverride(ctx)
+	if err != nil {
+		t.Fatalf("get cabinet profile override: %v", err)
+	}
+	if profile == nil || profile.Profile.HostID != "HOST-AFTER" {
+		t.Fatalf("unexpected cabinet profile override: %+v", profile)
+	}
+	hb, err := store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get heartbeat policy override: %v", err)
+	}
+	if hb == nil || hb.IntervalMS != 7000 || hb.WarningAfterMissed != 4 || hb.BlockAfterMissed != 8 {
+		t.Fatalf("unexpected heartbeat policy override: %+v", hb)
+	}
+	blocker, err := store.GetBlockerPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get blocker policy override: %v", err)
+	}
+	if blocker == nil || len(blocker.ApprovedBlockerIDs) != 2 {
+		t.Fatalf("unexpected blocker policy override: %+v", blocker)
+	}
+	records, err := store.ListEGMRegistryOverrides(ctx)
+	if err != nil {
+		t.Fatalf("list egm registry overrides: %v", err)
+	}
+	if len(records) != 2 || records[0].EGMID != "EGM-02" || records[1].EGMID != "EGM-03" {
+		t.Fatalf("unexpected egm registry overrides: %+v", records)
+	}
+
+	clearInput := RuntimeOverridesReplaceInput{}
+	if err := store.ReplaceRuntimeOverrides(ctx, clearInput); err != nil {
+		t.Fatalf("replace runtime overrides clear: %v", err)
+	}
+	profile, err = store.GetCabinetProfileOverride(ctx)
+	if err != nil {
+		t.Fatalf("get cleared cabinet profile override: %v", err)
+	}
+	if profile != nil {
+		t.Fatalf("expected cleared cabinet profile override")
+	}
+	hb, err = store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get cleared heartbeat policy override: %v", err)
+	}
+	if hb != nil {
+		t.Fatalf("expected cleared heartbeat policy override")
+	}
+	blocker, err = store.GetBlockerPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get cleared blocker policy override: %v", err)
+	}
+	if blocker != nil {
+		t.Fatalf("expected cleared blocker policy override")
+	}
+	records, err = store.ListEGMRegistryOverrides(ctx)
+	if err != nil {
+		t.Fatalf("list cleared egm registry overrides: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected cleared egm registry overrides, got %+v", records)
+	}
+}
+
+func TestReplaceRuntimeOverridesAtomicRejectsDuplicateRegistryIDs(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertHeartbeatPolicyOverride(ctx, 5000, 3, 6, "before"); err != nil {
+		t.Fatalf("seed heartbeat policy override: %v", err)
+	}
+
+	err = store.ReplaceRuntimeOverrides(ctx, RuntimeOverridesReplaceInput{
+		HeartbeatPolicyOverride: &HeartbeatPolicyOverride{
+			IntervalMS:         7000,
+			WarningAfterMissed: 4,
+			BlockAfterMissed:   8,
+			UpdatedBy:          "restore-op",
+		},
+		EGMRegistryOverrides: []EGMRegistryOverride{
+			{EGMID: "EGM-02", DisplayName: "A"},
+			{EGMID: "EGM-02", DisplayName: "B"},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected duplicate egm_id error")
+	}
+
+	hb, err := store.GetHeartbeatPolicyOverride(ctx)
+	if err != nil {
+		t.Fatalf("get heartbeat policy override after failure: %v", err)
+	}
+	if hb == nil || hb.IntervalMS != 5000 || hb.WarningAfterMissed != 3 || hb.BlockAfterMissed != 6 {
+		t.Fatalf("expected original heartbeat override to remain unchanged, got %+v", hb)
+	}
+}
+
 func TestSessionWorkflowProgressCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")

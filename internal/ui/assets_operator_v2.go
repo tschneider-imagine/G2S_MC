@@ -274,6 +274,20 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="session-package-export-message" class="muted-text">Download one JSON package with current status, preflight, workflow, heartbeat policy, operator audit, and saved capture metadata.</div>
         </div>
+        <div class="first-cabinet-session-actions-wrap">
+          <p class="label">Runtime Override Snapshot</p>
+          <label class="cert-textarea-label">Restore Snapshot JSON
+            <textarea id="runtime-overrides-restore-json" rows="6" placeholder="Paste runtime override snapshot JSON here before restore."></textarea>
+          </label>
+          <div class="setup-actions">
+            <button id="runtime-overrides-save-snapshot-button" type="button" class="secondary-button">Save Runtime Snapshot</button>
+            <label class="runtime-overrides-upload-label">Upload Snapshot JSON
+              <input id="runtime-overrides-restore-file" type="file" accept=".json,application/json">
+            </label>
+            <button id="runtime-overrides-restore-button" type="button">Restore Runtime Snapshot</button>
+          </div>
+          <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, blocker policy, and EGM registry overrides.</div>
+        </div>
       </div>
 
       <div class="panel evidence-capture-panel">
@@ -2042,6 +2056,22 @@ th {
   margin-top: 16px;
 }
 
+.runtime-overrides-upload-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.runtime-overrides-upload-label input[type="file"] {
+  max-inline-size: 240px;
+}
+
 .secondary-button {
   background: #fff;
   color: var(--ink);
@@ -2501,6 +2531,8 @@ const dashboardJS = `const endpoints = {
   certificates: "/api/certificates",
   operatorAudit: "/api/operator-audit",
   sessionPackageExport: "/api/session-package/export",
+  runtimeOverridesSnapshot: "/api/runtime-overrides/snapshot",
+  runtimeOverridesRestore: "/api/runtime-overrides/restore",
   sessionEvidence: "/api/session-evidence?limit=20",
   sessionEvidenceExportAll: "/api/session-evidence/export-all",
   sessionWorkflow: "/api/session-workflow",
@@ -4531,8 +4563,13 @@ function renderFirstCabinetSession(snapshot) {
   stateBadge.className = "source-pill " + (session.readyForSession ? "source-file" : "source-mixed");
   $("first-cabinet-session-message").textContent = session.message + " Current workflow step: " + workflow.current_step + ". Runbook readiness is separate from mute-path status.";
   $("session-package-export-button").disabled = !snapshot?.status;
+  $("runtime-overrides-save-snapshot-button").disabled = !snapshot?.status;
+  $("runtime-overrides-restore-button").disabled = mutationTokenRequired() && !getSetupToken() && !getCertToken();
   if (!snapshot?.status) {
     $("session-package-export-message").textContent = "Session package export waits for a status snapshot.";
+    $("runtime-overrides-message").textContent = "Runtime snapshot/restore waits for a status snapshot.";
+  } else if (mutationTokenRequired() && !getSetupToken() && !getCertToken()) {
+    $("runtime-overrides-message").textContent = "Enter a setup or certificate API token before restoring runtime overrides.";
   }
 
   $("first-cabinet-overall").textContent = session.overallState;
@@ -5007,6 +5044,103 @@ function exportSessionPackage() {
       $("session-package-export-message").textContent = err && err.message ? err.message : "Session package export failed.";
       setAlert("warning", "Session package export failed", "Unable to export session package.");
     });
+}
+
+function runtimeOverridesRestoreHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  const token = getSetupToken() || getCertToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+  return withEGMFocusHeader(headers);
+}
+
+function runtimeOverridesSnapshotFilename(payload) {
+  const generatedAt = payload && payload.generated_at ? payload.generated_at : new Date().toISOString();
+  const compact = String(generatedAt).replace(/[:]/g, "").replace(/[.]/g, "-");
+  return "runtime-overrides-snapshot-" + compact + ".json";
+}
+
+function setRuntimeOverridesMessage(text) {
+  $("runtime-overrides-message").textContent = text;
+}
+
+async function saveRuntimeOverridesSnapshot() {
+  setRuntimeOverridesMessage("Generating runtime override snapshot.");
+  try {
+    const response = await fetch(endpoints.runtimeOverridesSnapshot, { cache: "no-store", headers: withEGMFocusHeader({}) });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setRuntimeOverridesMessage("Snapshot failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Runtime snapshot failed", "Unable to generate runtime override snapshot.");
+      return;
+    }
+    const payload = await response.json();
+    const serialized = JSON.stringify(payload, null, 2);
+    $("runtime-overrides-restore-json").value = serialized;
+    downloadTextMaterial(runtimeOverridesSnapshotFilename(payload), serialized);
+    setRuntimeOverridesMessage("Runtime override snapshot downloaded and loaded into restore editor.");
+    setAlert("info", "Runtime snapshot saved", "Runtime override snapshot downloaded.");
+  } catch (err) {
+    setRuntimeOverridesMessage(err && err.message ? err.message : "Snapshot failed.");
+    setAlert("warning", "Runtime snapshot failed", "Unable to generate runtime override snapshot.");
+  }
+}
+
+async function loadRuntimeOverridesRestoreFile(event) {
+  const input = event?.target;
+  const file = input && input.files && input.files[0] ? input.files[0] : null;
+  if (!file) {
+    return;
+  }
+  try {
+    const text = await file.text();
+    $("runtime-overrides-restore-json").value = text;
+    setRuntimeOverridesMessage("Loaded snapshot JSON from file. Review and restore when ready.");
+  } catch (err) {
+    setRuntimeOverridesMessage(err && err.message ? err.message : "Unable to read snapshot file.");
+  }
+}
+
+async function restoreRuntimeOverridesSnapshot() {
+  if (setupActionsRequireToken() && !getSetupToken() && !getCertToken()) {
+    setRuntimeOverridesMessage("Enter a setup or certificate API token before restoring runtime overrides.");
+    return;
+  }
+  const raw = String($("runtime-overrides-restore-json").value || "").trim();
+  if (!raw) {
+    setRuntimeOverridesMessage("Paste or upload a runtime override snapshot JSON payload before restore.");
+    return;
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(raw);
+  } catch (_) {
+    setRuntimeOverridesMessage("Restore payload JSON is invalid.");
+    return;
+  }
+
+  setRuntimeOverridesMessage("Restoring runtime overrides from snapshot payload.");
+  try {
+    const response = await fetch(endpoints.runtimeOverridesRestore, {
+      method: "POST",
+      headers: runtimeOverridesRestoreHeaders(),
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const detail = sanitizeHTTPText(await response.text());
+      setRuntimeOverridesMessage("Restore failed: HTTP " + response.status + (detail ? " " + detail : ""));
+      setAlert("warning", "Runtime restore failed", "Unable to restore runtime override snapshot.");
+      return;
+    }
+    setRuntimeOverridesMessage("Runtime overrides restored. Refreshing operator panels.");
+    setAlert("info", "Runtime overrides restored", "Runtime override snapshot applied.");
+    schedulePoll(0);
+  } catch (err) {
+    setRuntimeOverridesMessage(err && err.message ? err.message : "Restore failed.");
+    setAlert("warning", "Runtime restore failed", "Unable to restore runtime override snapshot.");
+  }
 }
 
 async function deleteSavedSessionEvidence(id) {
@@ -8443,6 +8577,9 @@ function bindControls() {
   $("egm-registry-promote-button").addEventListener("click", promoteSelectedEGMRegistry);
   $("egm-registry-close-button").addEventListener("click", closeEGMRegistryDrawer);
   $("session-package-export-button").addEventListener("click", exportSessionPackage);
+  $("runtime-overrides-save-snapshot-button").addEventListener("click", saveRuntimeOverridesSnapshot);
+  $("runtime-overrides-restore-button").addEventListener("click", restoreRuntimeOverridesSnapshot);
+  $("runtime-overrides-restore-file").addEventListener("change", loadRuntimeOverridesRestoreFile);
   $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
   $("workflow-progress-clear-button").addEventListener("click", clearSessionWorkflowProgress);
   $("workflow-progress-phase").addEventListener("change", updateWorkflowProgressDirtyState);

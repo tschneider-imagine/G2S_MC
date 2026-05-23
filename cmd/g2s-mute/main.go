@@ -179,6 +179,15 @@ func main() {
 		StartedAt:        startedAt,
 		SimulatedTrigger: *simulateTrigger,
 	}))
+	mux.HandleFunc("/api/runtime-overrides/snapshot", runtimeOverridesSnapshotHandler(auditStore, cfg))
+	mux.HandleFunc(
+		"/api/runtime-overrides/restore",
+		requireMutationAuthForMethods(
+			runtimeOverridesRestoreHandler(eng, auditStore, cfg),
+			cfg,
+			http.MethodPost,
+		),
+	)
 	mux.HandleFunc(
 		"/api/session-evidence/",
 		requireMutationAuthForMethods(

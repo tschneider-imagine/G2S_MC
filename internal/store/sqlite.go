@@ -77,6 +77,13 @@ type EndpointIntegrityAlertState struct {
 	UpdatedBy    string
 }
 
+type RuntimeOverridesReplaceInput struct {
+	CabinetProfileOverride  *CabinetProfileOverride
+	HeartbeatPolicyOverride *HeartbeatPolicyOverride
+	BlockerPolicyOverride   *BlockerPolicyOverride
+	EGMRegistryOverrides    []EGMRegistryOverride
+}
+
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
 	if path == "" {
 		return nil, fmt.Errorf("database path is required")
@@ -834,6 +841,157 @@ func (s *SQLiteStore) UpsertBlockerPolicyOverrideWithMeta(ctx context.Context, a
 func (s *SQLiteStore) ClearBlockerPolicyOverride(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM blocker_policy_overrides WHERE id = 1`)
 	return err
+}
+
+func (s *SQLiteStore) ReplaceRuntimeOverrides(ctx context.Context, input RuntimeOverridesReplaceInput) error {
+	seenRegistryIDs := map[string]struct{}{}
+	for i, row := range input.EGMRegistryOverrides {
+		id := strings.TrimSpace(row.EGMID)
+		if id == "" {
+			return fmt.Errorf("egm_registry_overrides[%d].egm_id is required", i)
+		}
+		if _, exists := seenRegistryIDs[id]; exists {
+			return fmt.Errorf("egm_registry_overrides[%d].egm_id %q is duplicated", i, id)
+		}
+		seenRegistryIDs[id] = struct{}{}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if input.CabinetProfileOverride == nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM cabinet_profile_overrides WHERE id = 1`); err != nil {
+			return err
+		}
+	} else {
+		requiredSANDNSJSON, err := encodeJSONStringSlice(input.CabinetProfileOverride.Profile.RequiredSANDNS)
+		if err != nil {
+			return err
+		}
+		requiredSANIPsJSON, err := encodeJSONStringSlice(input.CabinetProfileOverride.Profile.RequiredSANIPs)
+		if err != nil {
+			return err
+		}
+		firstTestEGMIDsJSON, err := encodeJSONStringSlice(input.CabinetProfileOverride.Profile.FirstTestEGMIDs)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO cabinet_profile_overrides (
+			    id, wire_host_url, listener_dns_name, listener_ip, required_san_dns_json,
+			    required_san_ips_json, host_id, first_test_egm_ids_json, updated_at, updated_by
+			 ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			    wire_host_url = excluded.wire_host_url,
+			    listener_dns_name = excluded.listener_dns_name,
+			    listener_ip = excluded.listener_ip,
+			    required_san_dns_json = excluded.required_san_dns_json,
+			    required_san_ips_json = excluded.required_san_ips_json,
+			    host_id = excluded.host_id,
+			    first_test_egm_ids_json = excluded.first_test_egm_ids_json,
+			    updated_at = CURRENT_TIMESTAMP,
+			    updated_by = excluded.updated_by`,
+			strings.TrimSpace(input.CabinetProfileOverride.Profile.WireHostURL),
+			strings.TrimSpace(input.CabinetProfileOverride.Profile.ListenerDNSName),
+			strings.TrimSpace(input.CabinetProfileOverride.Profile.ListenerIP),
+			requiredSANDNSJSON,
+			requiredSANIPsJSON,
+			strings.TrimSpace(input.CabinetProfileOverride.Profile.HostID),
+			firstTestEGMIDsJSON,
+			strings.TrimSpace(input.CabinetProfileOverride.UpdatedBy),
+		); err != nil {
+			return err
+		}
+	}
+
+	if input.HeartbeatPolicyOverride == nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM heartbeat_policy_overrides WHERE id = 1`); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO heartbeat_policy_overrides (
+			    id, interval_ms, warning_after_missed, block_after_missed, updated_at, updated_by
+			 ) VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			    interval_ms = excluded.interval_ms,
+			    warning_after_missed = excluded.warning_after_missed,
+			    block_after_missed = excluded.block_after_missed,
+			    updated_at = CURRENT_TIMESTAMP,
+			    updated_by = excluded.updated_by`,
+			input.HeartbeatPolicyOverride.IntervalMS,
+			input.HeartbeatPolicyOverride.WarningAfterMissed,
+			input.HeartbeatPolicyOverride.BlockAfterMissed,
+			strings.TrimSpace(input.HeartbeatPolicyOverride.UpdatedBy),
+		); err != nil {
+			return err
+		}
+	}
+
+	if input.BlockerPolicyOverride == nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM blocker_policy_overrides WHERE id = 1`); err != nil {
+			return err
+		}
+	} else {
+		approvedJSON, err := encodeJSONStringSlice(input.BlockerPolicyOverride.ApprovedBlockerIDs)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO blocker_policy_overrides (
+			    id, approved_blocker_ids_json, updated_at, updated_by, last_change_action, last_change_rationale, last_change_actor_scope
+			 ) VALUES (1, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			    approved_blocker_ids_json = excluded.approved_blocker_ids_json,
+			    updated_at = CURRENT_TIMESTAMP,
+			    updated_by = excluded.updated_by,
+			    last_change_action = excluded.last_change_action,
+			    last_change_rationale = excluded.last_change_rationale,
+			    last_change_actor_scope = excluded.last_change_actor_scope`,
+			approvedJSON,
+			strings.TrimSpace(input.BlockerPolicyOverride.UpdatedBy),
+			strings.TrimSpace(input.BlockerPolicyOverride.LastChangeAction),
+			strings.TrimSpace(input.BlockerPolicyOverride.LastChangeRationale),
+			strings.TrimSpace(input.BlockerPolicyOverride.LastChangeActorScope),
+		); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM egm_registry_overrides`); err != nil {
+		return err
+	}
+	for _, row := range input.EGMRegistryOverrides {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO egm_registry_overrides (
+			    egm_id, display_name, vendor, cabinet_family, game_title, software_version, notes, updated_at, updated_by
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+			strings.TrimSpace(row.EGMID),
+			strings.TrimSpace(row.DisplayName),
+			strings.TrimSpace(row.Vendor),
+			strings.TrimSpace(row.CabinetFamily),
+			strings.TrimSpace(row.GameTitle),
+			strings.TrimSpace(row.SoftwareVersion),
+			strings.TrimSpace(row.Notes),
+			strings.TrimSpace(row.UpdatedBy),
+		); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *SQLiteStore) RecordBlockerPolicyEscalationEvent(ctx context.Context, event BlockerPolicyEscalationEvent) (int64, error) {
