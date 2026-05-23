@@ -17,6 +17,11 @@ const dashboardHTML = `<!doctype html>
     <div class="top-actions">
       <span id="last-refresh">Waiting for telemetry</span>
       <span id="stale-badge" class="stale-badge stale-critical">No successful snapshot</span>
+      <div id="api-connection-indicator" class="api-connection-indicator api-connection-disconnected">
+        <strong id="api-connection-state">disconnected</strong>
+        <span id="api-connection-last-success">last success: never</span>
+        <span id="api-connection-last-error">last error: none</span>
+      </div>
       <button id="refresh-button" type="button">Refresh</button>
     </div>
   </header>
@@ -924,6 +929,36 @@ body.console-degraded .topbar {
   gap: 10px;
   color: var(--muted);
   font-size: 14px;
+}
+
+.api-connection-indicator {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+}
+
+.api-connection-indicator strong {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.api-connection-connected {
+  border-color: #6fb28a;
+  background: #edf9f1;
+  color: #1f6d40;
+}
+
+.api-connection-disconnected {
+  border-color: #d9aaaa;
+  background: #fdf0ef;
+  color: #862d29;
 }
 
 button {
@@ -2606,6 +2641,7 @@ const compactModeStorageKey = "g2s.dashboard.compact_mode";
 const clientState = {
   lastGoodStatus: null,
   lastGoodAt: 0,
+  lastStatusPollAt: 0,
   lastError: "",
   inFlight: false,
   pollIntervalMs: 3000,
@@ -8554,6 +8590,33 @@ function updateRefreshText(ok) {
   $("last-refresh").textContent = "Last poll issue: " + (clientState.lastError || "unknown");
 }
 
+function updateAPIConnectionIndicator(connected) {
+  const indicator = $("api-connection-indicator");
+  const state = $("api-connection-state");
+  const lastSuccess = $("api-connection-last-success");
+  const lastError = $("api-connection-last-error");
+  indicator.className = "api-connection-indicator " + (connected ? "api-connection-connected" : "api-connection-disconnected");
+  state.textContent = connected ? "connected" : "disconnected";
+  lastSuccess.textContent = clientState.lastStatusPollAt
+    ? ("last success: " + new Date(clientState.lastStatusPollAt).toLocaleTimeString())
+    : "last success: never";
+  lastError.textContent = clientState.lastError
+    ? ("last error: " + clientState.lastError)
+    : "last error: none";
+}
+
+function settledFailureSummary(label, result) {
+  if (!result || result.status !== "rejected") return "";
+  const reason = result.reason;
+  const detail = reason && reason.message
+    ? String(reason.message).trim()
+    : String(reason || "").trim();
+  if (!detail) {
+    return label + " unavailable";
+  }
+  return label + " unavailable: " + detail;
+}
+
 function showAPIFailureBanner(summary) {
   const banner = $("api-failure-banner");
   banner.classList.remove("api-banner-hidden");
@@ -8605,8 +8668,9 @@ async function pollOnce() {
     if (statusResult.status === "fulfilled") {
       snapshot.status = statusResult.value;
       statusOK = true;
+      clientState.lastStatusPollAt = Date.now();
     } else {
-      failures.push("status unavailable");
+      failures.push(settledFailureSummary("status", statusResult));
     }
 
     if (readyzResult.status === "fulfilled") {
@@ -8619,7 +8683,7 @@ async function pollOnce() {
         overall: "DEGRADED",
         issues: ["readyz unavailable"]
       };
-      failures.push("readyz unavailable");
+      failures.push(settledFailureSummary("readyz", readyzResult));
     }
 
     if (incidentsResult.status === "fulfilled") snapshot.incidents = incidentsResult.value;
@@ -8641,24 +8705,27 @@ async function pollOnce() {
     if (endpointIntegrityAlertsResult.status === "fulfilled") snapshot.endpointIntegrityAlerts = normalizeEndpointIntegrityAlertsResponse(endpointIntegrityAlertsResult.value);
     if (runtimeOverridePresetsResult.status === "fulfilled") snapshot.runtimeOverridePresets = normalizeRuntimeOverridePresetListResponse(runtimeOverridePresetsResult.value);
 
-    if (incidentsResult.status !== "fulfilled") failures.push("incidents unavailable");
-    if (egmHistoryResult.status !== "fulfilled") failures.push("egm history unavailable");
-    if (egmRegistryResult.status !== "fulfilled") failures.push("egm registry unavailable");
-    if (stateHistoryResult.status !== "fulfilled") failures.push("state history unavailable");
-    if (runMarkersResult.status !== "fulfilled") failures.push("run markers unavailable");
-    if (operatorDrillResult.status !== "fulfilled") failures.push("operator drill unavailable");
-    if (certificatesResult.status !== "fulfilled") failures.push("certificates unavailable");
-    if (operatorAuditResult.status !== "fulfilled") failures.push("operator audit unavailable");
-    if (sessionEvidenceResult.status !== "fulfilled") failures.push("session evidence unavailable");
-    if (sessionWorkflowResult.status !== "fulfilled") failures.push("session workflow unavailable");
-    if (cabinetProfileResult.status !== "fulfilled") failures.push("cabinet profile unavailable");
-    if (cabinetProfileSuggestionsResult.status !== "fulfilled") failures.push("cabinet profile suggestions unavailable");
-    if (heartbeatPolicyResult.status !== "fulfilled") failures.push("heartbeat policy unavailable");
-    if (blockerPolicyResult.status !== "fulfilled") failures.push("blocker policy unavailable");
-    if (blockerPolicySuggestionsResult.status !== "fulfilled") failures.push("blocker policy suggestions unavailable");
-    if (cabinetPreflightResult.status !== "fulfilled") failures.push("cabinet preflight unavailable");
-    if (endpointIntegrityAlertsResult.status !== "fulfilled") failures.push("endpoint integrity alerts unavailable");
-    if (runtimeOverridePresetsResult.status !== "fulfilled") failures.push("runtime override presets unavailable");
+    const settledFailures = [
+      settledFailureSummary("incidents", incidentsResult),
+      settledFailureSummary("egm history", egmHistoryResult),
+      settledFailureSummary("egm registry", egmRegistryResult),
+      settledFailureSummary("state history", stateHistoryResult),
+      settledFailureSummary("run markers", runMarkersResult),
+      settledFailureSummary("operator drill", operatorDrillResult),
+      settledFailureSummary("certificates", certificatesResult),
+      settledFailureSummary("operator audit", operatorAuditResult),
+      settledFailureSummary("session evidence", sessionEvidenceResult),
+      settledFailureSummary("session workflow", sessionWorkflowResult),
+      settledFailureSummary("cabinet profile", cabinetProfileResult),
+      settledFailureSummary("cabinet profile suggestions", cabinetProfileSuggestionsResult),
+      settledFailureSummary("heartbeat policy", heartbeatPolicyResult),
+      settledFailureSummary("blocker policy", blockerPolicyResult),
+      settledFailureSummary("blocker policy suggestions", blockerPolicySuggestionsResult),
+      settledFailureSummary("cabinet preflight", cabinetPreflightResult),
+      settledFailureSummary("endpoint integrity alerts", endpointIntegrityAlertsResult),
+      settledFailureSummary("runtime override presets", runtimeOverridePresetsResult)
+    ].filter(Boolean);
+    failures.push(...settledFailures);
 
     clientState.displaySnapshot = snapshot;
     renderStatus(snapshot);
@@ -8676,11 +8743,13 @@ async function pollOnce() {
       clientState.lastError = "";
       resetBackoff();
       updateRefreshText(true);
+      updateAPIConnectionIndicator(true);
       updateStaleBadge();
       schedulePoll(clientState.pollIntervalMs);
     } else {
-      clientState.lastError = failures.join("; ");
+      clientState.lastError = failures.filter(Boolean).join("; ");
       updateRefreshText(false);
+      updateAPIConnectionIndicator(statusOK);
       updateStaleBadge();
       schedulePoll(nextBackoffMs());
     }
@@ -8693,6 +8762,7 @@ async function pollOnce() {
       renderAlerts(clientState.displaySnapshot);
     }
     updateRefreshText(false);
+    updateAPIConnectionIndicator(false);
     updateStaleBadge();
     schedulePoll(nextBackoffMs());
   } finally {
@@ -9101,6 +9171,7 @@ bindControls();
 renderGlobalViewControls();
 updateSortLabels();
 updateStaleBadge();
+updateAPIConnectionIndicator(false);
 renderEGMFocusControl(emptySnapshot());
 renderEGMGroupedSummary(emptySnapshot());
 renderSelectedEGMDetail(emptySnapshot());

@@ -140,6 +140,18 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"operator-alert\"") {
 		t.Fatalf("expected operator alert strip")
 	}
+	if !strings.Contains(rr.Body.String(), "id=\"api-connection-indicator\"") {
+		t.Fatalf("expected api connection indicator")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"api-connection-state\"") {
+		t.Fatalf("expected api connection state marker")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"api-connection-last-success\"") {
+		t.Fatalf("expected api connection last success marker")
+	}
+	if !strings.Contains(rr.Body.String(), "id=\"api-connection-last-error\"") {
+		t.Fatalf("expected api connection last error marker")
+	}
 	if !strings.Contains(rr.Body.String(), "Operator Actions") {
 		t.Fatalf("expected operator actions bar")
 	}
@@ -611,6 +623,42 @@ func TestDashboardTelemetryReadinessFocusMarkers(t *testing.T) {
 		"Selected EGM not active; global telemetry is healthy.",
 		"Selected EGM not active: ",
 		"Recent EGM telemetry observed across ",
+	} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("dashboard.js missing marker %q", marker)
+		}
+	}
+}
+
+func TestDashboardJSUsesRelativeAPIPaths(t *testing.T) {
+	server, err := NewServer()
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/static/dashboard.js", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	body := rr.Body.String()
+	if strings.Contains(body, "127.0.0.1") || strings.Contains(body, "localhost") {
+		t.Fatalf("dashboard.js should not contain hardcoded loopback hosts")
+	}
+	for _, marker := range []string{
+		`status: "/api/status"`,
+		`readyz: "/readyz"`,
+		`cabinetPreflight: "/api/cabinet-preflight"`,
+		"fetchJSON(endpoints.status)",
+		"fetchJSON(endpoints.cabinetPreflight)",
+		"fetchReadyz()",
+		"api-connection-indicator",
+		"updateAPIConnectionIndicator",
+		"settledFailureSummary",
 	} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("dashboard.js missing marker %q", marker)
