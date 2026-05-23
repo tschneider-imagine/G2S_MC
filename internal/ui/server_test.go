@@ -116,9 +116,12 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	for _, marker := range []string{
 		"Overview",
 		"EGMs",
+		"EGM Traffic",
 		"Cabinet Signal",
+		"Cabinet Signal Monitor",
 		"Certificates",
 		"Evidence",
+		"Evidence Capture",
 		"Settings",
 		"Diagnostics",
 		"id=\"dashboard-tab-menu\"",
@@ -132,12 +135,27 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 		}
 	}
 	for _, legacy := range []string{
+		"System Check Rules",
 		"Blocker Governance",
 		"First Cabinet Session",
 		"Operator Readiness Model",
 		"Runbook Readiness",
 		"Session Evidence Capture",
 		"Session Complete",
+		"Current workflow step",
+		"Cabinet prep can continue",
+		"Escalation History",
+		"Escalation Rationale",
+		"Approve Selected Finding",
+		"Revoke Selected Finding",
+		"approve stop condition",
+		"revoke stop condition",
+		"escalation history",
+		"rationale",
+		"Ready Now",
+		"Needs Operator Action",
+		"Lab Warning",
+		"Informational",
 	} {
 		if strings.Contains(rr.Body.String(), legacy) {
 			t.Fatalf("expected legacy label to be removed from main html: %q", legacy)
@@ -199,9 +217,6 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"operator-actions-export-package-button\"") {
 		t.Fatalf("expected operator actions export package button")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"operator-actions-blocker-governance-button\"") {
-		t.Fatalf("expected operator actions system check rules button")
 	}
 	if !strings.Contains(rr.Body.String(), "Global View Controls") {
 		t.Fatalf("expected global view controls panel")
@@ -320,9 +335,6 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "panel-scroll-safe-history") {
 		t.Fatalf("expected scroll-safe history wrapper")
 	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-governance-anchor\"") {
-		t.Fatalf("expected blocker governance anchor marker")
-	}
 	if !strings.Contains(rr.Body.String(), "Cabinet Run Timeline") {
 		t.Fatalf("expected cabinet run timeline panel")
 	}
@@ -386,45 +398,6 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"heartbeat-policy-block-after-missed\"") {
 		t.Fatalf("expected heartbeat policy blocker threshold input")
 	}
-	if !strings.Contains(rr.Body.String(), "System Check Rules") {
-		t.Fatalf("expected system check rules panel")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-form\"") {
-		t.Fatalf("expected blocker governance form")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-approved-ids\"") {
-		t.Fatalf("expected blocker governance approved ids input")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-save-button\"") {
-		t.Fatalf("expected blocker governance save action")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-clear-button\"") {
-		t.Fatalf("expected blocker governance clear action")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-active-blockers\"") {
-		t.Fatalf("expected blocker governance active blockers list")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-downgraded-list\"") {
-		t.Fatalf("expected blocker governance downgraded findings list")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-finding-id\"") {
-		t.Fatalf("expected blocker governance finding id input")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-rationale\"") {
-		t.Fatalf("expected blocker governance rationale input")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-approve-button\"") {
-		t.Fatalf("expected blocker governance approve action")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-revoke-button\"") {
-		t.Fatalf("expected blocker governance revoke action")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-suggestions-list\"") {
-		t.Fatalf("expected blocker governance suggestions list")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"blocker-policy-history-list\"") {
-		t.Fatalf("expected blocker governance history list")
-	}
 	if !strings.Contains(rr.Body.String(), "data-timeline-filter=\"heartbeat\"") {
 		t.Fatalf("expected heartbeat timeline filter")
 	}
@@ -433,9 +406,6 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"egm-history-grouping\"") {
 		t.Fatalf("expected egm history grouping marker")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"first-cabinet-session-workflow\"") {
-		t.Fatalf("expected first cabinet session workflow marker")
 	}
 	if !strings.Contains(rr.Body.String(), "Workflow Progress") {
 		t.Fatalf("expected workflow progress section")
@@ -460,9 +430,6 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"session-package-export-message\"") {
 		t.Fatalf("expected session package export message marker")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"operator-readiness-model\"") {
-		t.Fatalf("expected operator readiness model marker")
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"next-operator-actions\"") {
 		t.Fatalf("expected next operator actions marker")
@@ -614,7 +581,7 @@ func TestDashboardAssets(t *testing.T) {
 		}
 		body := rr.Body.String()
 		if path == "/static/dashboard.js" {
-			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "compactModeStorageKey", "globalSeverityFilter", "globalTextFilter", "compactMode", "normalizeGlobalSeverityFilter", "setGlobalSeverityFilter", "setGlobalTextFilter", "setCompactMode", "renderGlobalViewControls", "refreshGlobalFilteredViews", "operator-actions-refresh-button", "operator-actions-capture-evidence-button", "operator-actions-export-package-button", "operator-actions-blocker-governance-button", "global-severity-filter", "global-text-filter", "global-compact-mode-toggle", "g2s.dashboard.compact_mode", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "useObservedEGMSuggestions", "normalizeCabinetProfileSuggestions", "renderCabinetProfileSuggestions", "observed_egm_ids", "recommended_first_test_egm_ids", "cabinetProfileSuggestions", "sessionWorkflow", "normalizeSessionWorkflowProgress", "renderSessionWorkflowProgress", "saveSessionWorkflowProgress", "clearSessionWorkflowProgress", "workflow-progress-save-button", "workflow-progress-unsaved", "Authorization", "cabinetProfile", "heartbeatPolicy", "saveHeartbeatPolicyOverride", "clearHeartbeatPolicyOverride", "reloadHeartbeatPolicyForm", "currentHeartbeatPolicy", "blockerPolicy", "blockerPolicySuggestions", "blockerPolicyApprove", "blockerPolicyRevoke", "renderBlockerGovernance", "normalizeBlockerPolicyResponse", "normalizeBlockerPolicySuggestions", "normalizeBlockerPolicyEscalationHistory", "approveSelectedBlockerFinding", "revokeSelectedBlockerFinding", "sendBlockerPolicyEscalationAction", "saveBlockerPolicyOverride", "clearBlockerPolicyOverride", "reloadBlockerPolicyForm", "blocker-policy-approved-ids", "blocker-policy-finding-id", "blocker-policy-rationale", "blocker-policy-approve-button", "blocker-policy-revoke-button", "blocker-policy-suggestions-list", "blocker-policy-history-list", "blocker-policy-save-button", "blocker-policy-clear-button", "blocker-policy-downgraded-list", "approved_blocker_ids", "downgraded_findings", "DOWNGRADED_BY_POLICY_RULES", "escalation_history", "finding_id", "rationale", "downgraded_by_policy", "runWindowIsActive", "operatorAudit", "operatorAuditEndpointURL", "normalizeOperatorAuditEvents", "renderOperatorAuditTimeline", "operatorAuditActionFilter", "operatorAuditResultFilter", "operatorAuditSearchFilter", "operator-audit-action-filter", "operator-audit-result-filter", "operator-audit-search-filter", "operator-audit-list", "operator-audit-summary", "operator-audit-entry", "sessionPackageExport", "exportSessionPackage", "session-package-export-button", "session-package-export-message", "/api/session-package/export", "runtimeOverridesSnapshot", "runtimeOverridesRestore", "runtimeOverridePresets", "runtimeOverridePresetSave", "runtimeOverridePresetLoad", "normalizeRuntimeOverridePresetListResponse", "runtimeOverridePresetsFromSnapshot", "renderRuntimePresetLibrary", "saveCurrentRuntimePreset", "loadRuntimePresetByName", "deleteRuntimePresetByName", "reloadRuntimePresetList", "setRuntimePresetMessage", "saveRuntimeOverridesSnapshot", "restoreRuntimeOverridesSnapshot", "loadRuntimeOverridesRestoreFile", "runtimeOverridesRestoreHeaders", "runtime-overrides-save-snapshot-button", "runtime-overrides-restore-button", "runtime-overrides-restore-json", "runtime-overrides-restore-file", "runtime-overrides-message", "runtime-preset-name", "runtime-preset-note", "runtime-preset-save-button", "runtime-preset-refresh-button", "runtime-presets-list", "runtime-preset-message", "runtime-preset-action-button", "data-runtime-preset-action", "/api/runtime-overrides/snapshot", "/api/runtime-overrides/restore", "/api/runtime-overrides/presets", "/api/runtime-overrides/presets/save", "/api/runtime-overrides/presets/load", "egmRegistry", "egmRegistryPromoteBulk", "egmRegistryApplyToCabinetProfile", "normalizeEGMRegistryResponse", "egmRegistryOverridesFromSnapshot", "selectedEGMBulkIDSet", "selectedEGMBulkIDs", "setAllVisibleEGMBulkSelection", "promoteSelectedEGMBulk", "applySelectedToCabinetProfileFirstTest", "renderEGMBulkSelectionSummary", "egm-select-all-visible-button", "egm-clear-selection-button", "egm-bulk-promote-button", "egm-bulk-apply-profile-button", "egm-select-all-checkbox", "egm-row-select-checkbox", "egm-bulk-selection-summary", "egm-bulk-action-message", "renderEGMRegistryDrawer", "saveSelectedEGMRegistry", "promoteSelectedEGMRegistry", "deleteSelectedEGMRegistryOverride", "egm-registry-drawer", "egm-registry-form", "egm-row-action-button", "data-egm-action", "/api/egm-registry", "/api/egm-registry/promote", "/api/egm-registry/promote-bulk", "/api/egm-registry/apply-to-cabinet-profile", "endpointIntegrityAlerts", "normalizeEndpointIntegrityAlertsResponse", "endpointIntegrityAlertSections", "postEndpointIntegrityAlertAction", "handleEndpointIntegrityAlertActionFromUI", "reloadEndpointIntegrityAlerts", "endpoint_collision_summary", "endpoint_collisions", "endpoint_collision_warning", "endpoint_collision_types", "renderEndpointIntegrity", "endpointCollisionTypeLabel", "normalizeEndpointCollisionRows", "endpoint-integrity-filter-button", "endpoint-integrity-refresh-button", "endpoint-integrity-custom-minutes", "endpoint-integrity-acked-list", "endpoint-integrity-snoozed-list", "data-endpoint-alert-action", "acked_at", "snoozed_until", "endpoint_integrity", "X-EGM-Focus", "certificateBackups", "certificateRestore", "certificatePreview", "certificateImport", "certificateExport", "loadCertificateBackups", "normalizeCertificateBackups", "renderCertificateBackupHistory", "restoreCertificateBackup", "certBackupsByRole", "cert-backup-list", "cert-backup-refresh-button", "cert-restore-backup-button", "previewCertificateMaterial", "normalizeCertificatePreview", "renderCertificatePreview", "certPreviewFingerprint", "certPreviewResult", "cert-preview-button", "cert-preview-summary", "cert-preview-list", "Run Preview before importing certificate material.", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "validateCertificateManagerForm", "certificateRoleRulesText", "cert-role-export-policy", "allow_private_key_export", "cabinetPreflight", "renderFirstCabinetSession", "buildOperatorReadinessModel", "renderOperatorReadinessModel", "buildMutePathStatus", "renderMutePathStatus", "preflightCheckByID", "lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER", "Replace placeholder first-test EGM IDs before real cabinet deployment", "selectedEGMDetailForSnapshot", "renderSelectedEGMDetail", "live_signal", "live_signal_detail", "last_endpoint_ip", "last_endpoint_port", "last_endpoint_seen_at", "endpoint_drift_warning", "endpoint_drift_ips", "recent_endpoints", "endpoint_warning_text", "Recent Endpoints (newest first)", "first-cabinet-session-state", "mute_path", "runbook_readiness", "mute_path_note", "trusted_mutation_bypass_active", "mutationTokenRequired", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "heartbeat_summary", "heartbeatEventTypes", "isHeartbeatEventType", "heartbeatSummary", "egmHistoryEndpointURL", "rollup_heartbeat", "timelineRollupHeartbeat", "timelineShowRawHeartbeat", "historyRowIsKeepAliveRollup", "heartbeat_rollup_count", "heartbeat_rollup_first_seen_at", "heartbeat_rollup_last_seen_at", "timeline-rollup-heartbeat-toggle", "timeline-show-raw-heartbeat-toggle", "timeline-heartbeat-mode-label", "operatorDrillEvidence", "operator_drill", "renderHeartbeatSummary", "run_markers", "session-evidence-state", "action_model", "next_operator_actions", "selected_egm_detail", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "viewSavedSessionEvidence", "exportSavedSessionEvidenceJSON", "exportSavedSessionEvidenceMarkdown", "exportAllSavedSessionEvidence", "sessionEvidenceExportAll", "deleteSavedSessionEvidence", "window.confirm", "/api/session-evidence/", "session-evidence-export-all-button", "session-evidence-selected", "buildCabinetRunTimeline", "renderCabinetRunTimeline", "timeline-filter-tab", "timeline-count", "timeline-filter-label", "timelineEntryHTML", "renderGroupedTimelineAll", "runMarkers", "run-marker-start-button", "submitRunMarker", "renderRunMarkerControls", "operatorDrill", "renderOperatorDrill", "submitOperatorDrillAction", "operator-drill-comms-online-button", "operator-drill-pause-button", "boundedRunReport", "buildRunReportMarkdown", "run-report-start-marker", "run-report-end-marker", "renderRunReportControls", "exportRunReportJSON", "exportRunReportMarkdown", "sessionEvidence", "egmSourcePill", "data-egm-source=\\\"discovered\\\"", "renderEGMFocusControl", "renderEGMGroupedSummary", "buildEGMGroupedSummaryRows", "renderEGMHistory", "buildCabinetSessionWorkflow", "setEGMFocus", "egmFocusID", "egm_focus", "grouped_summary_scope", "egm_grouped_summary"} {
+			for _, marker := range []string{"lastGoodStatus", "lastGoodAt", "inFlight", "pollIntervalMs", "nextBackoffMs", "compactModeStorageKey", "globalSeverityFilter", "globalTextFilter", "compactMode", "normalizeGlobalSeverityFilter", "setGlobalSeverityFilter", "setGlobalTextFilter", "setCompactMode", "renderGlobalViewControls", "refreshGlobalFilteredViews", "operator-actions-refresh-button", "operator-actions-capture-evidence-button", "operator-actions-export-package-button", "global-severity-filter", "global-text-filter", "global-compact-mode-toggle", "g2s.dashboard.compact_mode", "renderAlerts", "fetchReadyz", "readyz unavailable", "showAPIFailureBanner", "(asc)", "renderCabinetProfile", "profile_source", "saveCabinetProfileOverride", "clearCabinetProfileOverride", "copySetupTokenToClipboard", "useObservedEGMSuggestions", "normalizeCabinetProfileSuggestions", "renderCabinetProfileSuggestions", "observed_egm_ids", "recommended_first_test_egm_ids", "cabinetProfileSuggestions", "sessionWorkflow", "normalizeSessionWorkflowProgress", "renderSessionWorkflowProgress", "saveSessionWorkflowProgress", "clearSessionWorkflowProgress", "workflow-progress-save-button", "workflow-progress-unsaved", "Authorization", "cabinetProfile", "heartbeatPolicy", "saveHeartbeatPolicyOverride", "clearHeartbeatPolicyOverride", "reloadHeartbeatPolicyForm", "currentHeartbeatPolicy", "runWindowIsActive", "operatorAudit", "operatorAuditEndpointURL", "normalizeOperatorAuditEvents", "renderOperatorAuditTimeline", "operatorAuditActionFilter", "operatorAuditResultFilter", "operatorAuditSearchFilter", "operator-audit-action-filter", "operator-audit-result-filter", "operator-audit-search-filter", "operator-audit-list", "operator-audit-summary", "operator-audit-entry", "sessionPackageExport", "exportSessionPackage", "session-package-export-button", "session-package-export-message", "/api/session-package/export", "runtimeOverridesSnapshot", "runtimeOverridesRestore", "runtimeOverridePresets", "runtimeOverridePresetSave", "runtimeOverridePresetLoad", "normalizeRuntimeOverridePresetListResponse", "runtimeOverridePresetsFromSnapshot", "renderRuntimePresetLibrary", "saveCurrentRuntimePreset", "loadRuntimePresetByName", "deleteRuntimePresetByName", "reloadRuntimePresetList", "setRuntimePresetMessage", "saveRuntimeOverridesSnapshot", "restoreRuntimeOverridesSnapshot", "loadRuntimeOverridesRestoreFile", "runtimeOverridesRestoreHeaders", "runtime-overrides-save-snapshot-button", "runtime-overrides-restore-button", "runtime-overrides-restore-json", "runtime-overrides-restore-file", "runtime-overrides-message", "runtime-preset-name", "runtime-preset-note", "runtime-preset-save-button", "runtime-preset-refresh-button", "runtime-presets-list", "runtime-preset-message", "runtime-preset-action-button", "data-runtime-preset-action", "/api/runtime-overrides/snapshot", "/api/runtime-overrides/restore", "/api/runtime-overrides/presets", "/api/runtime-overrides/presets/save", "/api/runtime-overrides/presets/load", "egmRegistry", "egmRegistryPromoteBulk", "egmRegistryApplyToCabinetProfile", "normalizeEGMRegistryResponse", "egmRegistryOverridesFromSnapshot", "selectedEGMBulkIDSet", "selectedEGMBulkIDs", "setAllVisibleEGMBulkSelection", "promoteSelectedEGMBulk", "applySelectedToCabinetProfileFirstTest", "renderEGMBulkSelectionSummary", "egm-select-all-visible-button", "egm-clear-selection-button", "egm-bulk-promote-button", "egm-bulk-apply-profile-button", "egm-select-all-checkbox", "egm-row-select-checkbox", "egm-bulk-selection-summary", "egm-bulk-action-message", "renderEGMRegistryDrawer", "saveSelectedEGMRegistry", "promoteSelectedEGMRegistry", "deleteSelectedEGMRegistryOverride", "egm-registry-drawer", "egm-registry-form", "egm-row-action-button", "data-egm-action", "/api/egm-registry", "/api/egm-registry/promote", "/api/egm-registry/promote-bulk", "/api/egm-registry/apply-to-cabinet-profile", "endpointIntegrityAlerts", "normalizeEndpointIntegrityAlertsResponse", "endpointIntegrityAlertSections", "postEndpointIntegrityAlertAction", "handleEndpointIntegrityAlertActionFromUI", "reloadEndpointIntegrityAlerts", "endpoint_collision_summary", "endpoint_collisions", "endpoint_collision_warning", "endpoint_collision_types", "renderEndpointIntegrity", "endpointCollisionTypeLabel", "normalizeEndpointCollisionRows", "endpoint-integrity-filter-button", "endpoint-integrity-refresh-button", "endpoint-integrity-custom-minutes", "endpoint-integrity-acked-list", "endpoint-integrity-snoozed-list", "data-endpoint-alert-action", "acked_at", "snoozed_until", "endpoint_integrity", "X-EGM-Focus", "certificateBackups", "certificateRestore", "certificatePreview", "certificateImport", "certificateExport", "loadCertificateBackups", "normalizeCertificateBackups", "renderCertificateBackupHistory", "restoreCertificateBackup", "certBackupsByRole", "cert-backup-list", "cert-backup-refresh-button", "cert-restore-backup-button", "previewCertificateMaterial", "normalizeCertificatePreview", "renderCertificatePreview", "certPreviewFingerprint", "certPreviewResult", "cert-preview-button", "cert-preview-summary", "cert-preview-list", "Run Preview before importing certificate material.", "importCertificateMaterial", "exportCertificateMaterial", "cert-manager-state", "validateCertificateManagerForm", "certificateRoleRulesText", "cert-role-export-policy", "allow_private_key_export", "cabinetPreflight", "renderFirstCabinetSession", "buildOperatorReadinessModel", "renderOperatorReadinessModel", "buildMutePathStatus", "renderMutePathStatus", "preflightCheckByID", "lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER", "Replace placeholder first-test EGM IDs before real cabinet deployment", "selectedEGMDetailForSnapshot", "renderSelectedEGMDetail", "live_signal", "live_signal_detail", "last_endpoint_ip", "last_endpoint_port", "last_endpoint_seen_at", "endpoint_drift_warning", "endpoint_drift_ips", "recent_endpoints", "endpoint_warning_text", "Recent Endpoints (newest first)", "first-cabinet-session-state", "mute_path", "runbook_readiness", "mute_path_note", "trusted_mutation_bypass_active", "mutationTokenRequired", "setup-token-help-text", "cert-token-help-text", "buildSessionEvidence", "buildSessionEvidenceMarkdown", "heartbeat_summary", "heartbeatEventTypes", "isHeartbeatEventType", "heartbeatSummary", "egmHistoryEndpointURL", "rollup_heartbeat", "timelineRollupHeartbeat", "timelineShowRawHeartbeat", "historyRowIsKeepAliveRollup", "heartbeat_rollup_count", "heartbeat_rollup_first_seen_at", "heartbeat_rollup_last_seen_at", "timeline-rollup-heartbeat-toggle", "timeline-show-raw-heartbeat-toggle", "timeline-heartbeat-mode-label", "operatorDrillEvidence", "operator_drill", "renderHeartbeatSummary", "run_markers", "session-evidence-state", "action_model", "next_operator_actions", "selected_egm_detail", "exportSessionEvidenceJSON", "saveSessionEvidenceToHistory", "viewSavedSessionEvidence", "exportSavedSessionEvidenceJSON", "exportSavedSessionEvidenceMarkdown", "exportAllSavedSessionEvidence", "sessionEvidenceExportAll", "deleteSavedSessionEvidence", "window.confirm", "/api/session-evidence/", "session-evidence-export-all-button", "session-evidence-selected", "buildCabinetRunTimeline", "renderCabinetRunTimeline", "timeline-filter-tab", "timeline-count", "timeline-filter-label", "timelineEntryHTML", "renderGroupedTimelineAll", "runMarkers", "run-marker-start-button", "submitRunMarker", "renderRunMarkerControls", "operatorDrill", "renderOperatorDrill", "submitOperatorDrillAction", "operator-drill-comms-online-button", "operator-drill-pause-button", "boundedRunReport", "buildRunReportMarkdown", "run-report-start-marker", "run-report-end-marker", "renderRunReportControls", "exportRunReportJSON", "exportRunReportMarkdown", "sessionEvidence", "egmSourcePill", "data-egm-source=\\\"discovered\\\"", "renderEGMFocusControl", "renderEGMGroupedSummary", "buildEGMGroupedSummaryRows", "renderEGMHistory", "buildCabinetSessionWorkflow", "setEGMFocus", "egmFocusID", "egm_focus", "grouped_summary_scope", "egm_grouped_summary"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}
@@ -747,9 +714,8 @@ func TestDashboardJSSyntaxQuoteRegression(t *testing.T) {
 		}
 	}
 	for _, expected := range []string{
-		`escapeHTML(item.message || "-")`,
-		`escapeHTML((item.action || "-") + " " + (item.finding_id || ""))`,
-		`escapeHTML("at " + fmtTime(item.created_at)`,
+		`escapeHTML(item.message || "")`,
+		`escapeHTML(fmtTime(item.created_at))`,
 		`<span class=\"muted-text\">`,
 	} {
 		if !strings.Contains(body, expected) {
@@ -788,21 +754,36 @@ func TestDashboardTabLayoutMarkers(t *testing.T) {
 		"Cabinet Signal Monitor",
 		"Evidence Capture",
 		"System Status",
+		"EGM Traffic",
+		"Certificates",
 		"Next Action",
 	} {
 		if !strings.Contains(htmlBody, marker) {
 			t.Fatalf("dashboard html missing marker %q", marker)
 		}
 	}
-	if !(strings.Contains(htmlBody, "System Check Rules") || strings.Contains(htmlBody, "Preflight Rules")) {
-		t.Fatalf("expected diagnostics to include system check rules or preflight rules label")
-	}
 	for _, legacy := range []string{
+		"System Check Rules",
 		"Blocker Governance",
 		"Runbook Readiness",
 		"Operator Readiness Model",
 		"First Cabinet Session",
 		"Session Evidence Capture",
+		"Session Complete",
+		"Current workflow step",
+		"Cabinet prep can continue",
+		"Escalation Rationale",
+		"Escalation History",
+		"Approve Selected Finding",
+		"Revoke Selected Finding",
+		"approve stop condition",
+		"revoke stop condition",
+		"escalation history",
+		"rationale",
+		"Ready Now",
+		"Needs Operator Action",
+		"Lab Warning",
+		"Informational",
 	} {
 		if strings.Contains(htmlBody, legacy) {
 			t.Fatalf("expected legacy label removed from dashboard html: %q", legacy)
@@ -831,11 +812,27 @@ func TestDashboardTabLayoutMarkers(t *testing.T) {
 		}
 	}
 	for _, legacy := range []string{
+		"System Check Rules",
 		"Blocker Governance",
 		"Runbook Readiness",
 		"Operator Readiness Model",
 		"First Cabinet Session",
 		"Session Evidence Capture",
+		"Session Complete",
+		"Current workflow step",
+		"Cabinet prep can continue",
+		"Escalation Rationale",
+		"Escalation History",
+		"Approve Selected Finding",
+		"Revoke Selected Finding",
+		"approve stop condition",
+		"revoke stop condition",
+		"escalation history",
+		"rationale",
+		"Ready Now",
+		"Needs Operator Action",
+		"Lab Warning",
+		"Informational",
 	} {
 		if strings.Contains(jsBody, legacy) {
 			t.Fatalf("expected legacy label removed from dashboard.js: %q", legacy)
