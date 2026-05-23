@@ -32,8 +32,8 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !regexp.MustCompile(`/static/dashboard\.js\?v=[0-9a-f]+`).MatchString(rr.Body.String()) {
 		t.Fatalf("expected cache-busted dashboard js url")
 	}
-	if !strings.Contains(rr.Body.String(), "Appliance Readiness") {
-		t.Fatalf("expected appliance readiness panel")
+	if !strings.Contains(rr.Body.String(), "Service Status Details") {
+		t.Fatalf("expected service status details panel")
 	}
 	if !strings.Contains(rr.Body.String(), "Certificate Summary") {
 		t.Fatalf("expected certificate summary panel")
@@ -104,8 +104,8 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"mute-path-state\"") {
 		t.Fatalf("expected mute path state marker")
 	}
-	if !strings.Contains(rr.Body.String(), "id=\"runbook-readiness-state\"") {
-		t.Fatalf("expected runbook readiness state marker")
+	if !strings.Contains(rr.Body.String(), "id=\"system-check-state\"") {
+		t.Fatalf("expected system check state marker")
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"mute-path-prep-status\"") {
 		t.Fatalf("expected cabinet prep status marker")
@@ -159,6 +159,14 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	} {
 		if strings.Contains(rr.Body.String(), legacy) {
 			t.Fatalf("expected legacy label to be removed from main html: %q", legacy)
+		}
+	}
+	if strings.Contains(strings.ToLower(rr.Body.String()), "runbook") {
+		t.Fatalf("expected runbook term removed from dashboard html")
+	}
+	for _, legacy := range []string{"validation detail", "evidence follow-up", "cabinet prep"} {
+		if strings.Contains(strings.ToLower(rr.Body.String()), legacy) {
+			t.Fatalf("expected legacy phrase removed from dashboard html: %q", legacy)
 		}
 	}
 	if !strings.Contains(rr.Body.String(), "id=\"session-evidence-json-button\"") {
@@ -407,24 +415,6 @@ func TestDashboardRouteServesHTML(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "id=\"egm-history-grouping\"") {
 		t.Fatalf("expected egm history grouping marker")
 	}
-	if !strings.Contains(rr.Body.String(), "Workflow Progress") {
-		t.Fatalf("expected workflow progress section")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"workflow-progress-phase\"") {
-		t.Fatalf("expected workflow progress phase control")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"workflow-progress-steps\"") {
-		t.Fatalf("expected workflow progress steps marker")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"workflow-progress-save-button\"") {
-		t.Fatalf("expected workflow progress save action")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"workflow-progress-clear-button\"") {
-		t.Fatalf("expected workflow progress clear action")
-	}
-	if !strings.Contains(rr.Body.String(), "id=\"workflow-progress-unsaved\"") {
-		t.Fatalf("expected workflow progress unsaved marker")
-	}
 	if !strings.Contains(rr.Body.String(), "id=\"session-package-export-button\"") {
 		t.Fatalf("expected session package export action")
 	}
@@ -599,7 +589,7 @@ func TestDashboardAssets(t *testing.T) {
 			}
 		}
 		if path == "/static/dashboard.css" {
-			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "trusted-bypass-hidden", "validation-list", "secondary-button", "operator-toolbar-grid", "operator-actions-bar", "operator-actions-buttons", "global-view-controls-panel", "global-view-controls", "global-compact-toggle", "table-wrap-scroll-safe", "panel-scroll-safe", "panel-scroll-safe-audit", "panel-scroll-safe-history", "panel-scroll-safe-integrity", "anchor-target", "compact-mode", "cert-manager-form", "cert-role-summary", "cert-preview-wrap", "cert-preview-detail", "cert-preview-list", "cert-backup-history", "cert-backup-list", "cert-backup-item", "cert-backup-item-head", "cert-backup-meta", "cert-backup-actions", "operator-audit-filters", "operator-audit-summary", "operator-audit-list", "operator-audit-entry", "operator-audit-head", "operator-audit-meta", "operator-audit-detail", "operator-audit-pill-success", "operator-audit-pill-fail", "endpoint-integrity-panel", "egm-registry-drawer", "egm-registry-drawer-hidden", "egm-row-actions", "egm-bulk-actions", "egm-row-select-cell", "egm-row-select-checkbox", "runtime-overrides-upload-label", "endpoint-integrity-sections", "endpoint-integrity-section", "endpoint-integrity-section-head", "endpoint-integrity-custom-snooze-label", "endpoint-integrity-warning", "endpoint-integrity-warning-head", "endpoint-integrity-warning-meta", "endpoint-integrity-warning-actions", "cert-manager-details", "cert-manager-detail", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers", "first-cabinet-session-workflow", "first-cabinet-session-workflow-step", "first-cabinet-session-workflow-progress-wrap", "workflow-progress-meta", "workflow-progress-unsaved", "workflow-progress-unsaved-dirty", "workflow-progress-steps", "workflow-progress-step", "first-cabinet-session-actions-wrap", "mute-path-status-wrap", "mute-path-summary-grid", "mute-path-status-card", "runbook-readiness-status-card", "operator-action-summary-grid", "operator-readiness-model", "operator-readiness-group", "focus-selected-egm-wrap", "selected-egm-detail", "evidence-capture-panel", "evidence-actions", "session-evidence-history-item", "session-evidence-history-actions", "session-evidence-selected-detail", "timeline-entry", "timeline-entry-head", "timeline-entry-tags", "timeline-group-heading", "timeline-egm-chip", "timeline-scope-global", "timeline-kind", "timeline-kind-marker", "timeline-kind-heartbeat", "cabinet-run-panel", "timeline-toolbar", "timeline-filter-tabs", "timeline-rollup-controls", "timeline-toggle", "run-marker-form", "run-marker-grid", "run-marker-notes-label", "operator-drill-form", "operator-drill-grid", "operator-drill-actions", "run-report-form", "run-report-grid", "run-report-details", "heartbeat-summary-wrap", "heartbeat-summary-grid", "heartbeat-summary-message", "blocker-governance-panel", "blocker-governance-summary", "blocker-governance-list", "blocker-governance-item", "blocker-governance-actions", "egm-source", "egm-source-discovered", "focus-controls", "focus-egm-summary-wrap", "egm-grouped-summary", "egm-focus-panel"} {
+			for _, marker := range []string{"alert-strip", "stale-warning", "stale-critical", "filter-tabs", "summary-blocking", "cert-item", "api-banner", "source-pill", "cabinet-warning", "setup-form", "token-help", "trusted-bypass-hidden", "validation-list", "secondary-button", "operator-toolbar-grid", "operator-actions-bar", "operator-actions-buttons", "global-view-controls-panel", "global-view-controls", "global-compact-toggle", "table-wrap-scroll-safe", "panel-scroll-safe", "panel-scroll-safe-audit", "panel-scroll-safe-history", "panel-scroll-safe-integrity", "anchor-target", "compact-mode", "cert-manager-form", "cert-role-summary", "cert-preview-wrap", "cert-preview-detail", "cert-preview-list", "cert-backup-history", "cert-backup-list", "cert-backup-item", "cert-backup-item-head", "cert-backup-meta", "cert-backup-actions", "operator-audit-filters", "operator-audit-summary", "operator-audit-list", "operator-audit-entry", "operator-audit-head", "operator-audit-meta", "operator-audit-detail", "operator-audit-pill-success", "operator-audit-pill-fail", "endpoint-integrity-panel", "egm-registry-drawer", "egm-registry-drawer-hidden", "egm-row-actions", "egm-bulk-actions", "egm-row-select-cell", "egm-row-select-checkbox", "runtime-overrides-upload-label", "endpoint-integrity-sections", "endpoint-integrity-section", "endpoint-integrity-section-head", "endpoint-integrity-custom-snooze-label", "endpoint-integrity-warning", "endpoint-integrity-warning-head", "endpoint-integrity-warning-meta", "endpoint-integrity-warning-actions", "cert-manager-details", "cert-manager-detail", "cert-impact", "first-cabinet-session-panel", "first-cabinet-session-blockers", "first-cabinet-session-workflow", "first-cabinet-session-workflow-step", "first-cabinet-session-workflow-progress-wrap", "workflow-progress-meta", "workflow-progress-unsaved", "workflow-progress-unsaved-dirty", "workflow-progress-steps", "workflow-progress-step", "first-cabinet-session-actions-wrap", "mute-path-status-wrap", "mute-path-summary-grid", "mute-path-status-card", "system-check-status-card", "operator-action-summary-grid", "operator-readiness-model", "operator-readiness-group", "focus-selected-egm-wrap", "selected-egm-detail", "evidence-capture-panel", "evidence-actions", "session-evidence-history-item", "session-evidence-history-actions", "session-evidence-selected-detail", "timeline-entry", "timeline-entry-head", "timeline-entry-tags", "timeline-group-heading", "timeline-egm-chip", "timeline-scope-global", "timeline-kind", "timeline-kind-marker", "timeline-kind-heartbeat", "cabinet-run-panel", "timeline-toolbar", "timeline-filter-tabs", "timeline-rollup-controls", "timeline-toggle", "run-marker-form", "run-marker-grid", "run-marker-notes-label", "operator-drill-form", "operator-drill-grid", "operator-drill-actions", "run-report-form", "run-report-grid", "run-report-details", "heartbeat-summary-wrap", "heartbeat-summary-grid", "heartbeat-summary-message", "blocker-governance-panel", "blocker-governance-summary", "blocker-governance-list", "blocker-governance-item", "blocker-governance-actions", "egm-source", "egm-source-discovered", "focus-controls", "focus-egm-summary-wrap", "egm-grouped-summary", "egm-focus-panel"} {
 				if !strings.Contains(body, marker) {
 					t.Fatalf("%s missing marker %q", path, marker)
 				}

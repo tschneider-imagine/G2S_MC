@@ -30,7 +30,7 @@ const dashboardHTML = `<!doctype html>
 
   <section id="operator-alert" class="alert-strip alert-info">
     <strong id="alert-title">Waiting for readiness</strong>
-    <span id="alert-detail">The console is collecting first telemetry snapshots.</span>
+    <span id="alert-detail">The console is collecting telemetry snapshots.</span>
   </section>
   <section id="api-failure-banner" class="api-banner api-banner-hidden">
     <strong>API polling issue</strong>
@@ -88,7 +88,7 @@ const dashboardHTML = `<!doctype html>
             <h2>Operator Actions</h2>
             <span class="muted-text">Quick controls</span>
           </div>
-          <span class="muted-text">Use these actions without leaving the current session view.</span>
+          <span class="muted-text">Use these actions from the active console view.</span>
         </div>
         <div class="setup-actions operator-actions-buttons">
           <button id="operator-actions-refresh-button" type="button">Refresh now</button>
@@ -153,9 +153,9 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid two">
-      <div class="panel wide" data-dashboard-tab="overview">
+      <div class="panel wide" data-dashboard-tab="diagnostics">
         <div class="panel-head">
-          <h2>Appliance Readiness</h2>
+          <h2>Service Status Details</h2>
           <span id="uptime">-</span>
         </div>
         <dl class="kv-list" data-dashboard-tab="overview,cabinet-signal">
@@ -178,7 +178,7 @@ const dashboardHTML = `<!doctype html>
     </section>
 
     <section class="grid">
-      <div class="panel" data-dashboard-tab="overview,settings">
+      <div class="panel" data-dashboard-tab="settings">
         <div class="panel-head">
           <h2>Cabinet Identity Profile</h2>
           <span id="cabinet-profile-source" class="source-pill source-file">file</span>
@@ -206,7 +206,7 @@ const dashboardHTML = `<!doctype html>
           </div>
           <span id="first-cabinet-session-message" class="muted-text">Waiting for cabinet signal telemetry.</span>
         </div>
-        <dl class="kv-list">
+        <dl class="kv-list" data-dashboard-tab="cabinet-signal">
           <div><dt>Overall Session State</dt><dd id="first-cabinet-overall">-</dd></div>
           <div><dt>Last Checked</dt><dd id="first-cabinet-last-checked">-</dd></div>
           <div><dt>Readyz State</dt><dd id="first-cabinet-readyz">-</dd></div>
@@ -228,15 +228,15 @@ const dashboardHTML = `<!doctype html>
               <span id="mute-path-message" class="muted-text">Mute path status will appear with telemetry.</span>
               <span id="mute-path-confidence" class="muted-text">Software signal only.</span>
             </div>
-            <div id="runbook-readiness-status-card" class="operator-readiness-group group-informational runbook-readiness-status-card">
-              <strong id="runbook-readiness-state">-</strong>
-              <span id="runbook-readiness-message" class="muted-text">System check status will appear with telemetry.</span>
-              <span id="runbook-readiness-next" class="muted-text">Next action will appear here.</span>
+            <div id="system-check-status-card" class="operator-readiness-group group-informational system-check-status-card">
+              <strong id="system-check-state">-</strong>
+              <span id="system-check-message" class="muted-text">System check status will appear with telemetry.</span>
+              <span id="system-check-next" class="muted-text">Next action will appear here.</span>
             </div>
           </div>
-          <div id="mute-path-prep-status" class="muted-text">Cabinet prep status will appear with telemetry.</div>
+          <div id="mute-path-prep-status" class="muted-text">System check context will appear with telemetry.</div>
         </div>
-        <div class="first-cabinet-session-blockers-wrap" data-dashboard-tab="overview,cabinet-signal">
+        <div class="first-cabinet-session-blockers-wrap" data-dashboard-tab="cabinet-signal">
           <p class="label">System Check Issues and Signals</p>
           <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
         </div>
@@ -253,33 +253,6 @@ const dashboardHTML = `<!doctype html>
         <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="overview,cabinet-signal">
           <p class="label">Next Action</p>
           <div id="next-operator-actions" class="operator-readiness-model"></div>
-        </div>
-        <div class="first-cabinet-session-workflow-progress-wrap" data-dashboard-tab="settings">
-          <p class="label">Workflow Progress</p>
-          <div class="workflow-progress-meta">
-            <span id="workflow-progress-last-saved">Last saved: not saved</span>
-            <span id="workflow-progress-unsaved" class="workflow-progress-unsaved workflow-progress-unsaved-clean">Saved</span>
-          </div>
-          <div class="workflow-progress-grid">
-            <label>Current Phase
-              <select id="workflow-progress-phase">
-                <option value="pre_check">Pre-check</option>
-                <option value="connect_observe">Connect/Observe</option>
-                <option value="run_active">Run Active</option>
-                <option value="capture_evidence">Capture Evidence</option>
-                <option value="session_complete">Wrap-up</option>
-              </select>
-            </label>
-          </div>
-          <div id="workflow-progress-steps" class="workflow-progress-steps"></div>
-          <label class="cert-textarea-label">Operator Notes
-            <textarea id="workflow-progress-notes" rows="4" placeholder="Optional operator notes for workflow continuity."></textarea>
-          </label>
-          <div class="setup-actions">
-            <button id="workflow-progress-save-button" type="button">Save Progress</button>
-            <button id="workflow-progress-clear-button" type="button" class="secondary-button">Clear Progress</button>
-          </div>
-          <div id="workflow-progress-message" class="muted-text">Workflow progress is not saved yet.</div>
         </div>
         <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="settings">
           <p class="label">Runtime Override Snapshot</p>
@@ -298,7 +271,7 @@ const dashboardHTML = `<!doctype html>
         <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="settings">
           <p class="label">Runtime Preset Library</p>
           <div class="workflow-progress-grid">
-            <label>Preset Name<input id="runtime-preset-name" type="text" maxlength="64" placeholder="lab_baseline"></label>
+            <label>Preset Name<input id="runtime-preset-name" type="text" maxlength="64" placeholder="preset_baseline"></label>
           </div>
           <label class="cert-textarea-label">Preset Note (optional)
             <textarea id="runtime-preset-note" rows="3" maxlength="2000" placeholder="Optional operator note for this preset."></textarea>
@@ -334,7 +307,7 @@ const dashboardHTML = `<!doctype html>
           <div><dt>Heartbeat Source</dt><dd id="session-evidence-heartbeat-source">-</dd></div>
         </dl>
         <label class="cert-textarea-label evidence-notes-label">Operator Notes
-          <textarea id="session-evidence-notes" rows="5" placeholder="Optional test notes, cabinet observations, or follow-up context."></textarea>
+          <textarea id="session-evidence-notes" rows="5" placeholder="Optional test notes and cabinet observations."></textarea>
         </label>
         <div class="setup-actions evidence-actions">
           <button id="session-evidence-save-button" type="button">Save to Appliance History</button>
@@ -347,7 +320,7 @@ const dashboardHTML = `<!doctype html>
           <div class="setup-actions">
             <button id="session-package-export-button" type="button" class="secondary-button">Export Session Package</button>
           </div>
-          <div id="session-package-export-message" class="muted-text">Download one JSON package with current status, system check, workflow, heartbeat policy, operator audit, and saved capture metadata.</div>
+          <div id="session-package-export-message" class="muted-text">Download one JSON package with current status, system check, heartbeat policy, operator audit, and saved capture metadata.</div>
         </div>
         <div class="first-cabinet-session-blockers-wrap">
           <p class="label">Recent Captures</p>
@@ -562,7 +535,7 @@ const dashboardHTML = `<!doctype html>
           <span id="run-marker-message" class="muted-text">Mark session start, operator notes, and session end directly into the appliance timeline.</span>
           <div class="form-grid run-marker-grid">
             <label>Marker Title<input id="run-marker-title" name="title" autocomplete="off"></label>
-            <label>Operator<input id="run-marker-operator" name="operator" autocomplete="off" placeholder="lab-ui"></label>
+            <label>Operator<input id="run-marker-operator" name="operator" autocomplete="off" placeholder="ops-ui"></label>
           </div>
           <label class="cert-textarea-label run-marker-notes-label">Run Marker Notes
             <textarea id="run-marker-notes" rows="4" placeholder="Optional cabinet notes, attach/detach notes, or operator observations."></textarea>
@@ -2357,12 +2330,12 @@ button:disabled {
 }
 
 .mute-path-status-card,
-.runbook-readiness-status-card {
+.system-check-status-card {
   min-height: 88px;
 }
 
 .mute-path-status-card strong,
-.runbook-readiness-status-card strong {
+.system-check-status-card strong {
   font-size: 14px;
 }
 
@@ -3928,7 +3901,9 @@ function stateClass(value, prefix) {
 }
 
 function setStatePill(el, value) {
-  el.textContent = value || "-";
+  const raw = String(value || "").trim();
+  const label = raw === "READY_LAB" || raw === "LAB_READY" ? "READY" : raw;
+  el.textContent = label || "-";
   el.className = "state-pill " + stateClass(value, "state");
 }
 
@@ -4038,7 +4013,7 @@ function renderCertificateSummary(summary, certificates, runtime) {
 
 function certImpactLabel(severity) {
   if (severity === "blocking") return "Blocking for runtime";
-  if (severity === "lab") return "Lab optional";
+  if (severity === "lab") return "Setup optional";
   if (severity === "warning") return "Needs attention";
   return "Healthy";
 }
@@ -4143,7 +4118,7 @@ function buildFirstCabinetSessionState(snapshot) {
     appendFriendlyPreflightBlockers(preflight, blockers);
   }
   const readyForSession = blockers.length === 0;
-  const overallState = readyForSession ? "LAB_READY" : "BLOCKED";
+  const overallState = readyForSession ? "READY" : "BLOCKED";
   return {
     overallState: overallState,
     readyForSession: readyForSession,
@@ -4617,7 +4592,7 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
 
   if (!focus.selected_egm_id) {
     pushUniqueString(informational, "All-EGMs focus is active for session-wide monitoring.");
-    pushUniqueString(nextActions, "Select one EGM focus for cabinet-level validation detail.");
+    pushUniqueString(nextActions, "Select one EGM focus for cabinet-level inspection detail.");
   } else if (telemetry.selected_not_active_warning) {
     pushUniqueString(labWarning, "Selected EGM not active; global telemetry is healthy.");
     pushUniqueString(nextActions, "Choose an active EGM focus or switch to All EGMs.");
@@ -4699,7 +4674,7 @@ function mutePathClassForState(state) {
 }
 
 function runbookReadinessClassForState(state) {
-  if (state === "LAB_READY") return "group-ready_now";
+  if (state === "READY" || state === "LAB_READY") return "group-ready_now";
   if (state === "BLOCKED") return "group-needs_operator_action";
   return "group-informational";
 }
@@ -4753,14 +4728,14 @@ function renderMutePathStatus(model) {
   const muteCard = $("mute-path-status-card");
   muteCard.className = "operator-readiness-group mute-path-status-card " + mutePathClassForState(summary.mute_path_state || "UNKNOWN");
 
-  $("runbook-readiness-state").textContent = summary.runbook_readiness_state || "UNKNOWN";
-  $("runbook-readiness-message").textContent = (summary.runbook_message || "System check status unavailable.") +
+  $("system-check-state").textContent = summary.runbook_readiness_state || "UNKNOWN";
+  $("system-check-message").textContent = (summary.runbook_message || "System check status unavailable.") +
     " Issues: " + String(summary.runbook_blocker_count || 0) +
     " | Warnings: " + String(summary.runbook_warning_count || 0);
-  $("runbook-readiness-next").textContent = "Next action: " + (summary.next_action || "-");
+  $("system-check-next").textContent = "Next action: " + (summary.next_action || "-");
 
-  const runbookCard = $("runbook-readiness-status-card");
-  runbookCard.className = "operator-readiness-group runbook-readiness-status-card " + runbookReadinessClassForState(summary.runbook_readiness_state || "UNKNOWN");
+  const runbookCard = $("system-check-status-card");
+  runbookCard.className = "operator-readiness-group system-check-status-card " + runbookReadinessClassForState(summary.runbook_readiness_state || "UNKNOWN");
 
   $("mute-path-prep-status").textContent = "System check context: " + (summary.cabinet_prep_status || "-") +
     " Observed EGMs: " + String(summary.observed_egm_count || 0) + ".";
@@ -4830,7 +4805,6 @@ function renderFirstCabinetSession(snapshot) {
   renderMutePathStatus(mutePathStatus);
   renderOperatorReadinessModel(readinessModel);
 
-  renderSessionWorkflowProgress(snapshot, workflow);
 }
 
 function buildSessionEvidence(snapshot) {
@@ -5031,9 +5005,9 @@ function buildSessionEvidenceMarkdown(evidence) {
   }
   lines.push("", "## Operator Notes", "");
   lines.push(evidence.operator_notes || "None");
-  lines.push("", "## Workflow", "");
+  lines.push("", "## Run State", "");
   const workflowSteps = Array.isArray(evidence?.workflow?.steps) ? evidence.workflow.steps : [];
-  lines.push("- Workflow phase: " + (evidence?.workflow?.current_step || "-"));
+  lines.push("- Run phase: " + (evidence?.workflow?.current_step || "-"));
   if (workflowSteps.length > 0) {
     workflowSteps.forEach((step) => lines.push("- " + [step.title || "-", step.state || "-", step.detail || ""].filter(Boolean).join(" | ")));
   } else {
@@ -5144,7 +5118,7 @@ function renderSelectedSavedSessionEvidence(record) {
     "<div class=\"item session-evidence-selected-detail\">" +
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
-      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | System Check: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Flow: " + escapeHTML(workflowStep) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | System Check: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Run Phase: " + escapeHTML(workflowStep) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Issues: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Run markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Grouped EGMs (focused/all): " + escapeHTML(String(groupedFocusedCount)) + " / " + escapeHTML(String(groupedAllCount)) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
@@ -5857,7 +5831,7 @@ function setRunMarkerState(level, message) {
 function runMarkerPayload(markerType) {
   const profile = currentCabinetProfileSnapshot();
   const title = $("run-marker-title").value.trim() || defaultRunMarkerTitle(markerType);
-  const operator = $("run-marker-operator").value.trim() || "lab-ui";
+  const operator = $("run-marker-operator").value.trim() || "ops-ui";
   return {
     created_at: new Date().toISOString(),
     marker_type: markerType,
@@ -6269,15 +6243,15 @@ function buildRunReportMarkdown(report) {
     "- Advisory count: " + String(report?.runbook_readiness?.warning_count || 0),
     "- Next action: " + (report?.runbook_readiness?.next_action || "-"),
     "",
-    "## Workflow",
+    "## Run State",
     "",
-    "- Workflow phase: " + (report?.workflow?.current_step || "-"),
+    "- Run phase: " + (report?.workflow?.current_step || "-"),
     "- Focus mode: " + (report?.workflow?.focus_mode || "-")
   ];
   if (workflowSteps.length > 0) {
     workflowSteps.forEach((step) => lines.push("- " + [step.title || "-", step.state || "-", step.detail || ""].filter(Boolean).join(" | ")));
   } else {
-    lines.push("- No workflow steps available");
+    lines.push("- No run-state steps available");
   }
   lines.push("", "## Action Items", "");
   if (actionItems.length > 0) {
@@ -6366,7 +6340,7 @@ function renderRunReportControls(snapshot) {
   $("run-report-count-summary").textContent = "focus " + (report?.egm_focus?.label || "All EGMs") + " [" + (report?.scope?.egm_history_scope || "FULL_SESSION") + "], incidents " + report.summary.incidents + ", egm events " + report.summary.egm_events + "/" + report.summary.egm_events_total + ", egm groups " + report.summary.egm_groups + "/" + report.summary.egm_groups_total + ", heartbeat " + report.summary.heartbeat_events + " (" + (report?.operator_drill?.source || "-") + "), state " + report.summary.state_changes + ", markers " + report.summary.run_markers + ", evidence " + report.summary.saved_evidence;
   $("run-report-state").textContent = "ready";
   $("run-report-state").className = "source-pill source-file";
-  $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ". Workflow step: " + (report?.workflow?.current_step || "-") + ".";
+  $("run-report-message").textContent = "Run report window is ready to export. Heartbeat: " + (report?.heartbeat_summary?.label || "-") + ". Run phase: " + (report?.workflow?.current_step || "-") + ".";
 }
 
 function renderHeartbeatSummary(snapshot) {
@@ -8443,7 +8417,6 @@ async function pollOnce() {
       fetchJSON(endpoints.certificates),
       fetchJSON(operatorAuditEndpointURL()),
       fetchJSON(endpoints.sessionEvidence),
-      fetchJSON(endpoints.sessionWorkflow),
       fetchJSON(endpoints.cabinetProfile),
       fetchJSON(endpoints.cabinetProfileSuggestions),
       fetchJSON(endpoints.heartbeatPolicy),
@@ -8452,7 +8425,7 @@ async function pollOnce() {
       fetchJSON(endpoints.runtimeOverridePresets)
     ]);
 
-    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, egmRegistryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, sessionWorkflowResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult, endpointIntegrityAlertsResult, runtimeOverridePresetsResult] = results;
+    const [statusResult, readyzResult, incidentsResult, egmHistoryResult, egmRegistryResult, stateHistoryResult, runMarkersResult, operatorDrillResult, certificatesResult, operatorAuditResult, sessionEvidenceResult, cabinetProfileResult, cabinetProfileSuggestionsResult, heartbeatPolicyResult, cabinetPreflightResult, endpointIntegrityAlertsResult, runtimeOverridePresetsResult] = results;
     const snapshot = copySnapshot(baseline);
 
     if (statusResult.status === "fulfilled") {
@@ -8485,7 +8458,6 @@ async function pollOnce() {
     if (certificatesResult.status === "fulfilled") snapshot.certificates = certificatesResult.value;
     if (operatorAuditResult.status === "fulfilled") snapshot.operatorAudit = operatorAuditResult.value;
     if (sessionEvidenceResult.status === "fulfilled") snapshot.sessionEvidence = sessionEvidenceResult.value;
-    if (sessionWorkflowResult.status === "fulfilled") snapshot.sessionWorkflow = normalizeSessionWorkflowProgress(sessionWorkflowResult.value);
     if (cabinetProfileResult.status === "fulfilled") snapshot.cabinetProfile = cabinetProfileResult.value;
     if (cabinetProfileSuggestionsResult.status === "fulfilled") snapshot.cabinetProfileSuggestions = normalizeCabinetProfileSuggestions(cabinetProfileSuggestionsResult.value);
     if (heartbeatPolicyResult.status === "fulfilled") snapshot.heartbeatPolicy = heartbeatPolicyResult.value;
@@ -8503,7 +8475,6 @@ async function pollOnce() {
       settledFailureSummary("certificates", certificatesResult),
       settledFailureSummary("operator audit", operatorAuditResult),
       settledFailureSummary("session evidence", sessionEvidenceResult),
-      settledFailureSummary("session workflow", sessionWorkflowResult),
       settledFailureSummary("cabinet profile", cabinetProfileResult),
       settledFailureSummary("cabinet profile suggestions", cabinetProfileSuggestionsResult),
       settledFailureSummary("heartbeat policy", heartbeatPolicyResult),
@@ -8730,11 +8701,6 @@ function bindControls() {
       deleteRuntimePresetByName(presetName);
     }
   });
-  $("workflow-progress-save-button").addEventListener("click", saveSessionWorkflowProgress);
-  $("workflow-progress-clear-button").addEventListener("click", clearSessionWorkflowProgress);
-  $("workflow-progress-phase").addEventListener("change", updateWorkflowProgressDirtyState);
-  $("workflow-progress-notes").addEventListener("input", updateWorkflowProgressDirtyState);
-  $("workflow-progress-steps").addEventListener("change", updateWorkflowProgressDirtyState);
   $("session-evidence-history").addEventListener("click", (event) => {
     const button = event.target.closest(".session-evidence-history-button");
     if (!button) return;
