@@ -236,9 +236,9 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="mute-path-prep-status" class="muted-text">System check context will appear with telemetry.</div>
         </div>
-        <div class="first-cabinet-session-blockers-wrap" data-dashboard-tab="cabinet-signal">
+        <div class="cabinet-signal-issues-wrap" data-dashboard-tab="cabinet-signal">
           <p class="label">System Check Issues and Signals</p>
-          <div id="first-cabinet-session-blockers" class="first-cabinet-session-blockers"></div>
+          <div id="cabinet-signal-issues" class="cabinet-signal-issues"></div>
         </div>
         <div class="first-cabinet-session-actions-wrap" data-dashboard-tab="overview,cabinet-signal">
           <p class="label">System Status</p>
@@ -276,7 +276,7 @@ const dashboardHTML = `<!doctype html>
             </label>
             <button id="runtime-overrides-restore-button" type="button">Restore Runtime Snapshot</button>
           </div>
-          <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, policy overrides, and EGM registry overrides.</div>
+          <div id="runtime-overrides-message" class="muted-text">Snapshot includes cabinet profile, heartbeat policy, and EGM registry overrides.</div>
         </div>
         <div class="first-cabinet-session-actions-wrap">
           <p class="label">Runtime Preset Library</p>
@@ -332,11 +332,11 @@ const dashboardHTML = `<!doctype html>
           </div>
           <div id="session-package-export-message" class="muted-text">Download one JSON package with controller status, EGM traffic, certificates, operator audit, and saved capture metadata.</div>
         </div>
-        <div class="first-cabinet-session-blockers-wrap">
+        <div class="cabinet-signal-issues-wrap">
           <p class="label">Recent Captures</p>
           <div id="session-evidence-history" class="timeline"></div>
         </div>
-        <div class="first-cabinet-session-blockers-wrap">
+        <div class="cabinet-signal-issues-wrap">
           <p class="label">Selected Saved Capture</p>
           <div id="session-evidence-selected" class="timeline"></div>
         </div>
@@ -711,8 +711,6 @@ const dashboardHTML = `<!doctype html>
               <option value="cabinet_profile.clear">cabinet_profile.clear</option>
               <option value="heartbeat_policy.save">heartbeat_policy.save</option>
               <option value="heartbeat_policy.clear">heartbeat_policy.clear</option>
-              <option value="blocker_policy.save">system_check_rules.save</option>
-              <option value="blocker_policy.clear">system_check_rules.clear</option>
               <option value="certificate.preview">certificate.preview</option>
               <option value="certificate.import">certificate.import</option>
               <option value="certificate.restore">certificate.restore</option>
@@ -1717,27 +1715,6 @@ th {
   border-top: 1px solid var(--line);
 }
 
-.blocker-governance-panel {
-  border-top: 1px solid var(--line);
-}
-
-.blocker-governance-summary {
-  padding: 0 2px;
-}
-
-.blocker-governance-list {
-  padding: 0;
-}
-
-.blocker-governance-item {
-  display: grid;
-  gap: 4px;
-}
-
-.blocker-governance-actions {
-  margin-top: 2px;
-}
-
 .operator-drill-form {
   display: grid;
   gap: 12px;
@@ -2235,18 +2212,18 @@ button:disabled {
   margin-bottom: 0;
 }
 
-.first-cabinet-session-blockers-wrap {
+.cabinet-signal-issues-wrap {
   border-top: 1px solid var(--line);
   padding: 12px 16px 16px;
   background: #f8fbf8;
 }
 
-.first-cabinet-session-blockers {
+.cabinet-signal-issues {
   display: grid;
   gap: 6px;
 }
 
-.first-cabinet-session-blocker {
+.cabinet-signal-issue {
   border-left: 3px solid var(--red);
   padding: 7px 9px;
   background: var(--red-bg);
@@ -2254,7 +2231,7 @@ button:disabled {
   font-size: 13px;
 }
 
-.first-cabinet-session-blockers-empty {
+.cabinet-signal-issues-empty {
   border-left-color: var(--green);
   background: var(--green-bg);
   color: #1e6c47;
@@ -4046,60 +4023,37 @@ function summarizeSessionCertCounts(certificates, runtime) {
   return counts;
 }
 
-function appendUniqueBlocker(blockers, message) {
+function appendUniqueIssue(issues, message) {
   if (!message) return;
-  if (blockers.indexOf(message) < 0) {
-    blockers.push(message);
+  if (issues.indexOf(message) < 0) {
+    issues.push(message);
   }
 }
 
-function approvedBlockerIDSetFromPreflight(preflight) {
-  const approved = new Set();
-  const ids = Array.isArray(preflight?.blocker_policy?.effective?.approved_blocker_ids)
-    ? preflight.blocker_policy.effective.approved_blocker_ids
-    : [];
-  ids.forEach((id) => {
-    const value = String(id || "").trim();
-    if (!value) return;
-    approved.add(value);
-  });
-  return approved;
-}
-
-function appendFriendlyPreflightBlockers(preflight, blockers) {
+function appendFriendlyPreflightIssues(preflight, issues) {
   const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
-  const approvedIDs = approvedBlockerIDSetFromPreflight(preflight);
-  if (approvedIDs.size === 0) {
-    const rawOnly = Array.isArray(preflight?.blockers) ? preflight.blockers : [];
-    rawOnly.forEach((item) => appendUniqueBlocker(blockers, String(item || "").trim()));
-    return;
-  }
   let mappedAny = false;
   checks.forEach((check) => {
     if (!check || check.result !== "FAIL") return;
-    const checkID = String(check.id || "").trim();
-    if (checkID && !approvedIDs.has(checkID)) {
-      return;
-    }
     switch (check.id) {
       case "cabinet_profile":
-        appendUniqueBlocker(blockers, "Cabinet profile is incomplete");
+        appendUniqueIssue(issues, "Cabinet profile is incomplete");
         mappedAny = true;
         break;
       case "certificate_mode_requirements":
-        appendUniqueBlocker(blockers, "Required certificate is missing");
+        appendUniqueIssue(issues, "Required certificate is missing");
         mappedAny = true;
         break;
       case "service_readiness":
-        appendUniqueBlocker(blockers, "Readiness is degraded");
+        appendUniqueIssue(issues, "Readiness is degraded");
         mappedAny = true;
         break;
       case "profile_source":
-        appendUniqueBlocker(blockers, "Cabinet profile source should be explicit");
+        appendUniqueIssue(issues, "Cabinet profile source should be explicit");
         mappedAny = true;
         break;
       case "certificate_san_wire_identity":
-        appendUniqueBlocker(blockers, "Certificate SAN does not match wire identity");
+        appendUniqueIssue(issues, "Certificate SAN does not match wire identity");
         mappedAny = true;
         break;
       default:
@@ -4107,8 +4061,8 @@ function appendFriendlyPreflightBlockers(preflight, blockers) {
     }
   });
   if (mappedAny) return;
-  const raw = Array.isArray(preflight?.blockers) ? preflight.blockers : [];
-  raw.forEach((item) => appendUniqueBlocker(blockers, String(item || "").trim()));
+  const raw = Array.isArray(preflight?.issues) ? preflight.issues : [];
+  raw.forEach((item) => appendUniqueIssue(issues, String(item || "").trim()));
 }
 
 function buildFirstCabinetSessionState(snapshot) {
@@ -4128,18 +4082,18 @@ function buildFirstCabinetSessionState(snapshot) {
   const readyzState = readyz ? (readyz.overall || (readyz.ok ? "READY" : "DEGRADED")) : "UNAVAILABLE";
   const preflightState = preflight ? (preflight.overall || "UNKNOWN") : "UNAVAILABLE";
   const lastCheckedValue = preflight?.timestamp || (clientState.lastGoodAt ? new Date(clientState.lastGoodAt).toISOString() : "");
-  const blockers = [];
+  const issues = [];
   const heartbeat = heartbeatSummary(snapshot?.egmHistory || [], currentHeartbeatPolicy(snapshot), new Date().toISOString());
 
   if (preflight && preflight.overall !== "PASS") {
-    appendFriendlyPreflightBlockers(preflight, blockers);
+    appendFriendlyPreflightIssues(preflight, issues);
   }
-  const readyForSession = blockers.length === 0;
-  const overallState = readyForSession ? "READY" : "BLOCKED";
+  const readyForSession = issues.length === 0;
+  const overallState = readyForSession ? "READY" : "ACTION_NEEDED";
   return {
     overallState: overallState,
     readyForSession: readyForSession,
-    message: readyForSession ? "Ready for cabinet signal operations." : "Resolve system check issues before cabinet signal operations.",
+    message: readyForSession ? "Ready for cabinet signal operations." : "Review system check issues before cabinet signal operations.",
     lastCheckedValue: lastCheckedValue,
     readyzState: readyzState,
     preflightState: preflightState,
@@ -4148,7 +4102,7 @@ function buildFirstCabinetSessionState(snapshot) {
     firstEGMIDs: firstEGMIDs,
     certCounts: certCounts,
     authState: authState,
-    blockers: blockers,
+    issues: issues,
     heartbeat: heartbeat
   };
 }
@@ -4690,33 +4644,33 @@ function mutePathClassForState(state) {
   return "group-informational";
 }
 
-function runbookReadinessClassForState(state) {
+function systemCheckClassForState(state) {
   if (state === "READY" || state === "LAB_READY") return "group-ready_now";
-  if (state === "BLOCKED") return "group-needs_operator_action";
+  if (state === "ACTION_NEEDED") return "group-needs_operator_action";
   return "group-informational";
 }
 
 function buildMutePathStatus(snapshot, session, readinessModel, workflow) {
-  const runbookState = session?.overallState || "UNKNOWN";
-  const runbookBlocked = runbookState === "BLOCKED";
-  const runbookBlockers = Array.isArray(session?.blockers) ? session.blockers : [];
-  const runbookWarnings = Array.isArray(readinessModel?.lab_warning) ? readinessModel.lab_warning : [];
+  const systemCheckState = session?.overallState || "UNKNOWN";
+  const actionNeeded = systemCheckState === "ACTION_NEEDED";
+  const systemIssues = Array.isArray(session?.issues) ? session.issues : [];
+  const systemWarnings = Array.isArray(readinessModel?.lab_warning) ? readinessModel.lab_warning : [];
   const nextActions = Array.isArray(readinessModel?.next_actions) ? readinessModel.next_actions : [];
   const groupedRows = groupedSummaryRowsForSnapshot(snapshot);
   const observedEGMs = groupedRows.filter((row) => row.total_events > 0 || numericTime(row.last_seen_at) > 0).length;
 
   const mutePathState = "NOT_GATED_BY_RUNBOOK";
-  const mutePathNote = runbookBlocked
-    ? "Mute path is not gated by system check status; this BLOCKED state applies to setup checks only."
+  const mutePathNote = actionNeeded
+    ? "Mute path is not gated by system check status; setup issues are informational for the operator."
     : "Mute path is not gated by system check status.";
   const confidenceNote = "Software signal only; physical mute-actuator verification is outside this dashboard.";
-  const runbookMessage = runbookBlocked
+  const systemCheckMessage = actionNeeded
     ? "System check has unresolved setup issues."
     : "System check is clear for cabinet signal operations.";
-  const prepStatus = runbookBlocked
+  const prepStatus = actionNeeded
     ? "Resolve setup issues listed in System Check."
-    : "No blocking setup issues in System Check.";
-  const nextAction = nextActions[0] || (runbookBlocked
+    : "No setup issues in System Check.";
+  const nextAction = nextActions[0] || (actionNeeded
     ? "Resolve listed setup issues before cabinet signal operations."
     : "Start cabinet signal monitoring and capture evidence.");
 
@@ -4724,10 +4678,10 @@ function buildMutePathStatus(snapshot, session, readinessModel, workflow) {
     mute_path_state: mutePathState,
     mute_path_note: mutePathNote,
     confidence_note: confidenceNote,
-    runbook_readiness_state: runbookState,
-    runbook_message: runbookMessage,
-    runbook_blocker_count: runbookBlockers.length,
-    runbook_warning_count: runbookWarnings.length,
+    system_check_state: systemCheckState,
+    system_check_message: systemCheckMessage,
+    system_issue_count: systemIssues.length,
+    system_warning_count: systemWarnings.length,
     next_action: nextAction,
     can_continue_cabinet_prep: true,
     cabinet_prep_status: prepStatus,
@@ -4745,14 +4699,14 @@ function renderMutePathStatus(model) {
   const muteCard = $("mute-path-status-card");
   muteCard.className = "operator-readiness-group mute-path-status-card " + mutePathClassForState(summary.mute_path_state || "UNKNOWN");
 
-  $("system-check-state").textContent = summary.runbook_readiness_state || "UNKNOWN";
-  $("system-check-message").textContent = (summary.runbook_message || "System check status unavailable.") +
-    " Issues: " + String(summary.runbook_blocker_count || 0) +
-    " | Warnings: " + String(summary.runbook_warning_count || 0);
+  $("system-check-state").textContent = summary.system_check_state || "UNKNOWN";
+  $("system-check-message").textContent = (summary.system_check_message || "System check status unavailable.") +
+    " Issues: " + String(summary.system_issue_count || 0) +
+    " | Warnings: " + String(summary.system_warning_count || 0);
   $("system-check-next").textContent = "Next action: " + (summary.next_action || "-");
 
-  const runbookCard = $("system-check-status-card");
-  runbookCard.className = "operator-readiness-group system-check-status-card " + runbookReadinessClassForState(summary.runbook_readiness_state || "UNKNOWN");
+  const systemCheckCard = $("system-check-status-card");
+  systemCheckCard.className = "operator-readiness-group system-check-status-card " + systemCheckClassForState(summary.system_check_state || "UNKNOWN");
 
   $("mute-path-prep-status").textContent = "System check context: " + (summary.cabinet_prep_status || "-") +
     " Observed EGMs: " + String(summary.observed_egm_count || 0) + ".";
@@ -4813,11 +4767,11 @@ function renderFirstCabinetSession(snapshot) {
     : "None";
   $("first-cabinet-auth-state").textContent = session.authState;
 
-  const blockerList = $("first-cabinet-session-blockers");
-  if (session.blockers.length === 0) {
-    blockerList.innerHTML = "<div class=\"first-cabinet-session-blocker first-cabinet-session-blockers-empty\">No immediate setup issues.</div>";
+  const issueList = $("cabinet-signal-issues");
+  if (session.issues.length === 0) {
+    issueList.innerHTML = "<div class=\"cabinet-signal-issue cabinet-signal-issues-empty\">No immediate setup issues.</div>";
   } else {
-    blockerList.innerHTML = session.blockers.map((item) => "<div class=\"first-cabinet-session-blocker\">" + escapeHTML(item) + "</div>").join("");
+    issueList.innerHTML = session.issues.map((item) => "<div class=\"cabinet-signal-issue\">" + escapeHTML(item) + "</div>").join("");
   }
   renderMutePathStatus(mutePathStatus);
   renderOperatorReadinessModel(readinessModel);
@@ -4861,10 +4815,10 @@ function buildSessionEvidence(snapshot) {
     selected_egm_detail: selectedEGMDetail,
     action_model: readinessModel,
     mute_path: mutePathStatus,
-    runbook_readiness: {
-      state: mutePathStatus.runbook_readiness_state || "UNKNOWN",
-      blocker_count: mutePathStatus.runbook_blocker_count || 0,
-      warning_count: mutePathStatus.runbook_warning_count || 0,
+    system_check: {
+      state: mutePathStatus.system_check_state || "UNKNOWN",
+      issue_count: mutePathStatus.system_issue_count || 0,
+      warning_count: mutePathStatus.system_warning_count || 0,
       can_continue_cabinet_prep: mutePathStatus.can_continue_cabinet_prep === true,
       next_action: mutePathStatus.next_action || ""
     },
@@ -4874,7 +4828,7 @@ function buildSessionEvidence(snapshot) {
       overall_state: session.overallState,
       ready_for_session: session.readyForSession,
       message: session.message,
-      blockers: session.blockers,
+      issues: session.issues,
       last_checked: session.lastCheckedValue || null,
       readyz_state: session.readyzState,
       preflight_state: session.preflightState,
@@ -4934,7 +4888,7 @@ function buildSessionEvidenceMarkdown(evidence) {
     "- EGM-specific views filtered: " + String(evidence?.egm_focus?.egm_specific_views_filtered === true),
     "- Readyz state: " + (evidence.session.readyz_state || "-"),
     "- System Check state: " + (evidence.session.preflight_state || "-"),
-    "- System Check status: " + (evidence?.runbook_readiness?.state || "UNKNOWN"),
+    "- System Check status: " + (evidence?.system_check?.state || "UNKNOWN"),
     "- Mute path state: " + (evidence?.mute_path?.mute_path_state || "UNKNOWN"),
     "- Mute path note: " + (evidence?.mute_path?.mute_path_note || "-"),
     "- API auth state: " + (evidence.session.api_auth_state || "-"),
@@ -4962,13 +4916,13 @@ function buildSessionEvidenceMarkdown(evidence) {
   lines.push("- " + (evidence?.mute_path?.mute_path_note || "Mute path status unavailable."));
   lines.push("- " + (evidence?.mute_path?.confidence_note || "Software signal only."));
   lines.push("", "## System Check Status", "");
-  lines.push("- State: " + (evidence?.runbook_readiness?.state || "UNKNOWN"));
-  lines.push("- Stop condition count: " + String(evidence?.runbook_readiness?.blocker_count || 0));
-  lines.push("- Advisory count: " + String(evidence?.runbook_readiness?.warning_count || 0));
-  lines.push("- Next action: " + (evidence?.runbook_readiness?.next_action || "-"));
-  lines.push("", "## System Check Stop Conditions", "");
-  if (Array.isArray(evidence.session.blockers) && evidence.session.blockers.length) {
-    evidence.session.blockers.forEach((item) => lines.push("- " + item));
+  lines.push("- State: " + (evidence?.system_check?.state || "UNKNOWN"));
+  lines.push("- Issue count: " + String(evidence?.system_check?.issue_count || 0));
+  lines.push("- Advisory count: " + String(evidence?.system_check?.warning_count || 0));
+  lines.push("- Next action: " + (evidence?.system_check?.next_action || "-"));
+  lines.push("", "## System Check Issues", "");
+  if (Array.isArray(evidence.session.issues) && evidence.session.issues.length) {
+    evidence.session.issues.forEach((item) => lines.push("- " + item));
   } else {
     lines.push("- None");
   }
@@ -5120,7 +5074,7 @@ function renderSelectedSavedSessionEvidence(record) {
     );
     return;
   }
-  const blockers = Array.isArray(evidence?.session?.blockers) ? evidence.session.blockers : [];
+  const issues = Array.isArray(evidence?.session?.issues) ? evidence.session.issues : [];
   const warnings = Array.isArray(evidence?.readiness?.warnings) ? evidence.readiness.warnings : [];
   const runMarkers = Array.isArray(evidence?.run_markers) ? evidence.run_markers : [];
   const heartbeat = evidence?.heartbeat_summary || {};
@@ -5134,7 +5088,7 @@ function renderSelectedSavedSessionEvidence(record) {
       "<strong>" + escapeHTML(evidence?.session?.overall_state || "-") + " | " + escapeHTML(evidence?.cabinet_profile?.host_id || "-") + "</strong>" +
       "<span>" + escapeHTML(fmtTime(evidence?.captured_at || record.created_at)) + " | " + escapeHTML(evidence?.cabinet_profile?.wire_host_url || "-") + "</span>" +
       "<div class=\"kv-inline\"><span>Readyz: " + escapeHTML(evidence?.session?.readyz_state || "-") + " | System Check: " + escapeHTML(evidence?.session?.preflight_state || "-") + " | Focus: " + escapeHTML(focusLabel) + " | Marker Phase: " + escapeHTML(workflowStep) + "</span></div>" +
-      "<div class=\"kv-inline\"><span>Issues: " + escapeHTML(String(blockers.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Evidence markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
+      "<div class=\"kv-inline\"><span>Issues: " + escapeHTML(String(issues.length)) + " | Warnings: " + escapeHTML(String(warnings.length)) + " | Evidence markers: " + escapeHTML(String(runMarkers.length)) + " | Heartbeat: " + escapeHTML(String(heartbeat.total || 0)) + " (" + String(heartbeat.label || "-") + ") | Source: " + escapeHTML(String(drill.source || "-")) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Grouped EGMs (focused/all): " + escapeHTML(String(groupedFocusedCount)) + " / " + escapeHTML(String(groupedAllCount)) + "</span></div>" +
       "<div class=\"kv-inline\"><span>Notes: " + escapeHTML(record.operator_notes || evidence?.operator_notes || "None") + "</span></div>" +
     "</div>"
@@ -6147,10 +6101,10 @@ function boundedRunReport(snapshot) {
     selected_egm_detail: selectedEGMDetail,
     action_model: actionModel,
     mute_path: mutePathStatus,
-    runbook_readiness: {
-      state: mutePathStatus.runbook_readiness_state || "UNKNOWN",
-      blocker_count: mutePathStatus.runbook_blocker_count || 0,
-      warning_count: mutePathStatus.runbook_warning_count || 0,
+    system_check: {
+      state: mutePathStatus.system_check_state || "UNKNOWN",
+      issue_count: mutePathStatus.system_issue_count || 0,
+      warning_count: mutePathStatus.system_warning_count || 0,
       can_continue_cabinet_prep: mutePathStatus.can_continue_cabinet_prep === true,
       next_action: mutePathStatus.next_action || ""
     },
@@ -6206,7 +6160,7 @@ function buildRunReportMarkdown(report) {
     "- EGM focus: " + (report?.egm_focus?.label || "All EGMs"),
     "- EGM history scope: " + (report?.scope?.egm_history_scope || "FULL_SESSION"),
     "- Grouped summary scope: " + (report?.scope?.grouped_summary_scope || "FULL_SESSION"),
-    "- System Check status: " + (report?.runbook_readiness?.state || "UNKNOWN"),
+    "- System Check status: " + (report?.system_check?.state || "UNKNOWN"),
     "- Mute path state: " + (report?.mute_path?.mute_path_state || "UNKNOWN"),
     "- Mute path note: " + (report?.mute_path?.mute_path_note || "-"),
     "- Host ID: " + (report.cabinet_profile.host_id || "-"),
@@ -6252,10 +6206,10 @@ function buildRunReportMarkdown(report) {
     "",
     "## System Check Status",
     "",
-    "- State: " + (report?.runbook_readiness?.state || "UNKNOWN"),
-    "- Stop condition count: " + String(report?.runbook_readiness?.blocker_count || 0),
-    "- Advisory count: " + String(report?.runbook_readiness?.warning_count || 0),
-    "- Next action: " + (report?.runbook_readiness?.next_action || "-"),
+    "- State: " + (report?.system_check?.state || "UNKNOWN"),
+    "- Issue count: " + String(report?.system_check?.issue_count || 0),
+    "- Advisory count: " + String(report?.system_check?.warning_count || 0),
+    "- Next action: " + (report?.system_check?.next_action || "-"),
     "",
     "## Evidence Marker State",
     "",

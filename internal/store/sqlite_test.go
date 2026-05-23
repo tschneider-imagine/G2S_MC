@@ -363,129 +363,6 @@ func TestEGMRegistryOverrideCRUD(t *testing.T) {
 	assertCount(t, store, "egm_registry_overrides", 0)
 }
 
-func TestBlockerPolicyOverrideCRUD(t *testing.T) {
-	ctx := context.Background()
-	store, err := Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer store.Close()
-
-	override, err := store.GetBlockerPolicyOverride(ctx)
-	if err != nil {
-		t.Fatalf("get empty blocker policy override: %v", err)
-	}
-	if override != nil {
-		t.Fatalf("expected no blocker policy override row")
-	}
-
-	if err := store.UpsertBlockerPolicyOverride(ctx, []string{"service_readiness", "cabinet_profile"}, "tester"); err != nil {
-		t.Fatalf("upsert blocker policy override: %v", err)
-	}
-	assertCount(t, store, "blocker_policy_overrides", 1)
-
-	override, err = store.GetBlockerPolicyOverride(ctx)
-	if err != nil {
-		t.Fatalf("get blocker policy override: %v", err)
-	}
-	if override == nil {
-		t.Fatalf("expected blocker policy override row")
-	}
-	if len(override.ApprovedBlockerIDs) != 2 {
-		t.Fatalf("approved_blocker_ids len = %d, want 2", len(override.ApprovedBlockerIDs))
-	}
-	if override.UpdatedBy != "tester" {
-		t.Fatalf("updated_by = %q, want tester", override.UpdatedBy)
-	}
-	if override.LastChangeAction != "" || override.LastChangeRationale != "" || override.LastChangeActorScope != "" {
-		t.Fatalf("expected empty last-change metadata from legacy upsert, got %+v", override)
-	}
-
-	if err := store.UpsertBlockerPolicyOverrideWithMeta(ctx, []string{"service_readiness"}, "tester2", "approve", "required for deployment", "token"); err != nil {
-		t.Fatalf("update blocker policy override: %v", err)
-	}
-	override, err = store.GetBlockerPolicyOverride(ctx)
-	if err != nil {
-		t.Fatalf("get updated blocker policy override: %v", err)
-	}
-	if len(override.ApprovedBlockerIDs) != 1 || override.ApprovedBlockerIDs[0] != "service_readiness" {
-		t.Fatalf("unexpected updated approved_blocker_ids: %+v", override.ApprovedBlockerIDs)
-	}
-	if override.UpdatedBy != "tester2" {
-		t.Fatalf("updated_by = %q, want tester2", override.UpdatedBy)
-	}
-	if override.LastChangeAction != "approve" {
-		t.Fatalf("last_change_action = %q, want approve", override.LastChangeAction)
-	}
-	if override.LastChangeRationale != "required for deployment" {
-		t.Fatalf("last_change_rationale = %q, want required for deployment", override.LastChangeRationale)
-	}
-	if override.LastChangeActorScope != "token" {
-		t.Fatalf("last_change_actor_scope = %q, want token", override.LastChangeActorScope)
-	}
-
-	if err := store.ClearBlockerPolicyOverride(ctx); err != nil {
-		t.Fatalf("clear blocker policy override: %v", err)
-	}
-	assertCount(t, store, "blocker_policy_overrides", 0)
-	override, err = store.GetBlockerPolicyOverride(ctx)
-	if err != nil {
-		t.Fatalf("get cleared blocker policy override: %v", err)
-	}
-	if override != nil {
-		t.Fatalf("expected cleared blocker policy override to be nil")
-	}
-}
-
-func TestBlockerPolicyEscalationHistoryCRUD(t *testing.T) {
-	ctx := context.Background()
-	store, err := Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer store.Close()
-
-	_, err = store.RecordBlockerPolicyEscalationEvent(ctx, BlockerPolicyEscalationEvent{
-		CreatedAt:  time.Now().UTC().Add(-2 * time.Minute),
-		Action:     "approve",
-		FindingID:  "cabinet_profile",
-		Rationale:  "needed for controlled rollout",
-		ActorScope: "token",
-		EGMFocus:   "EGM-02",
-		UpdatedBy:  "operator-a",
-	})
-	if err != nil {
-		t.Fatalf("record approve escalation event: %v", err)
-	}
-	_, err = store.RecordBlockerPolicyEscalationEvent(ctx, BlockerPolicyEscalationEvent{
-		CreatedAt:  time.Now().UTC().Add(-1 * time.Minute),
-		Action:     "revoke",
-		FindingID:  "cabinet_profile",
-		Rationale:  "no longer needed",
-		ActorScope: "trusted",
-		EGMFocus:   "",
-		UpdatedBy:  "operator-b",
-	})
-	if err != nil {
-		t.Fatalf("record revoke escalation event: %v", err)
-	}
-	assertCount(t, store, "blocker_policy_escalation_events", 2)
-
-	events, err := store.ListBlockerPolicyEscalationEvents(ctx, 10)
-	if err != nil {
-		t.Fatalf("list blocker policy escalation events: %v", err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("events len = %d, want 2", len(events))
-	}
-	if events[0].Action != "revoke" || events[0].FindingID != "cabinet_profile" || events[0].Rationale != "no longer needed" || events[0].ActorScope != "trusted" || events[0].UpdatedBy != "operator-b" {
-		t.Fatalf("unexpected first history row: %+v", events[0])
-	}
-	if events[1].Action != "approve" || events[1].EGMFocus != "EGM-02" {
-		t.Fatalf("unexpected second history row: %+v", events[1])
-	}
-}
-
 func TestReplaceRuntimeOverridesAtomic(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")
@@ -505,9 +382,6 @@ func TestReplaceRuntimeOverridesAtomic(t *testing.T) {
 	}
 	if err := store.UpsertHeartbeatPolicyOverride(ctx, 5000, 3, 6, "before"); err != nil {
 		t.Fatalf("seed heartbeat policy override: %v", err)
-	}
-	if err := store.UpsertBlockerPolicyOverrideWithMeta(ctx, []string{"service_readiness"}, "before", "save_override", "seed", "token"); err != nil {
-		t.Fatalf("seed blocker policy override: %v", err)
 	}
 	if err := store.UpsertEGMRegistryOverride(ctx, EGMRegistryOverride{
 		EGMID:       "EGM-OLD",
@@ -536,13 +410,6 @@ func TestReplaceRuntimeOverridesAtomic(t *testing.T) {
 			BlockAfterMissed:   8,
 			UpdatedBy:          "restore-op",
 		},
-		BlockerPolicyOverride: &BlockerPolicyOverride{
-			ApprovedBlockerIDs:   []string{"service_readiness", "cabinet_profile"},
-			UpdatedBy:            "restore-op",
-			LastChangeAction:     "restore_snapshot",
-			LastChangeRationale:  "restore",
-			LastChangeActorScope: "token",
-		},
 		EGMRegistryOverrides: []EGMRegistryOverride{
 			{EGMID: "EGM-02", DisplayName: "Cabinet 2", Vendor: "Acme", UpdatedBy: "restore-op"},
 			{EGMID: "EGM-03", DisplayName: "Cabinet 3", Vendor: "Acme", UpdatedBy: "restore-op"},
@@ -565,13 +432,6 @@ func TestReplaceRuntimeOverridesAtomic(t *testing.T) {
 	}
 	if hb == nil || hb.IntervalMS != 7000 || hb.WarningAfterMissed != 4 || hb.BlockAfterMissed != 8 {
 		t.Fatalf("unexpected heartbeat policy override: %+v", hb)
-	}
-	blocker, err := store.GetBlockerPolicyOverride(ctx)
-	if err != nil {
-		t.Fatalf("get blocker policy override: %v", err)
-	}
-	if blocker == nil || len(blocker.ApprovedBlockerIDs) != 2 {
-		t.Fatalf("unexpected blocker policy override: %+v", blocker)
 	}
 	records, err := store.ListEGMRegistryOverrides(ctx)
 	if err != nil {
@@ -598,13 +458,6 @@ func TestReplaceRuntimeOverridesAtomic(t *testing.T) {
 	}
 	if hb != nil {
 		t.Fatalf("expected cleared heartbeat policy override")
-	}
-	blocker, err = store.GetBlockerPolicyOverride(ctx)
-	if err != nil {
-		t.Fatalf("get cleared blocker policy override: %v", err)
-	}
-	if blocker != nil {
-		t.Fatalf("expected cleared blocker policy override")
 	}
 	records, err = store.ListEGMRegistryOverrides(ctx)
 	if err != nil {

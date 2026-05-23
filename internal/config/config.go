@@ -4,7 +4,6 @@ type Config struct {
 	ControllerID    string          `json:"controller_id"`
 	SiteName        string          `json:"site_name"`
 	CabinetProfile  CabinetProfile  `json:"cabinet_profile"`
-	BlockerPolicy   BlockerPolicy   `json:"blocker_policy"`
 	HardwareIO      HardwareIO      `json:"hardware_io"`
 	PowerManagement PowerManagement `json:"power_management"`
 	Crypto          Crypto          `json:"crypto"`
@@ -94,8 +93,4 @@ type CabinetProfile struct {
 	RequiredSANIPs  []string `json:"required_san_ips"`
 	HostID          string   `json:"host_id"`
 	FirstTestEGMIDs []string `json:"first_test_egm_ids"`
-}
-
-type BlockerPolicy struct {
-	ApprovedBlockerIDs []string `json:"approved_blocker_ids"`
 }

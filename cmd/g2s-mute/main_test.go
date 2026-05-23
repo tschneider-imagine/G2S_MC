@@ -1508,13 +1508,13 @@ func TestSessionEvidenceExportAllHandlerShapeAndNoAuthRequirement(t *testing.T) 
 		},
 		{
 			CreatedAt:      time.Now().UTC().Add(-1 * time.Minute).Truncate(time.Second),
-			OverallState:   "BLOCKED",
+			OverallState:   "ACTION_NEEDED",
 			ReadyzState:    "DEGRADED",
 			PreflightState: "FAIL",
 			HostID:         "HOST-TSPI4-001",
 			WireHostURL:    "https://tspi4.local:8444/g2s",
 			OperatorNotes:  "second capture",
-			PayloadJSON:    `{"session":{"overall_state":"BLOCKED"},"operator_notes":"second capture"}`,
+			PayloadJSON:    `{"session":{"overall_state":"ACTION_NEEDED"},"operator_notes":"second capture"}`,
 		},
 	}
 	for _, record := range records {

@@ -15,34 +15,27 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
-const runtimeOverridesHistorySummaryLimit = 5
 const runtimeOverridesPresetPathPrefix = "/api/runtime-overrides/presets/"
 
 var runtimeOverridePresetNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
 type runtimeOverridesSnapshotResponse struct {
-	GeneratedAt                           time.Time                          `json:"generated_at"`
-	CabinetProfileOverride                *cabinetProfileOverrideView        `json:"cabinet_profile_override,omitempty"`
-	HeartbeatPolicyOverride               *heartbeatPolicyOverrideView       `json:"heartbeat_policy_override,omitempty"`
-	BlockerPolicyOverride                 *blockerPolicyOverrideView         `json:"blocker_policy_override,omitempty"`
-	BlockerPolicyEscalationHistorySummary []blockerPolicyEscalationEventView `json:"blocker_policy_escalation_history_summary,omitempty"`
-	EGMRegistryOverrides                  []egmRegistryOverrideView          `json:"egm_registry_overrides"`
+	GeneratedAt             time.Time                    `json:"generated_at"`
+	CabinetProfileOverride  *cabinetProfileOverrideView  `json:"cabinet_profile_override,omitempty"`
+	HeartbeatPolicyOverride *heartbeatPolicyOverrideView `json:"heartbeat_policy_override,omitempty"`
+	EGMRegistryOverrides    []egmRegistryOverrideView    `json:"egm_registry_overrides"`
 }
 
 type runtimeOverridesRestoreRequest struct {
-	CabinetProfileOverride  *config.CabinetProfile `json:"cabinet_profile_override"`
-	HeartbeatPolicyOverride *heartbeatPolicy       `json:"heartbeat_policy_override"`
-	BlockerPolicyOverride   *struct {
-		ApprovedBlockerIDs []string `json:"approved_blocker_ids"`
-	} `json:"blocker_policy_override"`
-	EGMRegistryOverrides []egmRegistryOverrideView `json:"egm_registry_overrides"`
+	CabinetProfileOverride  *config.CabinetProfile    `json:"cabinet_profile_override"`
+	HeartbeatPolicyOverride *heartbeatPolicy          `json:"heartbeat_policy_override"`
+	EGMRegistryOverrides    []egmRegistryOverrideView `json:"egm_registry_overrides"`
 }
 
 type runtimeOverridesRestoreResponse struct {
 	Snapshot        runtimeOverridesSnapshotResponse `json:"snapshot"`
 	CabinetProfile  cabinetProfileResponse           `json:"cabinet_profile"`
 	HeartbeatPolicy heartbeatPolicyResponse          `json:"heartbeat_policy"`
-	BlockerPolicy   blockerPolicyResponse            `json:"blocker_policy"`
 	EGMRegistry     egmRegistryResponse              `json:"egm_registry"`
 }
 
@@ -272,10 +265,9 @@ func runtimeOverridesRestoreHandler(eng *engine.Engine, auditStore *store.SQLite
 			"success",
 			"Runtime override snapshot restored",
 			fmt.Sprintf(
-				"cabinet_profile_override=%t heartbeat_policy_override=%t blocker_policy_override=%t egm_registry_overrides=%d",
+				"cabinet_profile_override=%t heartbeat_policy_override=%t egm_registry_overrides=%d",
 				restoreInput.CabinetProfileOverride != nil,
 				restoreInput.HeartbeatPolicyOverride != nil,
-				restoreInput.BlockerPolicyOverride != nil,
 				len(restoreInput.EGMRegistryOverrides),
 			),
 		)
@@ -347,13 +339,6 @@ func runtimeOverridesRestoreRequestFromSnapshot(snapshot runtimeOverridesSnapsho
 			BlockAfterMissed:   snapshot.HeartbeatPolicyOverride.BlockAfterMissed,
 		}
 	}
-	if snapshot.BlockerPolicyOverride != nil {
-		request.BlockerPolicyOverride = &struct {
-			ApprovedBlockerIDs []string `json:"approved_blocker_ids"`
-		}{
-			ApprovedBlockerIDs: append([]string{}, snapshot.BlockerPolicyOverride.ApprovedBlockerIDs...),
-		}
-	}
 	return request
 }
 
@@ -373,15 +358,6 @@ func runtimeOverridesReplaceInputFromRestoreRequest(payload runtimeOverridesRest
 		if payload.HeartbeatPolicyOverride.BlockAfterMissed < payload.HeartbeatPolicyOverride.WarningAfterMissed {
 			return store.RuntimeOverridesReplaceInput{}, fmt.Errorf("heartbeat_policy_override.block_after_missed must be greater than or equal to warning_after_missed")
 		}
-	}
-
-	approvedBlockerIDs := []string{}
-	if payload.BlockerPolicyOverride != nil {
-		normalized, err := normalizeBlockerPolicyIDs(payload.BlockerPolicyOverride.ApprovedBlockerIDs)
-		if err != nil {
-			return store.RuntimeOverridesReplaceInput{}, err
-		}
-		approvedBlockerIDs = normalized
 	}
 
 	registryOverrides := make([]store.EGMRegistryOverride, 0, len(payload.EGMRegistryOverrides))
@@ -422,15 +398,6 @@ func runtimeOverridesReplaceInputFromRestoreRequest(payload runtimeOverridesRest
 			UpdatedBy:          updatedBy,
 		}
 	}
-	if payload.BlockerPolicyOverride != nil {
-		restore.BlockerPolicyOverride = &store.BlockerPolicyOverride{
-			ApprovedBlockerIDs:   approvedBlockerIDs,
-			UpdatedBy:            updatedBy,
-			LastChangeAction:     "restore_snapshot",
-			LastChangeRationale:  "runtime override snapshot restore",
-			LastChangeActorScope: actorScope,
-		}
-	}
 	return restore, nil
 }
 
@@ -446,10 +413,6 @@ func applyRuntimeOverridesReplaceInput(ctx context.Context, eng *engine.Engine, 
 	if err != nil {
 		return runtimeOverridesRestoreResponse{}, err
 	}
-	blockerResolved, err := resolveBlockerPolicy(ctx, auditStore, cfg.BlockerPolicy)
-	if err != nil {
-		return runtimeOverridesRestoreResponse{}, err
-	}
 	egmRegistryResolved, err := buildEGMRegistryResponse(ctx, eng, auditStore)
 	if err != nil {
 		return runtimeOverridesRestoreResponse{}, err
@@ -462,7 +425,6 @@ func applyRuntimeOverridesReplaceInput(ctx context.Context, eng *engine.Engine, 
 		Snapshot:        snapshot,
 		CabinetProfile:  buildCabinetProfileResponse(cabinetResolved),
 		HeartbeatPolicy: buildHeartbeatPolicyResponse(heartbeatResolved),
-		BlockerPolicy:   buildBlockerPolicyResponse(blockerResolved),
 		EGMRegistry:     egmRegistryResolved,
 	}, nil
 }
@@ -498,22 +460,6 @@ func buildRuntimeOverridesSnapshotResponse(ctx context.Context, auditStore *stor
 			UpdatedBy:          heartbeatOverride.UpdatedBy,
 		}
 	}
-
-	blockerResolved, err := resolveBlockerPolicyWithHistoryLimit(ctx, auditStore, cfg.BlockerPolicy, runtimeOverridesHistorySummaryLimit)
-	if err != nil {
-		return runtimeOverridesSnapshotResponse{}, err
-	}
-	if blockerResolved.Override != nil {
-		response.BlockerPolicyOverride = &blockerPolicyOverrideView{
-			ApprovedBlockerIDs:   append([]string{}, blockerResolved.Override.ApprovedBlockerIDs...),
-			UpdatedAt:            blockerResolved.Override.UpdatedAt,
-			UpdatedBy:            blockerResolved.Override.UpdatedBy,
-			LastChangeAction:     blockerResolved.Override.LastChangeAction,
-			LastChangeRationale:  blockerResolved.Override.LastChangeRationale,
-			LastChangeActorScope: blockerResolved.Override.LastChangeActorScope,
-		}
-	}
-	response.BlockerPolicyEscalationHistorySummary = buildBlockerPolicyEscalationHistoryView(blockerResolved.EscalationHistory)
 
 	registryOverrides, err := auditStore.ListEGMRegistryOverrides(ctx)
 	if err != nil {

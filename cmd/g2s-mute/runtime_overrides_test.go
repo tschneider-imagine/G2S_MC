@@ -58,9 +58,6 @@ func TestRuntimeOverridePresetsCRUDFlow(t *testing.T) {
 	if err := auditStore.UpsertHeartbeatPolicyOverride(ctx, 6400, 4, 8, "seed"); err != nil {
 		t.Fatalf("seed heartbeat policy override: %v", err)
 	}
-	if err := auditStore.UpsertBlockerPolicyOverrideWithMeta(ctx, []string{"service_readiness"}, "seed", "save_override", "seed", "token"); err != nil {
-		t.Fatalf("seed blocker policy override: %v", err)
-	}
 	if err := auditStore.UpsertEGMRegistryOverride(ctx, store.EGMRegistryOverride{
 		EGMID:       "EGM-01",
 		DisplayName: "Saved Cabinet",
@@ -371,19 +368,6 @@ func TestRuntimeOverridesSnapshotAndRestoreFlow(t *testing.T) {
 	if err := auditStore.UpsertHeartbeatPolicyOverride(ctx, 6000, 4, 8, "seed"); err != nil {
 		t.Fatalf("seed heartbeat policy override: %v", err)
 	}
-	if err := auditStore.UpsertBlockerPolicyOverrideWithMeta(ctx, []string{"service_readiness"}, "seed", "save_override", "seed", "token"); err != nil {
-		t.Fatalf("seed blocker policy override: %v", err)
-	}
-	if _, err := auditStore.RecordBlockerPolicyEscalationEvent(ctx, store.BlockerPolicyEscalationEvent{
-		CreatedAt:  now,
-		Action:     "approve",
-		FindingID:  "service_readiness",
-		Rationale:  "seed",
-		ActorScope: "token",
-		UpdatedBy:  "seed",
-	}); err != nil {
-		t.Fatalf("seed blocker policy escalation event: %v", err)
-	}
 	if err := auditStore.UpsertEGMRegistryOverride(ctx, store.EGMRegistryOverride{
 		EGMID:       "EGM-02",
 		DisplayName: "Cabinet 2",
@@ -409,12 +393,6 @@ func TestRuntimeOverridesSnapshotAndRestoreFlow(t *testing.T) {
 	if snapshotBody.HeartbeatPolicyOverride == nil || snapshotBody.HeartbeatPolicyOverride.IntervalMS != 6000 {
 		t.Fatalf("unexpected heartbeat_policy_override in snapshot: %+v", snapshotBody.HeartbeatPolicyOverride)
 	}
-	if snapshotBody.BlockerPolicyOverride == nil || len(snapshotBody.BlockerPolicyOverride.ApprovedBlockerIDs) != 1 {
-		t.Fatalf("unexpected blocker_policy_override in snapshot: %+v", snapshotBody.BlockerPolicyOverride)
-	}
-	if len(snapshotBody.BlockerPolicyEscalationHistorySummary) == 0 {
-		t.Fatalf("expected blocker policy escalation history summary in snapshot")
-	}
 	if len(snapshotBody.EGMRegistryOverrides) != 1 || snapshotBody.EGMRegistryOverrides[0].EGMID != "EGM-02" {
 		t.Fatalf("unexpected egm_registry_overrides in snapshot: %+v", snapshotBody.EGMRegistryOverrides)
 	}
@@ -432,9 +410,6 @@ func TestRuntimeOverridesSnapshotAndRestoreFlow(t *testing.T) {
 			"interval_ms":7000,
 			"warning_after_missed":5,
 			"block_after_missed":9
-		},
-		"blocker_policy_override":{
-			"approved_blocker_ids":["service_readiness","cabinet_profile"]
 		},
 		"egm_registry_overrides":[
 			{"egm_id":"EGM-02","display_name":"Cabinet 2A","vendor":"Acme"},
@@ -456,9 +431,6 @@ func TestRuntimeOverridesSnapshotAndRestoreFlow(t *testing.T) {
 	}
 	if restoreBody.HeartbeatPolicy.Effective.IntervalMS != 7000 {
 		t.Fatalf("heartbeat_policy.effective.interval_ms = %d, want 7000", restoreBody.HeartbeatPolicy.Effective.IntervalMS)
-	}
-	if len(restoreBody.BlockerPolicy.Effective.ApprovedBlockerIDs) != 2 {
-		t.Fatalf("blocker_policy.effective.approved_blocker_ids len = %d, want 2", len(restoreBody.BlockerPolicy.Effective.ApprovedBlockerIDs))
 	}
 	if len(restoreBody.EGMRegistry.Overrides) != 2 {
 		t.Fatalf("egm_registry.overrides len = %d, want 2", len(restoreBody.EGMRegistry.Overrides))
@@ -498,14 +470,6 @@ func TestRuntimeOverridesRestoreValidation(t *testing.T) {
 	handler(badHeartbeatRec, badHeartbeatReq)
 	if badHeartbeatRec.Code != http.StatusBadRequest {
 		t.Fatalf("bad heartbeat restore status = %d, want 400", badHeartbeatRec.Code)
-	}
-
-	badBlockerReq := httptest.NewRequest(http.MethodPost, "/api/runtime-overrides/restore", bytes.NewBufferString(`{"blocker_policy_override":{"approved_blocker_ids":["BAD-ID"]}}`))
-	badBlockerReq.Header.Set("Content-Type", "application/json")
-	badBlockerRec := httptest.NewRecorder()
-	handler(badBlockerRec, badBlockerReq)
-	if badBlockerRec.Code != http.StatusBadRequest {
-		t.Fatalf("bad blocker restore status = %d, want 400", badBlockerRec.Code)
 	}
 
 	badRegistryReq := httptest.NewRequest(http.MethodPost, "/api/runtime-overrides/restore", bytes.NewBufferString(`{"egm_registry_overrides":[{"egm_id":""}]}`))

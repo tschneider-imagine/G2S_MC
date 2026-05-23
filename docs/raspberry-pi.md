@@ -264,7 +264,7 @@ Runtime endpoints:
 
 - `GET /api/status` includes `cabinet_profile`, `profile_source`, `profile_last_updated_at`, and `profile_differs_from_file`
 - `GET /api/cabinet-profile` returns effective profile and override metadata
-- `GET /api/cabinet-preflight` runs actionable cabinet readiness checks and returns `overall`, `checks`, and `blockers`
+- `GET /api/cabinet-preflight` runs actionable cabinet readiness checks and returns `overall`, `checks`, `issues`, and `warnings`
 - `PUT /api/cabinet-profile` writes/updates override values (requires bearer token when `api.auth_token` is set)
 - `DELETE /api/cabinet-profile` clears override and reverts to file values (requires bearer token when `api.auth_token` is set)
 
@@ -284,7 +284,7 @@ bash ./scripts/cabinet-preflight.sh
 Interpretation:
 
 - `overall=PASS`: the current runtime state satisfies all required cabinet preflight checks.
-- `overall=FAIL`: one or more blockers were detected; use `blockers` and per-check details to resolve them before a real cabinet session.
+- `overall=FAIL`: one or more setup issues were detected; use `issues` and per-check details to resolve them before a real cabinet session.
 
 ## One-Command Release Gate
 

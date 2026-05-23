@@ -29,22 +29,22 @@ fi
 echo "Cabinet preflight: ${overall}"
 
 if [[ "${overall}" == "PASS" ]]; then
-  echo " - blockers: none"
+  echo " - issues: none"
   exit 0
 fi
 
-blockers_blob="$(printf '%s' "${payload}" | sed -n 's/.*"blockers":\[\(.*\)\],"timestamp".*/\1/p')"
-if [[ -n "${blockers_blob}" ]]; then
-  printf '%s\n' "${blockers_blob}" \
+issues_blob="$(printf '%s' "${payload}" | sed -n 's/.*"issues":\[\(.*\)\],"warnings".*/\1/p')"
+if [[ -n "${issues_blob}" ]]; then
+  printf '%s\n' "${issues_blob}" \
     | sed 's/","/\n/g' \
     | sed 's/^"//; s/"$//; s/\\"/"/g' \
-    | while IFS= read -r blocker; do
-        if [[ -n "${blocker}" ]]; then
-          echo " - ${blocker}"
+    | while IFS= read -r issue; do
+        if [[ -n "${issue}" ]]; then
+          echo " - ${issue}"
         fi
       done
 else
-  echo " - blockers: none reported"
+  echo " - issues: none reported"
 fi
 
 exit 1

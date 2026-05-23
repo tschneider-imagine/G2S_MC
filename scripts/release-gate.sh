@@ -95,10 +95,10 @@ else
   if [[ "${preflight_overall}" == "PASS" ]]; then
     record_row "cabinet-preflight" "PASS" "overall=PASS"
   elif [[ "${preflight_overall}" == "FAIL" ]]; then
-    blockers_raw="$(printf '%s' "${preflight_payload}" | sed -n 's/.*"blockers"[[:space:]]*:[[:space:]]*\[\(.*\)\][[:space:]]*,[[:space:]]*"timestamp".*/\1/p')"
-    if [[ -n "${blockers_raw}" ]]; then
-      blockers_text="$(printf '%s' "${blockers_raw}" | sed 's/","/; /g; s/^"//; s/"$//; s/\\"/"/g')"
-      record_row "cabinet-preflight" "FAIL" "overall=FAIL; ${blockers_text}"
+    issues_raw="$(printf '%s' "${preflight_payload}" | sed -n 's/.*"issues"[[:space:]]*:[[:space:]]*\[\(.*\)\][[:space:]]*,[[:space:]]*"warnings".*/\1/p')"
+    if [[ -n "${issues_raw}" ]]; then
+      issues_text="$(printf '%s' "${issues_raw}" | sed 's/","/; /g; s/^"//; s/"$//; s/\\"/"/g')"
+      record_row "cabinet-preflight" "FAIL" "overall=FAIL; ${issues_text}"
     else
       record_row "cabinet-preflight" "FAIL" "overall=FAIL"
     fi

@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 )
 
@@ -16,8 +15,6 @@ const (
 	DefaultHeartbeatWarningAfterMissed = 3
 	DefaultHeartbeatBlockAfterMissed   = 6
 )
-
-var blockerIDPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 func LoadFile(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
@@ -55,7 +52,6 @@ func (c Config) Validate() error {
 	requireText(&problems, "g2s.host_url", c.G2S.HostURL)
 	requireText(&problems, "g2s.endpoint_path", c.G2S.EndpointPath)
 	problems = append(problems, validateCabinetProfile(c.CabinetProfile)...)
-	problems = append(problems, validateBlockerPolicy(c.BlockerPolicy)...)
 	if c.G2S.RequireTLS {
 		requireText(&problems, "crypto.web_server_cert_path", c.Crypto.WebServerCertPath)
 		requireText(&problems, "crypto.web_server_key_path", c.Crypto.WebServerKeyPath)
@@ -187,27 +183,5 @@ func validateCabinetProfile(profile CabinetProfile) []string {
 		}
 	}
 
-	return problems
-}
-
-func validateBlockerPolicy(policy BlockerPolicy) []string {
-	problems := []string{}
-	seen := map[string]struct{}{}
-	for i, raw := range policy.ApprovedBlockerIDs {
-		id := strings.TrimSpace(raw)
-		if id == "" {
-			problems = append(problems, fmt.Sprintf("blocker_policy.approved_blocker_ids[%d] is required", i))
-			continue
-		}
-		if !blockerIDPattern.MatchString(id) {
-			problems = append(problems, fmt.Sprintf("blocker_policy.approved_blocker_ids[%d] must match ^[a-z0-9_]+$", i))
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			problems = append(problems, fmt.Sprintf("blocker_policy.approved_blocker_ids[%d] duplicates %q", i, id))
-			continue
-		}
-		seen[id] = struct{}{}
-	}
 	return problems
 }

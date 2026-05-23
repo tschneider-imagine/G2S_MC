@@ -81,10 +81,10 @@ func TestEvaluateCabinetPreflightPass(t *testing.T) {
 		StartedAt:  time.Now().Add(-10 * time.Second),
 	})
 	if result.Overall != preflightPass {
-		t.Fatalf("overall = %q, want %q; blockers=%v", result.Overall, preflightPass, result.Blockers)
+		t.Fatalf("overall = %q, want %q; issues=%v", result.Overall, preflightPass, result.Issues)
 	}
-	if len(result.Blockers) != 0 {
-		t.Fatalf("unexpected blockers: %v", result.Blockers)
+	if len(result.Issues) != 0 {
+		t.Fatalf("unexpected issues: %v", result.Issues)
 	}
 	for _, check := range result.Checks {
 		if check.Result != preflightPass {
@@ -162,8 +162,8 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 		if !strings.Contains(profileCheck.Detail, "wire_host_url") || !strings.Contains(profileCheck.Detail, "first_test_egm_ids") {
 			t.Fatalf("expected cabinet_profile detail to include required field names, got %q", profileCheck.Detail)
 		}
-		if len(result.Blockers) == 0 {
-			t.Fatal("expected blocker list for fail case")
+		if len(result.Issues) == 0 {
+			t.Fatal("expected issue list for fail case")
 		}
 	})
 
@@ -270,7 +270,7 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 			StartedAt:  time.Now().Add(-5 * time.Second),
 		})
 		if result.Overall != preflightPass {
-			t.Fatalf("overall = %q, want PASS; blockers=%v", result.Overall, result.Blockers)
+			t.Fatalf("overall = %q, want PASS; issues=%v", result.Overall, result.Issues)
 		}
 
 		sanCheck := checkByID(t, result.Checks, "certificate_san_wire_identity")
@@ -337,7 +337,7 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 		assertCheckFailed(t, result.Checks, "certificate_san_wire_identity")
 	})
 
-	t.Run("lab mode with connected EGMs downgrades placeholder first-test ids to warning-only", func(t *testing.T) {
+	t.Run("lab mode with connected EGMs treats placeholder first-test ids as warning-only", func(t *testing.T) {
 		ctx := context.Background()
 		auditStore, err := store.Open(ctx, ":memory:")
 		if err != nil {
@@ -385,15 +385,15 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 			StartedAt:  time.Now().Add(-5 * time.Second),
 		})
 		if result.Overall != preflightPass {
-			t.Fatalf("overall = %q, want PASS; blockers=%v", result.Overall, result.Blockers)
+			t.Fatalf("overall = %q, want PASS; issues=%v", result.Overall, result.Issues)
 		}
 		assertCheckPassed(t, result.Checks, "cabinet_profile")
 		profileCheck := checkByID(t, result.Checks, "cabinet_profile")
 		if !strings.Contains(profileCheck.Detail, "lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER") {
 			t.Fatalf("expected placeholder warning code in cabinet_profile detail, got %q", profileCheck.Detail)
 		}
-		if len(result.Blockers) != 0 {
-			t.Fatalf("expected no blockers, got %v", result.Blockers)
+		if len(result.Issues) != 0 {
+			t.Fatalf("expected no issues, got %v", result.Issues)
 		}
 	})
 
@@ -450,100 +450,10 @@ func TestEvaluateCabinetPreflightFailCases(t *testing.T) {
 		if !strings.Contains(profileCheck.Detail, "first_test_egm_ids") {
 			t.Fatalf("expected first_test_egm_ids detail for blocking path, got %q", profileCheck.Detail)
 		}
-		if len(result.Blockers) == 0 {
-			t.Fatal("expected blocker list for strict path")
+		if len(result.Issues) == 0 {
+			t.Fatal("expected issue list for strict path")
 		}
 	})
-}
-
-func TestEvaluateCabinetPreflightBlockerGovernance(t *testing.T) {
-	ctx := context.Background()
-	auditStore, err := store.Open(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = auditStore.Close() })
-
-	cfg := config.Config{
-		ControllerID: "G2S-MC-TEST",
-		Database:     config.Database{Path: ":memory:"},
-		WebUI:        config.WebUI{BindAddress: "127.0.0.1:8444"},
-		G2S: config.G2S{
-			HostURL:      "http://127.0.0.1:8444/g2s",
-			EndpointPath: "/g2s",
-			RequireTLS:   false,
-		},
-		CabinetProfile: config.CabinetProfile{
-			WireHostURL:     "https://lab-cabinet.local:8444/g2s",
-			ListenerDNSName: "lab-cabinet.local",
-			RequiredSANDNS:  []string{"lab-cabinet.local"},
-			HostID:          "HOST-LAB-1001",
-			FirstTestEGMIDs: []string{},
-		},
-		EGMRoster: []config.EGM{{EGMID: "EGM-01", IPAddress: "127.0.0.1", Port: 9443}},
-	}
-
-	if _, err := refreshCertificateInventory(ctx, auditStore, cfg, time.Now().UTC()); err != nil {
-		t.Fatalf("refresh certificate inventory: %v", err)
-	}
-	eng := engine.New(cfg.ControllerID, cfg.EGMRoster)
-	runCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-	eng.Start(runCtx)
-	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now()})
-	waitForLastEvent(t, eng, string(engine.EventBootComplete))
-
-	cfg.BlockerPolicy = config.BlockerPolicy{
-		ApprovedBlockerIDs: []string{"service_readiness"},
-	}
-	unapprovedResult := evaluateCabinetPreflight(ctx, eng, auditStore, cfg, runtimeInfo{
-		ConfigPath: "/etc/g2s-mute/config.json",
-		StartedAt:  time.Now().Add(-5 * time.Second),
-	})
-	if unapprovedResult.Overall != preflightPass {
-		t.Fatalf("overall = %q, want PASS when cabinet_profile is not approved; blockers=%v", unapprovedResult.Overall, unapprovedResult.Blockers)
-	}
-	if len(unapprovedResult.Blockers) != 0 {
-		t.Fatalf("expected no blockers for unapproved cabinet_profile finding, got %v", unapprovedResult.Blockers)
-	}
-	if len(unapprovedResult.ActiveApprovedIDs) == 0 {
-		t.Fatalf("expected active_approved_ids to be populated")
-	}
-	foundDowngraded := false
-	for _, item := range unapprovedResult.DowngradedFindings {
-		if item.ID == "cabinet_profile" {
-			foundDowngraded = true
-			if item.Marker != blockerPolicyDowngradeMarker {
-				t.Fatalf("downgraded marker = %q, want %q", item.Marker, blockerPolicyDowngradeMarker)
-			}
-		}
-	}
-	if !foundDowngraded {
-		t.Fatalf("expected cabinet_profile in downgraded findings: %+v", unapprovedResult.DowngradedFindings)
-	}
-	foundDowngradedID := false
-	for _, id := range unapprovedResult.DowngradedIDs {
-		if id == "cabinet_profile" {
-			foundDowngradedID = true
-		}
-	}
-	if !foundDowngradedID {
-		t.Fatalf("expected cabinet_profile in downgraded_ids: %+v", unapprovedResult.DowngradedIDs)
-	}
-
-	cfg.BlockerPolicy = config.BlockerPolicy{
-		ApprovedBlockerIDs: []string{"cabinet_profile", "service_readiness"},
-	}
-	approvedResult := evaluateCabinetPreflight(ctx, eng, auditStore, cfg, runtimeInfo{
-		ConfigPath: "/etc/g2s-mute/config.json",
-		StartedAt:  time.Now().Add(-5 * time.Second),
-	})
-	if approvedResult.Overall != preflightFail {
-		t.Fatalf("overall = %q, want FAIL when cabinet_profile is approved", approvedResult.Overall)
-	}
-	if len(approvedResult.Blockers) == 0 {
-		t.Fatalf("expected blockers when cabinet_profile is approved")
-	}
 }
 
 func TestCabinetPreflightHandler(t *testing.T) {
@@ -597,16 +507,6 @@ func TestCabinetPreflightHandler(t *testing.T) {
 	eng.Start(runCtx)
 	eng.Submit(engine.Event{Type: engine.EventBootComplete, At: time.Now()})
 	waitForLastEvent(t, eng, string(engine.EventBootComplete))
-	if _, err := auditStore.RecordBlockerPolicyEscalationEvent(ctx, store.BlockerPolicyEscalationEvent{
-		CreatedAt:  time.Now().UTC(),
-		Action:     blockerPolicyActionApprove,
-		FindingID:  "cabinet_profile",
-		Rationale:  "test rationale",
-		ActorScope: "local",
-		UpdatedBy:  "tester",
-	}); err != nil {
-		t.Fatalf("record blocker policy escalation event: %v", err)
-	}
 	handler := cabinetPreflightHandler(eng, auditStore, cfg, runtimeInfo{
 		ConfigPath: "/etc/g2s-mute/config.json",
 		StartedAt:  time.Now().Add(-10 * time.Second),
@@ -627,15 +527,6 @@ func TestCabinetPreflightHandler(t *testing.T) {
 	}
 	if len(payload.Checks) == 0 {
 		t.Fatal("expected checks in preflight response")
-	}
-	if len(payload.BlockerPolicy.Effective.ApprovedBlockerIDs) == 0 {
-		t.Fatal("expected blocker policy metadata in preflight response")
-	}
-	if len(payload.ActiveApprovedIDs) == 0 {
-		t.Fatal("expected active_approved_ids in preflight response")
-	}
-	if len(payload.EscalationHistory) == 0 {
-		t.Fatal("expected escalation_history summary in preflight response")
 	}
 
 	methodRequest := httptest.NewRequest(http.MethodPost, "/api/cabinet-preflight", nil)

@@ -24,28 +24,16 @@ const (
 )
 
 type cabinetPreflightResponse struct {
-	Overall            string                             `json:"overall"`
-	Checks             []cabinetPreflightCheck            `json:"checks"`
-	Blockers           []string                           `json:"blockers"`
-	Warnings           []string                           `json:"warnings,omitempty"`
-	DowngradedFindings []cabinetPreflightDowngradedItem   `json:"downgraded_findings,omitempty"`
-	ActiveApprovedIDs  []string                           `json:"active_approved_ids"`
-	DowngradedIDs      []string                           `json:"downgraded_ids,omitempty"`
-	EscalationHistory  []blockerPolicyEscalationEventView `json:"escalation_history,omitempty"`
-	BlockerPolicy      blockerPolicyResponse              `json:"blocker_policy"`
-	Timestamp          time.Time                          `json:"timestamp"`
+	Overall   string                  `json:"overall"`
+	Checks    []cabinetPreflightCheck `json:"checks"`
+	Issues    []string                `json:"issues,omitempty"`
+	Warnings  []string                `json:"warnings,omitempty"`
+	Timestamp time.Time               `json:"timestamp"`
 }
 
 type cabinetPreflightCheck struct {
 	ID      string `json:"id"`
 	Result  string `json:"result"`
-	Message string `json:"message"`
-	Detail  string `json:"detail,omitempty"`
-}
-
-type cabinetPreflightDowngradedItem struct {
-	ID      string `json:"id"`
-	Marker  string `json:"marker"`
 	Message string `json:"message"`
 	Detail  string `json:"detail,omitempty"`
 }
@@ -63,41 +51,16 @@ func cabinetPreflightHandler(eng *engine.Engine, store *store.SQLiteStore, cfg c
 
 func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *store.SQLiteStore, cfg config.Config, runtime runtimeInfo) cabinetPreflightResponse {
 	response := cabinetPreflightResponse{
-		Overall:            preflightPass,
-		Checks:             []cabinetPreflightCheck{},
-		Blockers:           []string{},
-		Warnings:           []string{},
-		DowngradedFindings: []cabinetPreflightDowngradedItem{},
-		ActiveApprovedIDs:  []string{},
-		DowngradedIDs:      []string{},
-		EscalationHistory:  []blockerPolicyEscalationEventView{},
-		Timestamp:          time.Now().UTC(),
+		Overall:   preflightPass,
+		Checks:    []cabinetPreflightCheck{},
+		Issues:    []string{},
+		Warnings:  []string{},
+		Timestamp: time.Now().UTC(),
 	}
 
 	addCheck := func(check cabinetPreflightCheck) {
 		response.Checks = append(response.Checks, check)
 	}
-
-	policy, policyErr := resolveBlockerPolicyWithHistoryLimit(ctx, store, cfg.BlockerPolicy, blockerPolicyPreflightHistoryLimit)
-	if policyErr != nil {
-		fallbackApproved := append([]string{}, defaultApprovedBlockerIDs...)
-		sort.Strings(fallbackApproved)
-		policy = resolvedBlockerPolicy{
-			Effective: config.BlockerPolicy{
-				ApprovedBlockerIDs: fallbackApproved,
-			},
-			File: config.BlockerPolicy{
-				ApprovedBlockerIDs: append([]string{}, fallbackApproved...),
-			},
-			PolicySource: blockerPolicySourceFile,
-		}
-		response.Warnings = append(response.Warnings, "blocker policy unavailable; using default approved blocker IDs")
-	}
-	response.BlockerPolicy = buildBlockerPolicyResponse(policy)
-	response.ActiveApprovedIDs = append([]string{}, response.BlockerPolicy.Effective.ApprovedBlockerIDs...)
-	response.EscalationHistory = append([]blockerPolicyEscalationEventView{}, response.BlockerPolicy.EscalationHistory...)
-	approvedBlockerIDs := blockerPolicyIDSet(policy.Effective.ApprovedBlockerIDs)
-	downgradedSet := map[string]struct{}{}
 
 	status, statusErr := computeApplianceStatus(ctx, eng, store, cfg, runtime, nil)
 	profile, profileErr := resolveCabinetProfile(ctx, store, cfg.CabinetProfile)
@@ -113,26 +76,9 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 		if check.Result != preflightFail {
 			continue
 		}
-		if _, ok := approvedBlockerIDs[check.ID]; ok {
-			response.Overall = preflightFail
-			response.Blockers = append(response.Blockers, check.Message)
-			continue
-		}
-		response.Warnings = append(response.Warnings, "downgraded_by_blocker_policy id="+check.ID+" message="+check.Message)
-		response.DowngradedFindings = append(response.DowngradedFindings, cabinetPreflightDowngradedItem{
-			ID:      check.ID,
-			Marker:  blockerPolicyDowngradeMarker,
-			Message: check.Message,
-			Detail:  check.Detail,
-		})
-		downgradedSet[check.ID] = struct{}{}
+		response.Overall = preflightFail
+		response.Issues = append(response.Issues, check.Message)
 	}
-	downgradedIDs := make([]string, 0, len(downgradedSet))
-	for id := range downgradedSet {
-		downgradedIDs = append(downgradedIDs, id)
-	}
-	sort.Strings(downgradedIDs)
-	response.DowngradedIDs = downgradedIDs
 
 	return response
 }
