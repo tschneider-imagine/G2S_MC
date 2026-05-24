@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
 	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
@@ -31,6 +32,7 @@ type Store interface {
 	CreateActionRun(ctx context.Context, run actions.ActionRun) (actions.ActionRun, error)
 	GetActionRun(ctx context.Context, id string) (*actions.ActionRun, error)
 	ListActionRuns(ctx context.Context, query store.ActionRunListQuery) ([]actions.ActionRun, error)
+	UpdateActionRun(ctx context.Context, run actions.ActionRun) error
 	CreateActionTargetResult(ctx context.Context, result actions.ActionTargetResult) (actions.ActionTargetResult, error)
 	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
 
@@ -45,6 +47,8 @@ type Store interface {
 	ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error)
 
 	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
+	RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error)
+	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 	ListAuditTimelineEntries(ctx context.Context, query store.AuditTimelineListQuery) ([]audit.AuditTimelineEntry, error)
 }
 
@@ -104,16 +108,17 @@ func (s *Server) handleActionRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
-	id, targets, ok := actionRunRoute(r.URL.Path)
+	id, action, ok := actionRunRoute(r.URL.Path)
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if targets {
+	switch action {
+	case "targets":
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		rows, err := s.Store.ListActionTargetResults(r.Context(), id)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -121,18 +126,71 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, rows)
 		return
-	}
-
-	row, err := s.Store.GetActionRun(r.Context(), id)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+	case "messages":
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		rows, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{
+			Limit:       queryLimit(r, 200),
+			ActionRunID: id,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+		return
+	case "dispatch-dry-run":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		var req ActionRunDispatchDryRunRequest
+		if r.ContentLength > 0 {
+			if !decodeJSON(w, r, &req) {
+				return
+			}
+		}
+		dispatcher := actiondispatch.Dispatcher{Store: s.Store}
+		result, err := dispatcher.Dispatch(r.Context(), actiondispatch.DispatchRequest{
+			ActionRunID: id,
+			Mode:        actiondispatch.DispatchModeDryRun,
+			Actor:       strings.TrimSpace(req.Actor),
+		})
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				writeJSONError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	case "run":
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		row, err := s.Store.GetActionRun(r.Context(), id)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if row == nil {
+			writeJSONError(w, http.StatusNotFound, "action run not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, row)
+		return
+	default:
+		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if row == nil {
-		writeJSONError(w, http.StatusNotFound, "action run not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, row)
 }
 
 func (s *Server) handleInputRuntimeState(w http.ResponseWriter, r *http.Request) {
@@ -493,26 +551,40 @@ func actionRoute(path string) (id string, preview bool, ok bool) {
 	return trimmed, false, true
 }
 
-func actionRunRoute(path string) (id string, targets bool, ok bool) {
+func actionRunRoute(path string) (id string, action string, ok bool) {
 	const prefix = "/api/v2/actions/runs/"
 	if !strings.HasPrefix(path, prefix) {
-		return "", false, false
+		return "", "", false
 	}
 	trimmed := strings.TrimSpace(strings.TrimPrefix(path, prefix))
 	if trimmed == "" {
-		return "", false, false
+		return "", "", false
 	}
 	if strings.HasSuffix(trimmed, "/targets") {
 		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/targets"))
 		if id == "" || strings.Contains(id, "/") {
-			return "", false, false
+			return "", "", false
 		}
-		return id, true, true
+		return id, "targets", true
+	}
+	if strings.HasSuffix(trimmed, "/messages") {
+		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/messages"))
+		if id == "" || strings.Contains(id, "/") {
+			return "", "", false
+		}
+		return id, "messages", true
+	}
+	if strings.HasSuffix(trimmed, "/dispatch-dry-run") {
+		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/dispatch-dry-run"))
+		if id == "" || strings.Contains(id, "/") {
+			return "", "", false
+		}
+		return id, "dispatch-dry-run", true
 	}
 	if strings.Contains(trimmed, "/") {
-		return "", false, false
+		return "", "", false
 	}
-	return trimmed, false, true
+	return trimmed, "run", true
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {

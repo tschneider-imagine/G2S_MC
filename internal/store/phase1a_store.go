@@ -17,9 +17,10 @@ import (
 )
 
 type MessageJournalListQuery struct {
-	Limit     int
-	EGMID     string
-	Direction g2sengine.MessageDirection
+	Limit       int
+	EGMID       string
+	ActionRunID string
+	Direction   g2sengine.MessageDirection
 }
 
 type AuditTimelineListQuery struct {
@@ -365,6 +366,41 @@ func (s *SQLiteStore) GetActionRun(ctx context.Context, id string) (*actions.Act
 		run.CompletedAt = &value
 	}
 	return &run, nil
+}
+
+func (s *SQLiteStore) UpdateActionRun(ctx context.Context, run actions.ActionRun) error {
+	if err := run.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE action_runs
+		    SET action_definition_id = ?,
+		        incident_id = ?,
+		        input_transition_id = ?,
+		        started_at = ?,
+		        completed_at = ?,
+		        status = ?,
+		        trigger_reason = ?,
+		        target_count = ?,
+		        confirmed_count = ?,
+		        failed_count = ?,
+		        escalated_count = ?
+		  WHERE id = ?`,
+		strings.TrimSpace(run.ActionDefinitionID),
+		nullableTrimmed(run.IncidentID),
+		nullableInt64(run.InputTransitionID),
+		run.StartedAt,
+		nullableTime(run.CompletedAt),
+		run.Status,
+		nullableTrimmed(run.TriggerReason),
+		run.TargetCount,
+		run.ConfirmedCount,
+		run.FailedCount,
+		run.EscalatedCount,
+		strings.TrimSpace(run.ID),
+	)
+	return err
 }
 
 func (s *SQLiteStore) ListActionRuns(ctx context.Context, query ActionRunListQuery) ([]actions.ActionRun, error) {
@@ -865,6 +901,10 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 	args := []any{}
 	if id := strings.TrimSpace(query.EGMID); id != "" {
 		where = append(where, "egm_id = ?")
+		args = append(args, id)
+	}
+	if id := strings.TrimSpace(query.ActionRunID); id != "" {
+		where = append(where, "action_run_id = ?")
 		args = append(args, id)
 	}
 	if query.Direction != "" {

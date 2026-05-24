@@ -471,6 +471,128 @@ func TestGetActionRunTargetsReturnsRows(t *testing.T) {
 	}
 }
 
+func TestPostActionRunDispatchDryRunRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/dispatch-dry-run", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d, want 1", calls)
+	}
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestPostActionRunDispatchDryRunCreatesMessages(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/dispatch-dry-run", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	messages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 50, ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("list message journal by run: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("message rows=%d, want 1", len(messages))
+	}
+	if messages[0].Result != g2sengine.MessageResultDryRun {
+		t.Fatalf("message result=%q, want %q", messages[0].Result, g2sengine.MessageResultDryRun)
+	}
+	run, err := db.GetActionRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("get action run: %v", err)
+	}
+	if run == nil || run.Status != actions.RunStatusDispatchPrepared {
+		t.Fatalf("unexpected run after dispatch: %+v", run)
+	}
+}
+
+func TestPostActionRunDispatchDryRunMissingRunReturns404(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/missing/dispatch-dry-run", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusNotFound, res.Body.String())
+	}
+}
+
+func TestGetActionRunMessagesReturnsJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		MessageType: "queue_only_no_send",
+		RawPayload:  "DRY_RUN_NO_SEND action=action-1 egm=EGM-1 step=queue_only_no_send",
+		Result:      g2sengine.MessageResultDryRun,
+	}); err != nil {
+		t.Fatalf("seed message journal entry: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/actions/runs/run-1/messages", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d", res.Code, http.StatusOK)
+	}
+	var entries []g2sengine.MessageJournalEntry
+	if err := json.Unmarshal(res.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ActionRunID != "run-1" {
+		t.Fatalf("unexpected action run messages: %+v", entries)
+	}
+}
+
 func allowMutation(_ http.ResponseWriter, _ *http.Request) bool { return true }
 
 func validInputChannel() inputs.InputChannel {
@@ -537,5 +659,27 @@ func seedActionRunFixtures(t *testing.T, ctx context.Context, db *store.SQLiteSt
 		AttemptCount: 0,
 	}); err != nil {
 		t.Fatalf("seed action target result: %v", err)
+	}
+}
+
+func seedDispatchFixtures(t *testing.T, ctx context.Context, db *store.SQLiteStore) {
+	t.Helper()
+	if err := db.UpsertG2STemplate(ctx, templates.G2STemplate{
+		ID:     "template-smoke-no-send",
+		Name:   "Smoke",
+		Vendor: "SMOKE",
+		Status: templates.TemplateStatusActive,
+	}); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	if err := db.UpsertEGMRecord(ctx, egms.EGMRecord{
+		EGMID:              "EGM-1",
+		DisplayName:        "Smoke EGM 1",
+		Enabled:            true,
+		EmergencyEnabled:   true,
+		TemplateID:         "template-smoke-no-send",
+		CurrentActionState: egms.EGMActionStateNormal,
+	}); err != nil {
+		t.Fatalf("seed egm: %v", err)
 	}
 }

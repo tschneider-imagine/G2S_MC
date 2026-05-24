@@ -183,6 +183,19 @@ func TestActionRunCreateGetList(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID != "run-1" {
 		t.Fatalf("unexpected action runs: %+v", rows)
 	}
+
+	run.Status = actions.RunStatusDispatchPrepared
+	run.ConfirmedCount = 1
+	if err := store.UpdateActionRun(ctx, run); err != nil {
+		t.Fatalf("update action run: %v", err)
+	}
+	updated, err := store.GetActionRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("get updated action run: %v", err)
+	}
+	if updated == nil || updated.Status != actions.RunStatusDispatchPrepared || updated.ConfirmedCount != 1 {
+		t.Fatalf("unexpected updated action run: %+v", updated)
+	}
 }
 
 func TestActionTargetResultCreateList(t *testing.T) {
@@ -294,6 +307,14 @@ func TestMessageJournalRecordAndList(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].ID != messageID {
 		t.Fatalf("unexpected message entries: %+v", entries)
+	}
+
+	entriesByRun, err := store.ListMessageJournalEntries(ctx, MessageJournalListQuery{Limit: 10, ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("list message journal entries by action run: %v", err)
+	}
+	if len(entriesByRun) != 1 || entriesByRun[0].ID != messageID {
+		t.Fatalf("unexpected message entries by action run: %+v", entriesByRun)
 	}
 }
 

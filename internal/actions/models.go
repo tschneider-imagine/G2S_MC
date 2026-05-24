@@ -19,11 +19,15 @@ const (
 type ActionRunStatus string
 
 const (
-	RunStatusPending   ActionRunStatus = "PENDING"
-	RunStatusRunning   ActionRunStatus = "RUNNING"
-	RunStatusSucceeded ActionRunStatus = "SUCCEEDED"
-	RunStatusFailed    ActionRunStatus = "FAILED"
-	RunStatusEscalated ActionRunStatus = "ESCALATED"
+	RunStatusPending             ActionRunStatus = "PENDING"
+	RunStatusDispatching         ActionRunStatus = "DISPATCHING"
+	RunStatusDispatchPrepared    ActionRunStatus = "DISPATCH_PREPARED"
+	RunStatusWaitingConfirmation ActionRunStatus = "WAITING_CONFIRMATION"
+	RunStatusRunning             ActionRunStatus = "RUNNING"
+	RunStatusSucceeded           ActionRunStatus = "SUCCEEDED"
+	RunStatusFailed              ActionRunStatus = "FAILED"
+	RunStatusEscalated           ActionRunStatus = "ESCALATED"
+	RunStatusCancelled           ActionRunStatus = "CANCELLED"
 )
 
 type ActionTargetStatus string
@@ -134,7 +138,7 @@ func (r ActionRun) Validate() error {
 		return fmt.Errorf("started_at is required")
 	}
 	switch r.Status {
-	case RunStatusPending, RunStatusRunning, RunStatusSucceeded, RunStatusFailed, RunStatusEscalated:
+	case RunStatusPending, RunStatusDispatching, RunStatusDispatchPrepared, RunStatusWaitingConfirmation, RunStatusRunning, RunStatusSucceeded, RunStatusFailed, RunStatusEscalated, RunStatusCancelled:
 	default:
 		return fmt.Errorf("status is invalid")
 	}

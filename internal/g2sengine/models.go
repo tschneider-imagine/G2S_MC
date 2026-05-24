@@ -23,6 +23,7 @@ const (
 	MessageResultFailed    MessageResult = "FAILED"
 	MessageResultIgnored   MessageResult = "IGNORED"
 	MessageResultEscalated MessageResult = "ESCALATED"
+	MessageResultDryRun    MessageResult = "DRY_RUN"
 )
 
 type MessageJournalEntry struct {
@@ -56,7 +57,7 @@ func (m MessageJournalEntry) Validate() error {
 		return fmt.Errorf("raw_payload is required")
 	}
 	switch m.Result {
-	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated:
+	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun:
 	default:
 		return fmt.Errorf("result is invalid")
 	}

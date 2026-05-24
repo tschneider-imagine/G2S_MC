@@ -34,6 +34,10 @@ type ActionRunTargetsListResponse struct {
 	Targets []actions.ActionTargetResult `json:"targets"`
 }
 
+type ActionRunDispatchDryRunRequest struct {
+	Actor string `json:"actor,omitempty"`
+}
+
 type TemplatesListResponse struct {
 	Templates []templates.G2STemplate `json:"templates"`
 }

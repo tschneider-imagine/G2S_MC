@@ -9,13 +9,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
 	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
+	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/gpioinput"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
+	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
 
 func main() {
@@ -26,7 +29,9 @@ func main() {
 	interval := flag.Duration("interval", 100*time.Millisecond, "poll interval")
 	duration := flag.Duration("duration", 0, "poll duration (default 30s when not -once)")
 	queueActions := flag.Bool("queue-actions", false, "queue pending action runs when transitions include action IDs")
+	dispatchDryRun := flag.Bool("dispatch-dry-run", false, "dry-run dispatch queued runs from this monitor process")
 	seedDemoActions := flag.Bool("seed-demo-actions", false, "seed queue-only demo action definitions and bind default channels")
+	seedDemoEGMs := flag.Bool("seed-demo-egms", false, "seed no-send smoke EGM registry records and template")
 	flag.Parse()
 
 	if *interval <= 0 {
@@ -35,6 +40,10 @@ func main() {
 	}
 	if *duration < 0 {
 		fmt.Fprintln(os.Stderr, "-duration must be >= 0")
+		os.Exit(2)
+	}
+	if *dispatchDryRun && !*queueActions {
+		fmt.Fprintln(os.Stderr, "-dispatch-dry-run requires -queue-actions")
 		os.Exit(2)
 	}
 
@@ -63,10 +72,17 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if *seedDemoEGMs {
+		if err := seedDemoEGMRegistry(ctx, st); err != nil {
+			fmt.Fprintf(os.Stderr, "seed demo egms: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	reader := gpioinput.NewReader()
 	reader.Consumer = "g2s_input_monitor"
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
+	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 
 	poller := &inputpoller.Poller{
 		Store:  st,
@@ -79,7 +95,7 @@ func main() {
 	}
 
 	if *once {
-		if err := runPoll(ctx, poller, queuer, *queueActions, 1); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, 1); err != nil {
 			fmt.Fprintf(os.Stderr, "poll once: %v\n", err)
 			os.Exit(1)
 		}
@@ -90,7 +106,7 @@ func main() {
 	count := 0
 	for {
 		count++
-		if err := runPoll(ctx, poller, queuer, *queueActions, count); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, count); err != nil {
 			fmt.Fprintf(os.Stderr, "poll #%d: %v\n", count, err)
 			os.Exit(1)
 		}
@@ -101,7 +117,7 @@ func main() {
 	}
 }
 
-func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, queueActions bool, iteration int) error {
+func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, queueActions bool, dispatchDryRun bool, iteration int) error {
 	result, err := poller.PollOnce(ctx)
 	if err != nil {
 		return err
@@ -154,6 +170,23 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 					len(queueResult.TargetResults),
 					len(queueResult.PlanWarnings),
 				)
+				if dispatchDryRun {
+					dispatchResult, dispatchErr := dispatcher.Dispatch(ctx, actiondispatch.DispatchRequest{
+						ActionRunID: queueResult.ActionRun.ID,
+						Mode:        actiondispatch.DispatchModeDryRun,
+						Actor:       "g2s-input-monitor",
+						RequestedAt: result.ObservedAt,
+					})
+					if dispatchErr != nil {
+						fmt.Printf("dry_run_dispatch_error run_id=%s err=%v\n", queueResult.ActionRun.ID, dispatchErr)
+					} else {
+						fmt.Printf("dry_run_dispatch run_id=%s messages=%d warnings=%d\n",
+							dispatchResult.ActionRunID,
+							len(dispatchResult.PreparedMessages),
+							dispatchResult.WarningCount,
+						)
+					}
+				}
 			} else {
 				fmt.Printf("queue_skipped input=%s action_id=%s reason=%s\n", sample.InputID, sample.ActionQueuedID, queueResult.Reason)
 			}
@@ -171,6 +204,46 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 		}
 	}
 	fmt.Println()
+	return nil
+}
+
+func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore) error {
+	template := templates.G2STemplate{
+		ID:     "template-smoke-no-send",
+		Name:   "Template Smoke No Send",
+		Vendor: "SMOKE",
+		Status: templates.TemplateStatusActive,
+		Notes:  "No-send dry-run smoke template seed",
+	}
+	if err := st.UpsertG2STemplate(ctx, template); err != nil {
+		return fmt.Errorf("upsert demo template: %w", err)
+	}
+
+	egmRows := []egms.EGMRecord{
+		{
+			EGMID:              "EGM-SMOKE-001",
+			DisplayName:        "Smoke EGM 001",
+			Enabled:            true,
+			EmergencyEnabled:   true,
+			TemplateID:         template.ID,
+			CurrentActionState: egms.EGMActionStateNormal,
+			Notes:              "No-send dry-run registry seed",
+		},
+		{
+			EGMID:              "EGM-SMOKE-002",
+			DisplayName:        "Smoke EGM 002",
+			Enabled:            true,
+			EmergencyEnabled:   true,
+			TemplateID:         template.ID,
+			CurrentActionState: egms.EGMActionStateNormal,
+			Notes:              "No-send dry-run registry seed",
+		},
+	}
+	for _, row := range egmRows {
+		if err := st.UpsertEGMRecord(ctx, row); err != nil {
+			return fmt.Errorf("upsert demo egm %s: %w", row.EGMID, err)
+		}
+	}
 	return nil
 }
 

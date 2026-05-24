@@ -15,18 +15,19 @@ const (
 )
 
 const (
-	EventTypeInputTransition = "INPUT_TRANSITION"
-	EventTypeActionQueued    = "ACTION_QUEUED"
-	EventTypeActionStarted   = "ACTION_STARTED"
-	EventTypeActionStep      = "ACTION_STEP"
-	EventTypeMessageSent     = "MESSAGE_SENT"
-	EventTypeMessageReceived = "MESSAGE_RECEIVED"
-	EventTypeConfirmation    = "CONFIRMATION"
-	EventTypeRetry           = "RETRY"
-	EventTypeEscalation      = "ESCALATION"
-	EventTypeReturnToNormal  = "RETURN_TO_NORMAL"
-	EventTypeOperatorAction  = "OPERATOR_ACTION"
-	EventTypeSystemWarning   = "SYSTEM_WARNING"
+	EventTypeInputTransition        = "INPUT_TRANSITION"
+	EventTypeActionQueued           = "ACTION_QUEUED"
+	EventTypeActionDispatchPrepared = "ACTION_DISPATCH_PREPARED"
+	EventTypeActionStarted          = "ACTION_STARTED"
+	EventTypeActionStep             = "ACTION_STEP"
+	EventTypeMessageSent            = "MESSAGE_SENT"
+	EventTypeMessageReceived        = "MESSAGE_RECEIVED"
+	EventTypeConfirmation           = "CONFIRMATION"
+	EventTypeRetry                  = "RETRY"
+	EventTypeEscalation             = "ESCALATION"
+	EventTypeReturnToNormal         = "RETURN_TO_NORMAL"
+	EventTypeOperatorAction         = "OPERATOR_ACTION"
+	EventTypeSystemWarning          = "SYSTEM_WARNING"
 )
 
 type AuditTimelineEntry struct {

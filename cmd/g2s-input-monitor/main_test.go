@@ -57,3 +57,39 @@ func TestSeedDemoActionDefinitionsAndBindings(t *testing.T) {
 	}
 }
 
+func TestSeedDemoEGMRegistry(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	if err := seedDemoEGMRegistry(ctx, st); err != nil {
+		t.Fatalf("seed demo egm registry: %v", err)
+	}
+
+	tpl, err := st.GetG2STemplate(ctx, "template-smoke-no-send")
+	if err != nil {
+		t.Fatalf("get smoke template: %v", err)
+	}
+	if tpl == nil {
+		t.Fatal("expected smoke template")
+	}
+
+	for _, id := range []string{"EGM-SMOKE-001", "EGM-SMOKE-002"} {
+		row, getErr := st.GetEGMRecord(ctx, id)
+		if getErr != nil {
+			t.Fatalf("get %s: %v", id, getErr)
+		}
+		if row == nil {
+			t.Fatalf("expected %s", id)
+		}
+		if !row.Enabled || !row.EmergencyEnabled {
+			t.Fatalf("expected enabled emergency-enabled %s: %+v", id, row)
+		}
+		if row.TemplateID != "template-smoke-no-send" {
+			t.Fatalf("template_id=%q for %s", row.TemplateID, id)
+		}
+	}
+}
