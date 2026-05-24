@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Safely prepares the G2S_MC repo for the hybrid rebuild.
 
@@ -112,7 +112,7 @@ if ($FromCurrentHead) {
 }
 Write-Host "Cleanup branch base: $baseToUse"
 
-$existingCleanup = (& git branch --list $CleanupBranch).Trim()
+$existingCleanup = @(& git branch --list $CleanupBranch) -join ""
 if ($existingCleanup) {
     Write-Host "Switching to existing branch: $CleanupBranch"
     Invoke-Checked git switch $CleanupBranch
@@ -241,7 +241,7 @@ if (-not $pending) {
     Invoke-Checked git commit -m "Add rebuild project definition and repo guardrails"
 }
 
-$existingRebuild = (& git branch --list $RebuildBranch).Trim()
+$existingRebuild = @(& git branch --list $RebuildBranch) -join ""
 if ($existingRebuild) {
     Write-Host "Rebuild branch already exists: $RebuildBranch" -ForegroundColor Yellow
     Write-Host "Switching to it."
@@ -261,3 +261,4 @@ Write-Host "Next manual commands when ready:"
 Write-Host "  git push origin $archiveTag"
 Write-Host "  git push -u origin $CleanupBranch"
 Write-Host "  git push -u origin $RebuildBranch"
+
