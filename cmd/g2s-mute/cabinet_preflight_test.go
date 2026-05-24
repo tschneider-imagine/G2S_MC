@@ -528,12 +528,9 @@ func TestCabinetPreflightHandler(t *testing.T) {
 	if len(payload.Checks) == 0 {
 		t.Fatal("expected checks in preflight response")
 	}
-<<<<<<< HEAD
-=======
 	if payload.Overall == preflightFail && len(payload.Issues) == 0 {
 		t.Fatal("expected issues in failed preflight response")
 	}
->>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
 
 	methodRequest := httptest.NewRequest(http.MethodPost, "/api/cabinet-preflight", nil)
 	methodResponse := httptest.NewRecorder()

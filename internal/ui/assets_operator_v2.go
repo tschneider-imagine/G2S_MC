@@ -1,4 +1,4 @@
-package ui
+﻿package ui
 
 const dashboardHTML = `<!doctype html>
 <html lang="en">
@@ -4030,11 +4030,7 @@ function appendUniqueIssue(issues, message) {
   }
 }
 
-<<<<<<< HEAD
 function appendFriendlyPreflightIssues(preflight, issues) {
-=======
-function appendFriendlyPreflightBlockers(preflight, blockers) {
->>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
   const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
   let mappedAny = false;
   checks.forEach((check) => {
@@ -4065,13 +4061,8 @@ function appendFriendlyPreflightBlockers(preflight, blockers) {
     }
   });
   if (mappedAny) return;
-<<<<<<< HEAD
-  const raw = Array.isArray(preflight?.issues) ? preflight.issues : [];
+const raw = Array.isArray(preflight?.issues) ? preflight.issues : [];
   raw.forEach((item) => appendUniqueIssue(issues, String(item || "").trim()));
-=======
-  const raw = Array.isArray(preflight?.issues) ? preflight.issues : (Array.isArray(preflight?.blockers) ? preflight.blockers : []);
-  raw.forEach((item) => appendUniqueBlocker(blockers, String(item || "").trim()));
->>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
 }
 
 function buildFirstCabinetSessionState(snapshot) {
@@ -7612,9 +7603,9 @@ function renderCertificateBackupHistory(certState) {
 
   $("cert-backup-list").innerHTML = backups.map((item) => {
     const createdAt = item.created_at ? fmtTime(item.created_at) : item.id;
-    const certMeta = "Cert " + formatByteCount(item.certificate_size_bytes) + (item.certificate_sha256 ? " sha256=" + item.certificate_sha256.slice(0, 12) + "…" : "");
+    const certMeta = "Cert " + formatByteCount(item.certificate_size_bytes) + (item.certificate_sha256 ? " sha256=" + item.certificate_sha256.slice(0, 12) + "â€¦" : "");
     const keyMeta = item.private_key_size_bytes > 0 || item.private_key_sha256
-      ? "Key " + formatByteCount(item.private_key_size_bytes) + (item.private_key_sha256 ? " sha256=" + item.private_key_sha256.slice(0, 12) + "…" : "")
+      ? "Key " + formatByteCount(item.private_key_size_bytes) + (item.private_key_sha256 ? " sha256=" + item.private_key_sha256.slice(0, 12) + "â€¦" : "")
       : "";
     const restoreBlocked = !item.restorable || (certState.tokenRequired && !certState.tokenPresent);
     const restoreLabel = item.restorable ? "Restore" : "Incomplete Backup";
@@ -8908,3 +8899,5 @@ function bootstrapDashboard() {
 }
 
 bootstrapDashboard();`
+
+
