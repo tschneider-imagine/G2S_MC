@@ -393,6 +393,84 @@ func TestActionPreviewReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestGetActionRunsReturnsJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/actions/runs", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusOK)
+	}
+	var rows []actions.ActionRun
+	if err := json.Unmarshal(res.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != "run-1" {
+		t.Fatalf("unexpected action runs: %+v", rows)
+	}
+}
+
+func TestGetActionRunByIDReturnsRun(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/actions/runs/run-1", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var row actions.ActionRun
+	if err := json.Unmarshal(res.Body.Bytes(), &row); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if row.ID != "run-1" || row.Status != actions.RunStatusPending {
+		t.Fatalf("unexpected action run: %+v", row)
+	}
+}
+
+func TestGetActionRunTargetsReturnsRows(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/actions/runs/run-1/targets", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusOK)
+	}
+	var rows []actions.ActionTargetResult
+	if err := json.Unmarshal(res.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(rows) != 1 || rows[0].TargetEGMID != "EGM-1" {
+		t.Fatalf("unexpected target rows: %+v", rows)
+	}
+}
+
 func allowMutation(_ http.ResponseWriter, _ *http.Request) bool { return true }
 
 func validInputChannel() inputs.InputChannel {
@@ -417,4 +495,47 @@ func newTestStore(t *testing.T, ctx context.Context) *store.SQLiteStore {
 		t.Fatalf("open store: %v", err)
 	}
 	return s
+}
+
+func seedActionRunFixtures(t *testing.T, ctx context.Context, db *store.SQLiteStore) {
+	t.Helper()
+	if err := db.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "action-1",
+		Name:             "Queue Action",
+		Severity:         actions.SeverityEmergency,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-1",
+			Name:              "Queue only",
+			Sequence:          0,
+			TemplateActionKey: "queue_only_no_send",
+		}},
+		Version: 1,
+	}); err != nil {
+		t.Fatalf("seed action definition: %v", err)
+	}
+	if _, err := db.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-1",
+		ActionDefinitionID: "action-1",
+		InputTransitionID:  12,
+		StartedAt:          time.Now().UTC(),
+		Status:             actions.RunStatusPending,
+		TriggerReason:      "input transition 12",
+		TargetCount:        1,
+		ConfirmedCount:     0,
+		FailedCount:        0,
+		EscalatedCount:     0,
+	}); err != nil {
+		t.Fatalf("seed action run: %v", err)
+	}
+	if _, err := db.CreateActionTargetResult(ctx, actions.ActionTargetResult{
+		ActionRunID:  "run-1",
+		TargetEGMID:  "EGM-1",
+		Status:       actions.TargetStatusPending,
+		AttemptCount: 0,
+	}); err != nil {
+		t.Fatalf("seed action target result: %v", err)
+	}
 }

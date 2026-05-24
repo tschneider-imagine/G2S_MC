@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
+	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/gpioinput"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -21,6 +25,8 @@ func main() {
 	once := flag.Bool("once", false, "poll once and exit")
 	interval := flag.Duration("interval", 100*time.Millisecond, "poll interval")
 	duration := flag.Duration("duration", 0, "poll duration (default 30s when not -once)")
+	queueActions := flag.Bool("queue-actions", false, "queue pending action runs when transitions include action IDs")
+	seedDemoActions := flag.Bool("seed-demo-actions", false, "seed queue-only demo action definitions and bind default channels")
 	flag.Parse()
 
 	if *interval <= 0 {
@@ -51,9 +57,16 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if *seedDemoActions {
+		if err := seedDemoActionDefinitionsAndBindings(ctx, st); err != nil {
+			fmt.Fprintf(os.Stderr, "seed demo actions: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	reader := gpioinput.NewReader()
 	reader.Consumer = "g2s_input_monitor"
+	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 
 	poller := &inputpoller.Poller{
 		Store:  st,
@@ -66,7 +79,7 @@ func main() {
 	}
 
 	if *once {
-		if err := runPoll(ctx, poller, 1); err != nil {
+		if err := runPoll(ctx, poller, queuer, *queueActions, 1); err != nil {
 			fmt.Fprintf(os.Stderr, "poll once: %v\n", err)
 			os.Exit(1)
 		}
@@ -77,7 +90,7 @@ func main() {
 	count := 0
 	for {
 		count++
-		if err := runPoll(ctx, poller, count); err != nil {
+		if err := runPoll(ctx, poller, queuer, *queueActions, count); err != nil {
 			fmt.Fprintf(os.Stderr, "poll #%d: %v\n", count, err)
 			os.Exit(1)
 		}
@@ -88,7 +101,7 @@ func main() {
 	}
 }
 
-func runPoll(ctx context.Context, poller *inputpoller.Poller, iteration int) error {
+func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, queueActions bool, iteration int) error {
 	result, err := poller.PollOnce(ctx)
 	if err != nil {
 		return err
@@ -118,6 +131,33 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, iteration int) err
 			sample.TransitionID,
 			sample.ActionQueuedID,
 		)
+		if queueActions && sample.Transitioned && strings.TrimSpace(sample.ActionQueuedID) != "" {
+			queueResult, queueErr := queuer.QueueActionRun(ctx, actionruntime.QueueRequest{
+				InputTransition: inputs.InputTransition{
+					ID:             sample.TransitionID,
+					InputChannelID: sample.InputID,
+					TransitionAt:   result.ObservedAt,
+				},
+				ActionID:      sample.ActionQueuedID,
+				TriggerReason: fmt.Sprintf("input transition %d", sample.TransitionID),
+				Actor:         "g2s-input-monitor",
+				QueuedAt:      result.ObservedAt,
+			})
+			if queueErr != nil {
+				fmt.Printf("queue_error input=%s transition_id=%d action_id=%s err=%v\n", sample.InputID, sample.TransitionID, sample.ActionQueuedID, queueErr)
+				continue
+			}
+			if queueResult.Queued && queueResult.ActionRun != nil {
+				fmt.Printf("queued_run run_id=%s action_id=%s targets=%d warnings=%d\n",
+					queueResult.ActionRun.ID,
+					sample.ActionQueuedID,
+					len(queueResult.TargetResults),
+					len(queueResult.PlanWarnings),
+				)
+			} else {
+				fmt.Printf("queue_skipped input=%s action_id=%s reason=%s\n", sample.InputID, sample.ActionQueuedID, queueResult.Reason)
+			}
+		}
 	}
 
 	if result.Active == nil {
@@ -132,4 +172,74 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, iteration int) err
 	}
 	fmt.Println()
 	return nil
+}
+
+func seedDemoActionDefinitionsAndBindings(ctx context.Context, st *store.SQLiteStore) error {
+	for _, row := range demoActionDefinitions() {
+		if err := st.UpsertActionDefinition(ctx, row); err != nil {
+			return fmt.Errorf("upsert demo action %s: %w", row.ID, err)
+		}
+	}
+
+	channels, err := st.ListInputChannels(ctx)
+	if err != nil {
+		return fmt.Errorf("list input channels: %w", err)
+	}
+	channelByID := map[string]inputs.InputChannel{}
+	for _, channel := range channels {
+		channelByID[channel.ID] = channel
+	}
+
+	bindings := map[string]struct {
+		trigger string
+		normal  string
+	}{
+		"regular-operation":   {trigger: "regular-operation-trigger", normal: ""},
+		"general-broadcast":   {trigger: "general-broadcast-trigger", normal: "general-broadcast-normal"},
+		"emergency-broadcast": {trigger: "emergency-broadcast-trigger", normal: "emergency-broadcast-normal"},
+		"local-notice":        {trigger: "local-notice-trigger", normal: "local-notice-normal"},
+	}
+
+	for id, pair := range bindings {
+		channel, ok := channelByID[id]
+		if !ok {
+			continue
+		}
+		channel.OnTriggerActionID = pair.trigger
+		channel.OnNormalActionID = pair.normal
+		if err := st.UpsertInputChannel(ctx, channel); err != nil {
+			return fmt.Errorf("bind action ids to input channel %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func demoActionDefinitions() []actions.ActionDefinition {
+	def := func(id string, name string, severity actions.ActionSeverity) actions.ActionDefinition {
+		return actions.ActionDefinition{
+			ID:               id,
+			Name:             name,
+			Severity:         severity,
+			Enabled:          true,
+			TargetSelector:   "ALL_EMERGENCY_ENABLED",
+			TemplateSelector: "template-by-egm",
+			Steps: []actions.ActionStep{{
+				ID:                "step-1",
+				Name:              "Queue only no send",
+				Sequence:          0,
+				TemplateActionKey: "queue_only_no_send",
+			}},
+			Version: 1,
+		}
+	}
+
+	return []actions.ActionDefinition{
+		def("regular-operation-trigger", "Regular Operation Trigger (Queue Only)", actions.SeverityNotice),
+		def("general-broadcast-trigger", "General Broadcast Trigger (Queue Only)", actions.SeverityBroadcast),
+		def("emergency-broadcast-trigger", "Emergency Broadcast Trigger (Queue Only)", actions.SeverityEmergency),
+		def("local-notice-trigger", "Local Notice Trigger (Queue Only)", actions.SeverityNotice),
+		def("emergency-broadcast-normal", "Emergency Broadcast Normal (Queue Only)", actions.SeverityRestore),
+		def("general-broadcast-normal", "General Broadcast Normal (Queue Only)", actions.SeverityRestore),
+		def("local-notice-normal", "Local Notice Normal (Queue Only)", actions.SeverityRestore),
+	}
 }

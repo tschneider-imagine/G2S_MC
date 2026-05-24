@@ -120,6 +120,98 @@ func TestActionDefinitionUpsertGetList(t *testing.T) {
 	}
 }
 
+func TestActionRunCreateGetList(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	if err := store.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "action-1",
+		Name:             "Queue Action",
+		Severity:         actions.SeverityEmergency,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-1",
+			Name:              "Queue only",
+			Sequence:          0,
+			TemplateActionKey: "queue_only_no_send",
+		}},
+		Version: 1,
+	}); err != nil {
+		t.Fatalf("seed action definition: %v", err)
+	}
+
+	startedAt := time.Now().UTC()
+	run, err := store.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-1",
+		ActionDefinitionID: "action-1",
+		InputTransitionID:  99,
+		StartedAt:          startedAt,
+		Status:             actions.RunStatusPending,
+		TriggerReason:      "input transition 99",
+		TargetCount:        2,
+		ConfirmedCount:     0,
+		FailedCount:        0,
+		EscalatedCount:     0,
+	})
+	if err != nil {
+		t.Fatalf("create action run: %v", err)
+	}
+	if run.ID != "run-1" {
+		t.Fatalf("created run id = %q, want %q", run.ID, "run-1")
+	}
+
+	got, err := store.GetActionRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("get action run: %v", err)
+	}
+	if got == nil || got.ActionDefinitionID != "action-1" {
+		t.Fatalf("unexpected action run: %+v", got)
+	}
+
+	rows, err := store.ListActionRuns(ctx, ActionRunListQuery{
+		Limit:              10,
+		Status:             actions.RunStatusPending,
+		ActionDefinitionID: "action-1",
+		InputTransitionID:  99,
+	})
+	if err != nil {
+		t.Fatalf("list action runs: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != "run-1" {
+		t.Fatalf("unexpected action runs: %+v", rows)
+	}
+}
+
+func TestActionTargetResultCreateList(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	row, err := store.CreateActionTargetResult(ctx, actions.ActionTargetResult{
+		ActionRunID:  "run-22",
+		TargetEGMID:  "EGM-001",
+		Status:       actions.TargetStatusPending,
+		AttemptCount: 0,
+	})
+	if err != nil {
+		t.Fatalf("create action target result: %v", err)
+	}
+	if row.ID == 0 {
+		t.Fatalf("expected non-zero row id: %+v", row)
+	}
+
+	list, err := store.ListActionTargetResults(ctx, "run-22")
+	if err != nil {
+		t.Fatalf("list action target results: %v", err)
+	}
+	if len(list) != 1 || list[0].TargetEGMID != "EGM-001" {
+		t.Fatalf("unexpected target results: %+v", list)
+	}
+}
+
 func TestG2STemplateUpsertGetList(t *testing.T) {
 	ctx := context.Background()
 	store := newPhaseStore(t, ctx)

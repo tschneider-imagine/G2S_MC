@@ -28,6 +28,13 @@ type AuditTimelineListQuery struct {
 	Severity  audit.AuditSeverity
 }
 
+type ActionRunListQuery struct {
+	Limit              int
+	Status             actions.ActionRunStatus
+	ActionDefinitionID string
+	InputTransitionID  int64
+}
+
 func (s *SQLiteStore) UpsertInputChannel(ctx context.Context, channel inputs.InputChannel) error {
 	if err := channel.Validate(); err != nil {
 		return err
@@ -292,6 +299,199 @@ func (s *SQLiteStore) GetActionDefinition(ctx context.Context, id string) (*acti
 		return nil, fmt.Errorf("unmarshal steps_json for action %q: %w", definition.ID, err)
 	}
 	return &definition, nil
+}
+
+func (s *SQLiteStore) CreateActionRun(ctx context.Context, run actions.ActionRun) (actions.ActionRun, error) {
+	if err := run.Validate(); err != nil {
+		return actions.ActionRun{}, err
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO action_runs (
+		    id, action_definition_id, incident_id, input_transition_id, started_at, completed_at, status,
+		    trigger_reason, target_count, confirmed_count, failed_count, escalated_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		strings.TrimSpace(run.ID),
+		strings.TrimSpace(run.ActionDefinitionID),
+		nullableTrimmed(run.IncidentID),
+		nullableInt64(run.InputTransitionID),
+		run.StartedAt,
+		nullableTime(run.CompletedAt),
+		run.Status,
+		nullableTrimmed(run.TriggerReason),
+		run.TargetCount,
+		run.ConfirmedCount,
+		run.FailedCount,
+		run.EscalatedCount,
+	)
+	if err != nil {
+		return actions.ActionRun{}, err
+	}
+	return run, nil
+}
+
+func (s *SQLiteStore) GetActionRun(ctx context.Context, id string) (*actions.ActionRun, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, action_definition_id, COALESCE(incident_id, ''), COALESCE(input_transition_id, 0), started_at,
+		        completed_at, status, COALESCE(trigger_reason, ''), target_count, confirmed_count, failed_count, escalated_count
+		   FROM action_runs
+		  WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	var run actions.ActionRun
+	var completedAt sql.NullTime
+	if err := row.Scan(
+		&run.ID,
+		&run.ActionDefinitionID,
+		&run.IncidentID,
+		&run.InputTransitionID,
+		&run.StartedAt,
+		&completedAt,
+		&run.Status,
+		&run.TriggerReason,
+		&run.TargetCount,
+		&run.ConfirmedCount,
+		&run.FailedCount,
+		&run.EscalatedCount,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if completedAt.Valid {
+		value := completedAt.Time
+		run.CompletedAt = &value
+	}
+	return &run, nil
+}
+
+func (s *SQLiteStore) ListActionRuns(ctx context.Context, query ActionRunListQuery) ([]actions.ActionRun, error) {
+	limit := normalizeLimit(query.Limit)
+	where := []string{}
+	args := []any{}
+	if query.Status != "" {
+		where = append(where, "status = ?")
+		args = append(args, query.Status)
+	}
+	if id := strings.TrimSpace(query.ActionDefinitionID); id != "" {
+		where = append(where, "action_definition_id = ?")
+		args = append(args, id)
+	}
+	if query.InputTransitionID > 0 {
+		where = append(where, "input_transition_id = ?")
+		args = append(args, query.InputTransitionID)
+	}
+
+	sqlBuilder := strings.Builder{}
+	sqlBuilder.WriteString(`SELECT id, action_definition_id, COALESCE(incident_id, ''), COALESCE(input_transition_id, 0), started_at,
+		        completed_at, status, COALESCE(trigger_reason, ''), target_count, confirmed_count, failed_count, escalated_count
+		   FROM action_runs`)
+	if len(where) > 0 {
+		sqlBuilder.WriteString(" WHERE ")
+		sqlBuilder.WriteString(strings.Join(where, " AND "))
+	}
+	sqlBuilder.WriteString(" ORDER BY started_at DESC, id DESC LIMIT ?")
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, sqlBuilder.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []actions.ActionRun{}
+	for rows.Next() {
+		var run actions.ActionRun
+		var completedAt sql.NullTime
+		if err := rows.Scan(
+			&run.ID,
+			&run.ActionDefinitionID,
+			&run.IncidentID,
+			&run.InputTransitionID,
+			&run.StartedAt,
+			&completedAt,
+			&run.Status,
+			&run.TriggerReason,
+			&run.TargetCount,
+			&run.ConfirmedCount,
+			&run.FailedCount,
+			&run.EscalatedCount,
+		); err != nil {
+			return nil, err
+		}
+		if completedAt.Valid {
+			value := completedAt.Time
+			run.CompletedAt = &value
+		}
+		result = append(result, run)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) CreateActionTargetResult(ctx context.Context, row actions.ActionTargetResult) (actions.ActionTargetResult, error) {
+	if err := row.Validate(); err != nil {
+		return actions.ActionTargetResult{}, err
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO action_target_results (
+		    action_run_id, target_egm_id, status, attempt_count, last_error, last_result_at
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		strings.TrimSpace(row.ActionRunID),
+		strings.TrimSpace(row.TargetEGMID),
+		row.Status,
+		row.AttemptCount,
+		nullableTrimmed(row.LastError),
+		nullableTime(row.LastResultAt),
+	)
+	if err != nil {
+		return actions.ActionTargetResult{}, err
+	}
+	row.ID, err = result.LastInsertId()
+	if err != nil {
+		return actions.ActionTargetResult{}, err
+	}
+	return row, nil
+}
+
+func (s *SQLiteStore) ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, action_run_id, target_egm_id, status, attempt_count, COALESCE(last_error, ''), last_result_at
+		   FROM action_target_results
+		  WHERE action_run_id = ?
+		  ORDER BY id ASC`,
+		strings.TrimSpace(actionRunID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []actions.ActionTargetResult{}
+	for rows.Next() {
+		var target actions.ActionTargetResult
+		var lastResultAt sql.NullTime
+		if err := rows.Scan(
+			&target.ID,
+			&target.ActionRunID,
+			&target.TargetEGMID,
+			&target.Status,
+			&target.AttemptCount,
+			&target.LastError,
+			&lastResultAt,
+		); err != nil {
+			return nil, err
+		}
+		if lastResultAt.Valid {
+			value := lastResultAt.Time
+			target.LastResultAt = &value
+		}
+		result = append(result, target)
+	}
+	return result, rows.Err()
 }
 
 func (s *SQLiteStore) UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error {

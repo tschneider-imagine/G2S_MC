@@ -26,6 +26,14 @@ type ActionUpsertRequest struct {
 	Definition actions.ActionDefinition `json:"definition"`
 }
 
+type ActionRunsListResponse struct {
+	Runs []actions.ActionRun `json:"runs"`
+}
+
+type ActionRunTargetsListResponse struct {
+	Targets []actions.ActionTargetResult `json:"targets"`
+}
+
 type TemplatesListResponse struct {
 	Templates []templates.G2STemplate `json:"templates"`
 }

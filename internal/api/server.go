@@ -28,6 +28,11 @@ type Store interface {
 	GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error)
 	UpsertActionDefinition(ctx context.Context, definition actions.ActionDefinition) error
 	ListActionDefinitions(ctx context.Context) ([]actions.ActionDefinition, error)
+	CreateActionRun(ctx context.Context, run actions.ActionRun) (actions.ActionRun, error)
+	GetActionRun(ctx context.Context, id string) (*actions.ActionRun, error)
+	ListActionRuns(ctx context.Context, query store.ActionRunListQuery) ([]actions.ActionRun, error)
+	CreateActionTargetResult(ctx context.Context, result actions.ActionTargetResult) (actions.ActionTargetResult, error)
+	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
 
 	GetG2STemplate(ctx context.Context, id string) (*templates.G2STemplate, error)
 	UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error
@@ -54,6 +59,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/inputs/state", s.handleInputRuntimeState)
 	mux.HandleFunc("/api/v2/inputs/transitions", s.handleInputTransitions)
 
+	mux.HandleFunc("/api/v2/actions/runs", s.handleActionRuns)
+	mux.HandleFunc("/api/v2/actions/runs/", s.handleActionRunByID)
 	mux.HandleFunc("/api/v2/actions", s.handleActions)
 	mux.HandleFunc("/api/v2/actions/", s.handleActionByID)
 
@@ -65,6 +72,67 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/v2/comms/messages", s.handleMessages)
 	mux.HandleFunc("/api/v2/audit/timeline", s.handleTimeline)
+}
+
+func (s *Server) handleActionRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	query := store.ActionRunListQuery{
+		Limit:              queryLimit(r, 50),
+		ActionDefinitionID: strings.TrimSpace(r.URL.Query().Get("action_definition_id")),
+	}
+	if rawStatus := strings.TrimSpace(r.URL.Query().Get("status")); rawStatus != "" {
+		query.Status = actions.ActionRunStatus(strings.ToUpper(rawStatus))
+	}
+	if rawTransition := strings.TrimSpace(r.URL.Query().Get("input_transition_id")); rawTransition != "" {
+		value, err := strconv.ParseInt(rawTransition, 10, 64)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid input_transition_id")
+			return
+		}
+		query.InputTransitionID = value
+	}
+
+	rows, err := s.Store.ListActionRuns(r.Context(), query)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
+	id, targets, ok := actionRunRoute(r.URL.Path)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if targets {
+		rows, err := s.Store.ListActionTargetResults(r.Context(), id)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+		return
+	}
+
+	row, err := s.Store.GetActionRun(r.Context(), id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if row == nil {
+		writeJSONError(w, http.StatusNotFound, "action run not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (s *Server) handleInputRuntimeState(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +482,28 @@ func actionRoute(path string) (id string, preview bool, ok bool) {
 	}
 	if strings.HasSuffix(trimmed, "/preview") {
 		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/preview"))
+		if id == "" || strings.Contains(id, "/") {
+			return "", false, false
+		}
+		return id, true, true
+	}
+	if strings.Contains(trimmed, "/") {
+		return "", false, false
+	}
+	return trimmed, false, true
+}
+
+func actionRunRoute(path string) (id string, targets bool, ok bool) {
+	const prefix = "/api/v2/actions/runs/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false, false
+	}
+	trimmed := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	if trimmed == "" {
+		return "", false, false
+	}
+	if strings.HasSuffix(trimmed, "/targets") {
+		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/targets"))
 		if id == "" || strings.Contains(id, "/") {
 			return "", false, false
 		}
