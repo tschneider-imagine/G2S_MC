@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
 	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
@@ -37,6 +39,8 @@ type Store interface {
 	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
 
 	GetG2STemplate(ctx context.Context, id string) (*templates.G2STemplate, error)
+	GetG2STemplateVersion(ctx context.Context, templateID string, version int) (*templates.G2STemplateVersion, error)
+	GetActiveG2STemplateVersion(ctx context.Context, templateID string) (*templates.G2STemplateVersion, error)
 	UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error
 	ListG2STemplates(ctx context.Context) ([]templates.G2STemplate, error)
 
@@ -69,6 +73,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/actions/", s.handleActionByID)
 
 	mux.HandleFunc("/api/v2/templates", s.handleTemplates)
+	mux.HandleFunc("/api/v2/templates/render-preview", s.handleTemplateRenderPreview)
 	mux.HandleFunc("/api/v2/templates/", s.handleTemplateByID)
 
 	mux.HandleFunc("/api/v2/egms", s.handleEGMs)
@@ -399,6 +404,100 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tpl)
 }
 
+func (s *Server) handleTemplateRenderPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req TemplateRenderPreviewRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	templateID := strings.TrimSpace(req.TemplateID)
+	if templateID == "" && strings.TrimSpace(req.EGMID) != "" {
+		egmRow, err := s.Store.GetEGMRecord(r.Context(), strings.TrimSpace(req.EGMID))
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if egmRow != nil {
+			templateID = strings.TrimSpace(egmRow.TemplateID)
+			if strings.TrimSpace(req.IPAddress) == "" {
+				req.IPAddress = egmRow.IPAddress
+			}
+			if strings.TrimSpace(req.EndpointPath) == "" {
+				req.EndpointPath = egmRow.EndpointPath
+			}
+		}
+	}
+	if templateID == "" {
+		writeJSONError(w, http.StatusBadRequest, "template_id is required")
+		return
+	}
+	if strings.TrimSpace(req.TemplateActionKey) == "" {
+		writeJSONError(w, http.StatusBadRequest, "template_action_key is required")
+		return
+	}
+
+	templateRow, err := s.Store.GetG2STemplate(r.Context(), templateID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if templateRow == nil {
+		writeJSONError(w, http.StatusNotFound, fmt.Sprintf("template %q not found", templateID))
+		return
+	}
+
+	var versionRow *templates.G2STemplateVersion
+	if req.Version > 0 {
+		versionRow, err = s.Store.GetG2STemplateVersion(r.Context(), templateID, req.Version)
+	} else {
+		versionRow, err = s.Store.GetActiveG2STemplateVersion(r.Context(), templateID)
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if versionRow == nil {
+		if req.Version > 0 {
+			writeJSONError(w, http.StatusNotFound, fmt.Sprintf("template %q version %d not found", templateID, req.Version))
+		} else {
+			writeJSONError(w, http.StatusNotFound, fmt.Sprintf("template %q has no active version", templateID))
+		}
+		return
+	}
+
+	doc, err := g2sengine.ParseActionTemplateDocument(versionRow.ActionsJSON)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rendered, err := g2sengine.RenderActionMessage(doc, g2sengine.RenderRequest{
+		TemplateID:        templateID,
+		TemplateVersion:   parseTemplateVersionInt(versionRow.VersionLabel),
+		TemplateActionKey: strings.TrimSpace(req.TemplateActionKey),
+		ActionID:          strings.TrimSpace(req.ActionID),
+		ActionRunID:       strings.TrimSpace(req.ActionRunID),
+		ActionStepID:      strings.TrimSpace(req.ActionStepID),
+		EGMID:             strings.TrimSpace(req.EGMID),
+		HostID:            strings.TrimSpace(req.HostID),
+		Timestamp:         time.Now().UTC(),
+		IPAddress:         strings.TrimSpace(req.IPAddress),
+		EndpointPath:      strings.TrimSpace(req.EndpointPath),
+		Variables:         req.Variables,
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, TemplateRenderPreviewResponse{
+		Rendered: rendered,
+		Warnings: rendered.Warnings,
+	})
+}
+
 func (s *Server) handleEGMs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -624,4 +723,23 @@ func queryLimit(r *http.Request, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func parseTemplateVersionInt(versionLabel string) int {
+	trimmed := strings.TrimSpace(versionLabel)
+	if trimmed == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(trimmed)
+	if err == nil {
+		return value
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "v") {
+		value, err = strconv.Atoi(strings.TrimPrefix(lower, "v"))
+		if err == nil {
+			return value
+		}
+	}
+	return 0
 }

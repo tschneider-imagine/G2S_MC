@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -624,6 +625,179 @@ func (s *SQLiteStore) GetG2STemplate(ctx context.Context, id string) (*templates
 		return nil, err
 	}
 	return &tpl, nil
+}
+
+func (s *SQLiteStore) UpsertG2STemplateVersion(ctx context.Context, version templates.G2STemplateVersion) error {
+	if err := version.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO g2s_template_versions (
+		    id, template_id, version_label, endpoint_quirks_json, actions_json, confirmation_rules_json,
+		    failure_rules_json, heartbeat_profile_json, variables_json, notes, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+		    template_id = excluded.template_id,
+		    version_label = excluded.version_label,
+		    endpoint_quirks_json = excluded.endpoint_quirks_json,
+		    actions_json = excluded.actions_json,
+		    confirmation_rules_json = excluded.confirmation_rules_json,
+		    failure_rules_json = excluded.failure_rules_json,
+		    heartbeat_profile_json = excluded.heartbeat_profile_json,
+		    variables_json = excluded.variables_json,
+		    notes = excluded.notes`,
+		strings.TrimSpace(version.ID),
+		strings.TrimSpace(version.TemplateID),
+		strings.TrimSpace(version.VersionLabel),
+		nullableTrimmed(version.EndpointQuirksJSON),
+		strings.TrimSpace(version.ActionsJSON),
+		nullableTrimmed(version.ConfirmationRulesJSON),
+		nullableTrimmed(version.FailureRulesJSON),
+		nullableTrimmed(version.HeartbeatProfileJSON),
+		nullableTrimmed(version.VariablesJSON),
+		nullableTrimmed(version.Notes),
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetG2STemplateVersion(ctx context.Context, templateID string, version int) (*templates.G2STemplateVersion, error) {
+	versionLabel := strconv.Itoa(version)
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, template_id, version_label, COALESCE(endpoint_quirks_json, ''), actions_json,
+		        COALESCE(confirmation_rules_json, ''), COALESCE(failure_rules_json, ''), COALESCE(heartbeat_profile_json, ''),
+		        COALESCE(variables_json, ''), COALESCE(notes, ''), created_at
+		   FROM g2s_template_versions
+		  WHERE template_id = ? AND version_label = ?`,
+		strings.TrimSpace(templateID),
+		versionLabel,
+	)
+	record, err := scanTemplateVersion(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func (s *SQLiteStore) GetActiveG2STemplateVersion(ctx context.Context, templateID string) (*templates.G2STemplateVersion, error) {
+	templateRow, err := s.GetG2STemplate(ctx, templateID)
+	if err != nil {
+		return nil, err
+	}
+	if templateRow == nil {
+		return nil, nil
+	}
+	active := strings.TrimSpace(templateRow.CurrentVersionID)
+	if active == "" {
+		return nil, nil
+	}
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, template_id, version_label, COALESCE(endpoint_quirks_json, ''), actions_json,
+		        COALESCE(confirmation_rules_json, ''), COALESCE(failure_rules_json, ''), COALESCE(heartbeat_profile_json, ''),
+		        COALESCE(variables_json, ''), COALESCE(notes, ''), created_at
+		   FROM g2s_template_versions
+		  WHERE template_id = ? AND (version_label = ? OR id = ?)
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
+		strings.TrimSpace(templateID),
+		active,
+		active,
+	)
+	record, err := scanTemplateVersion(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func (s *SQLiteStore) ListG2STemplateVersions(ctx context.Context, templateID string) ([]templates.G2STemplateVersion, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, template_id, version_label, COALESCE(endpoint_quirks_json, ''), actions_json,
+		        COALESCE(confirmation_rules_json, ''), COALESCE(failure_rules_json, ''), COALESCE(heartbeat_profile_json, ''),
+		        COALESCE(variables_json, ''), COALESCE(notes, ''), created_at
+		   FROM g2s_template_versions
+		  WHERE template_id = ?
+		  ORDER BY created_at ASC, id ASC`,
+		strings.TrimSpace(templateID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []templates.G2STemplateVersion{}
+	for rows.Next() {
+		record := templates.G2STemplateVersion{}
+		if err := rows.Scan(
+			&record.ID,
+			&record.TemplateID,
+			&record.VersionLabel,
+			&record.EndpointQuirksJSON,
+			&record.ActionsJSON,
+			&record.ConfirmationRulesJSON,
+			&record.FailureRulesJSON,
+			&record.HeartbeatProfileJSON,
+			&record.VariablesJSON,
+			&record.Notes,
+			&record.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, record)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) SetActiveG2STemplateVersion(ctx context.Context, templateID string, version int) error {
+	versionLabel := strconv.Itoa(version)
+	record, err := s.GetG2STemplateVersion(ctx, templateID, version)
+	if err != nil {
+		return err
+	}
+	if record == nil {
+		return fmt.Errorf("template version %s/%d not found", strings.TrimSpace(templateID), version)
+	}
+	_, err = s.db.ExecContext(
+		ctx,
+		`UPDATE g2s_templates
+		    SET current_version_id = ?, updated_at = CURRENT_TIMESTAMP
+		  WHERE id = ?`,
+		versionLabel,
+		strings.TrimSpace(templateID),
+	)
+	return err
+}
+
+func scanTemplateVersion(scanner interface {
+	Scan(dest ...any) error
+}) (*templates.G2STemplateVersion, error) {
+	record := templates.G2STemplateVersion{}
+	if err := scanner.Scan(
+		&record.ID,
+		&record.TemplateID,
+		&record.VersionLabel,
+		&record.EndpointQuirksJSON,
+		&record.ActionsJSON,
+		&record.ConfirmationRulesJSON,
+		&record.FailureRulesJSON,
+		&record.HeartbeatProfileJSON,
+		&record.VariablesJSON,
+		&record.Notes,
+		&record.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func (s *SQLiteStore) UpsertEGMRecord(ctx context.Context, record egms.EGMRecord) error {

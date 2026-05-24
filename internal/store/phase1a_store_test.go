@@ -250,6 +250,62 @@ func TestG2STemplateUpsertGetList(t *testing.T) {
 	}
 }
 
+func TestG2STemplateVersionUpsertGetListAndActive(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	tpl := templates.G2STemplate{ID: "tpl-1", Name: "IGT Lab v1", Vendor: "IGT", Status: templates.TemplateStatusActive}
+	if err := store.UpsertG2STemplate(ctx, tpl); err != nil {
+		t.Fatalf("upsert g2s template: %v", err)
+	}
+	v1 := templates.G2STemplateVersion{
+		ID:           "tpl-1-v1",
+		TemplateID:   "tpl-1",
+		VersionLabel: "1",
+		ActionsJSON:  `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<x/>"}}}`,
+	}
+	v2 := templates.G2STemplateVersion{
+		ID:           "tpl-1-v2",
+		TemplateID:   "tpl-1",
+		VersionLabel: "2",
+		ActionsJSON:  `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<y/>"}}}`,
+	}
+	if err := store.UpsertG2STemplateVersion(ctx, v1); err != nil {
+		t.Fatalf("upsert version 1: %v", err)
+	}
+	if err := store.UpsertG2STemplateVersion(ctx, v2); err != nil {
+		t.Fatalf("upsert version 2: %v", err)
+	}
+
+	fetchedV1, err := store.GetG2STemplateVersion(ctx, "tpl-1", 1)
+	if err != nil {
+		t.Fatalf("get version 1: %v", err)
+	}
+	if fetchedV1 == nil || fetchedV1.ID != "tpl-1-v1" {
+		t.Fatalf("unexpected version 1 row: %+v", fetchedV1)
+	}
+
+	versions, err := store.ListG2STemplateVersions(ctx, "tpl-1")
+	if err != nil {
+		t.Fatalf("list template versions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("version count=%d, want 2", len(versions))
+	}
+
+	if err := store.SetActiveG2STemplateVersion(ctx, "tpl-1", 2); err != nil {
+		t.Fatalf("set active template version: %v", err)
+	}
+	active, err := store.GetActiveG2STemplateVersion(ctx, "tpl-1")
+	if err != nil {
+		t.Fatalf("get active template version: %v", err)
+	}
+	if active == nil || active.VersionLabel != "2" {
+		t.Fatalf("unexpected active template version: %+v", active)
+	}
+}
+
 func TestEGMRecordUpsertGetList(t *testing.T) {
 	ctx := context.Background()
 	store := newPhaseStore(t, ctx)
@@ -355,6 +411,9 @@ func TestPhase1AValidationErrorsAreNotStored(t *testing.T) {
 	if err := store.UpsertG2STemplate(ctx, templates.G2STemplate{}); err == nil {
 		t.Fatal("expected template validation error")
 	}
+	if err := store.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{}); err == nil {
+		t.Fatal("expected template version validation error")
+	}
 	if err := store.UpsertEGMRecord(ctx, egms.EGMRecord{}); err == nil {
 		t.Fatal("expected egm record validation error")
 	}
@@ -368,6 +427,7 @@ func TestPhase1AValidationErrorsAreNotStored(t *testing.T) {
 	assertCount(t, store, "input_channels", 0)
 	assertCount(t, store, "action_definitions", 0)
 	assertCount(t, store, "g2s_templates", 0)
+	assertCount(t, store, "g2s_template_versions", 0)
 	assertCount(t, store, "egm_records", 0)
 	assertCount(t, store, "message_journal", 0)
 	assertCount(t, store, "audit_timeline", 0)

@@ -46,6 +46,25 @@ type TemplateUpsertRequest struct {
 	Template templates.G2STemplate `json:"template"`
 }
 
+type TemplateRenderPreviewRequest struct {
+	TemplateID        string            `json:"template_id"`
+	Version           int               `json:"version,omitempty"`
+	TemplateActionKey string            `json:"template_action_key"`
+	EGMID             string            `json:"egm_id,omitempty"`
+	ActionID          string            `json:"action_id,omitempty"`
+	ActionRunID       string            `json:"action_run_id,omitempty"`
+	ActionStepID      string            `json:"action_step_id,omitempty"`
+	HostID            string            `json:"host_id,omitempty"`
+	IPAddress         string            `json:"ip_address,omitempty"`
+	EndpointPath      string            `json:"endpoint_path,omitempty"`
+	Variables         map[string]string `json:"variables,omitempty"`
+}
+
+type TemplateRenderPreviewResponse struct {
+	Rendered g2sengine.RenderedMessage `json:"rendered"`
+	Warnings []string                  `json:"warnings,omitempty"`
+}
+
 type EGMListResponse struct {
 	Records []egms.EGMRecord `json:"records"`
 }

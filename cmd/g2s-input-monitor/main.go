@@ -218,6 +218,19 @@ func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore) error {
 	if err := st.UpsertG2STemplate(ctx, template); err != nil {
 		return fmt.Errorf("upsert demo template: %w", err)
 	}
+	templateVersion := templates.G2STemplateVersion{
+		ID:           "template-smoke-no-send-v1",
+		TemplateID:   template.ID,
+		VersionLabel: "1",
+		ActionsJSON:  `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"No-send dry-run smoke template action"}}}`,
+		Notes:        "No-send dry-run template version seed",
+	}
+	if err := st.UpsertG2STemplateVersion(ctx, templateVersion); err != nil {
+		return fmt.Errorf("upsert demo template version: %w", err)
+	}
+	if err := st.SetActiveG2STemplateVersion(ctx, template.ID, 1); err != nil {
+		return fmt.Errorf("set active demo template version: %w", err)
+	}
 
 	egmRows := []egms.EGMRecord{
 		{

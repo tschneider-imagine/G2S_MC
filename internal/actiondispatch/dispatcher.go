@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,30 +80,91 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		if getErr != nil {
 			return DispatchResult{}, getErr
 		}
+		egmID := target.TargetEGMID
+		templateID := ""
+		ipAddress := ""
+		endpointPath := ""
 		if egm == nil {
 			warnings = append(warnings, fmt.Sprintf("target EGM %s not found", target.TargetEGMID))
-			continue
+		} else {
+			egmID = egm.EGMID
+			templateID = strings.TrimSpace(egm.TemplateID)
+			ipAddress = strings.TrimSpace(egm.IPAddress)
+			endpointPath = strings.TrimSpace(egm.EndpointPath)
 		}
 
-		templateID := strings.TrimSpace(egm.TemplateID)
-		if templateID != "" {
+		rendered := false
+		renderError := ""
+		messageType := stepKey
+		templateVersionLabel := ""
+		templateVersionInt := 0
+		rawPayload := fmt.Sprintf("DRY_RUN_NO_SEND_RENDER_UNAVAILABLE action=%s run=%s egm=%s step=%s", definition.ID, run.ID, egmID, stepKey)
+
+		if templateID == "" {
+			warnings = append(warnings, fmt.Sprintf("EGM %s has no template assigned", egmID))
+			renderError = fmt.Sprintf("EGM %s has no template assigned", egmID)
+		} else {
 			tpl, tplErr := d.Store.GetG2STemplate(ctx, templateID)
 			if tplErr != nil {
 				return DispatchResult{}, tplErr
 			}
 			if tpl == nil {
-				warnings = append(warnings, fmt.Sprintf("template %s not found for EGM %s", templateID, egm.EGMID))
+				warnings = append(warnings, fmt.Sprintf("template %s not found for EGM %s", templateID, egmID))
+				renderError = fmt.Sprintf("template %s not found", templateID)
+			} else {
+				activeVersion, activeErr := d.Store.GetActiveG2STemplateVersion(ctx, templateID)
+				if activeErr != nil {
+					return DispatchResult{}, activeErr
+				}
+				if activeVersion == nil {
+					warnings = append(warnings, fmt.Sprintf("no active template version for template %s", templateID))
+					renderError = fmt.Sprintf("no active template version for template %s", templateID)
+				} else {
+					templateVersionLabel = strings.TrimSpace(activeVersion.VersionLabel)
+					templateVersionInt = parseVersionLabel(activeVersion.VersionLabel)
+
+					doc, parseErr := g2sengine.ParseActionTemplateDocument(activeVersion.ActionsJSON)
+					if parseErr != nil {
+						warnings = append(warnings, fmt.Sprintf("template parse failed for template %s: %v", templateID, parseErr))
+						renderError = parseErr.Error()
+					} else {
+						renderedMessage, renderErr := g2sengine.RenderActionMessage(doc, g2sengine.RenderRequest{
+							TemplateID:        templateID,
+							TemplateVersion:   templateVersionInt,
+							TemplateActionKey: stepKey,
+							ActionID:          definition.ID,
+							ActionRunID:       run.ID,
+							ActionStepID:      stepID,
+							EGMID:             egmID,
+							HostID:            strings.TrimSpace(request.Actor),
+							Timestamp:         now,
+							IPAddress:         ipAddress,
+							EndpointPath:      endpointPath,
+						})
+						if renderErr != nil {
+							warnings = append(warnings, fmt.Sprintf("template render failed for template %s action_key %s: %v", templateID, stepKey, renderErr))
+							renderError = renderErr.Error()
+						} else {
+							rendered = true
+							rawPayload = renderedMessage.RawPayload
+							messageType = renderedMessage.MessageType
+						}
+					}
+				}
 			}
-		} else {
-			warnings = append(warnings, fmt.Sprintf("EGM %s has no template assigned", egm.EGMID))
 		}
 
 		parsedSummary, marshalErr := json.Marshal(map[string]any{
-			"dry_run":   true,
-			"no_send":   true,
-			"action_id": definition.ID,
-			"egm_id":    egm.EGMID,
-			"step_key":  stepKey,
+			"dry_run":             true,
+			"no_send":             true,
+			"rendered":            rendered,
+			"action_id":           definition.ID,
+			"action_run_id":       run.ID,
+			"egm_id":              egmID,
+			"template_id":         templateID,
+			"template_version":    templateVersionInt,
+			"template_action_key": stepKey,
+			"message_type":        messageType,
 		})
 		if marshalErr != nil {
 			return DispatchResult{}, fmt.Errorf("marshal dry-run summary: %w", marshalErr)
@@ -111,14 +173,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		entry := g2sengine.MessageJournalEntry{
 			Timestamp:         now,
 			Direction:         g2sengine.DirectionOutbound,
-			EGMID:             egm.EGMID,
+			EGMID:             egmID,
 			ActionRunID:       run.ID,
 			ActionStepID:      stepID,
 			TemplateID:        templateID,
-			MessageType:       stepKey,
-			RawPayload:        fmt.Sprintf("DRY_RUN_NO_SEND action=%s egm=%s step=%s", definition.ID, egm.EGMID, stepKey),
+			TemplateVersion:   templateVersionLabel,
+			MessageType:       messageType,
+			RawPayload:        rawPayload,
 			ParsedSummaryJSON: string(parsedSummary),
 			Result:            g2sengine.MessageResultDryRun,
+			Error:             renderError,
 		}
 		id, recordErr := d.Store.RecordMessageJournalEntry(ctx, entry)
 		if recordErr != nil {
@@ -168,6 +232,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		WarningCount:     len(warnings),
 		AuditEntryID:     auditID,
 	}, nil
+}
+
+func parseVersionLabel(versionLabel string) int {
+	trimmed := strings.TrimSpace(versionLabel)
+	if trimmed == "" {
+		return 0
+	}
+	if value, err := strconv.Atoi(trimmed); err == nil {
+		return value
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "v") {
+		if value, err := strconv.Atoi(strings.TrimPrefix(strings.ToLower(trimmed), "v")); err == nil {
+			return value
+		}
+	}
+	return 0
 }
 
 func mapSeverity(severity actions.ActionSeverity, warnings int) audit.AuditSeverity {

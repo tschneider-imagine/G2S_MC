@@ -2,6 +2,7 @@ package actiondispatch
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ type fakeStore struct {
 	targetRows map[string][]actions.ActionTargetResult
 	egmsByID   map[string]egms.EGMRecord
 	templates  map[string]templates.G2STemplate
+	versions   map[string]templates.G2STemplateVersion
 
 	messages []g2sengine.MessageJournalEntry
 	audits   []audit.AuditTimelineEntry
@@ -58,6 +60,15 @@ func (f *fakeStore) GetEGMRecord(_ context.Context, egmID string) (*egms.EGMReco
 
 func (f *fakeStore) GetG2STemplate(_ context.Context, id string) (*templates.G2STemplate, error) {
 	row, ok := f.templates[id]
+	if !ok {
+		return nil, nil
+	}
+	copy := row
+	return &copy, nil
+}
+
+func (f *fakeStore) GetActiveG2STemplateVersion(_ context.Context, templateID string) (*templates.G2STemplateVersion, error) {
+	row, ok := f.versions[templateID]
 	if !ok {
 		return nil, nil
 	}
@@ -167,6 +178,18 @@ func TestDispatchDryRunUpdatesRunAndRecordsMessages(t *testing.T) {
 		if row.Direction != g2sengine.DirectionOutbound {
 			t.Fatalf("direction=%q, want %q", row.Direction, g2sengine.DirectionOutbound)
 		}
+		if !strings.Contains(row.RawPayload, `egm="EGM-`) {
+			t.Fatalf("expected rendered payload with egm marker: %s", row.RawPayload)
+		}
+		if !strings.Contains(row.RawPayload, `run="run-1"`) {
+			t.Fatalf("expected rendered payload with action run id: %s", row.RawPayload)
+		}
+		if !strings.Contains(row.ParsedSummaryJSON, `"rendered":true`) {
+			t.Fatalf("expected rendered summary marker: %s", row.ParsedSummaryJSON)
+		}
+		if !strings.Contains(row.ParsedSummaryJSON, `"dry_run":true`) || !strings.Contains(row.ParsedSummaryJSON, `"no_send":true`) {
+			t.Fatalf("expected dry-run no-send summary markers: %s", row.ParsedSummaryJSON)
+		}
 	}
 	updated := st.runs["run-1"]
 	if updated.Status != actions.RunStatusDispatchPrepared {
@@ -199,6 +222,36 @@ func TestDispatchNoTargetsStillRecordsAudit(t *testing.T) {
 	}
 	if len(st.audits) != 1 {
 		t.Fatalf("audit entries=%d, want 1", len(st.audits))
+	}
+}
+
+func TestDispatchMissingTemplateVersionStillRecordsJournalWarning(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	delete(st.versions, "template-1")
+	dispatcher := &Dispatcher{Store: st}
+
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		ActionRunID: "run-1",
+		Mode:        DispatchModeDryRun,
+		RequestedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(result.PreparedMessages) != 2 {
+		t.Fatalf("prepared messages=%d, want 2", len(result.PreparedMessages))
+	}
+	if result.WarningCount == 0 {
+		t.Fatalf("warning count=%d, want >0", result.WarningCount)
+	}
+	for _, row := range result.PreparedMessages {
+		if row.Error == "" {
+			t.Fatalf("expected journal error detail when template version missing: %+v", row)
+		}
+		if !strings.Contains(row.ParsedSummaryJSON, `"rendered":false`) {
+			t.Fatalf("expected rendered=false summary marker: %s", row.ParsedSummaryJSON)
+		}
 	}
 }
 
@@ -243,7 +296,21 @@ func newFakeStore(now time.Time) *fakeStore {
 			"EGM-2": {EGMID: "EGM-2", Enabled: true, EmergencyEnabled: true, TemplateID: "template-1", CurrentActionState: egms.EGMActionStateNormal},
 		},
 		templates: map[string]templates.G2STemplate{
-			"template-1": {ID: "template-1", Name: "Smoke", Vendor: "Test", Status: templates.TemplateStatusActive},
+			"template-1": {
+				ID:               "template-1",
+				Name:             "Smoke",
+				Vendor:           "Test",
+				Status:           templates.TemplateStatusActive,
+				CurrentVersionID: "1",
+			},
+		},
+		versions: map[string]templates.G2STemplateVersion{
+			"template-1": {
+				ID:           "template-1-v1",
+				TemplateID:   "template-1",
+				VersionLabel: "1",
+				ActionsJSON:  `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>"}}}`,
+			},
 		},
 		messages: []g2sengine.MessageJournalEntry{},
 		audits:   []audit.AuditTimelineEntry{},

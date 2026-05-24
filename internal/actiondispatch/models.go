@@ -39,6 +39,7 @@ type Store interface {
 	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
 	GetEGMRecord(ctx context.Context, egmID string) (*egms.EGMRecord, error)
 	GetG2STemplate(ctx context.Context, id string) (*templates.G2STemplate, error)
+	GetActiveG2STemplateVersion(ctx context.Context, templateID string) (*templates.G2STemplateVersion, error)
 	UpdateActionRun(ctx context.Context, run actions.ActionRun) error
 	RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error)
 	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)

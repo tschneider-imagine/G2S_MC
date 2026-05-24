@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -529,12 +530,68 @@ func TestPostActionRunDispatchDryRunCreatesMessages(t *testing.T) {
 	if messages[0].Result != g2sengine.MessageResultDryRun {
 		t.Fatalf("message result=%q, want %q", messages[0].Result, g2sengine.MessageResultDryRun)
 	}
+	if !strings.Contains(messages[0].RawPayload, `egm="EGM-1"`) || !strings.Contains(messages[0].RawPayload, `run="run-1"`) {
+		t.Fatalf("expected rendered payload markers: %s", messages[0].RawPayload)
+	}
 	run, err := db.GetActionRun(ctx, "run-1")
 	if err != nil {
 		t.Fatalf("get action run: %v", err)
 	}
 	if run == nil || run.Status != actions.RunStatusDispatchPrepared {
 		t.Fatalf("unexpected run after dispatch: %+v", run)
+	}
+}
+
+func TestPostTemplatesRenderPreviewReturnsJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDispatchFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	body := []byte(`{
+		"template_id":"template-smoke-no-send",
+		"template_action_key":"queue_only_no_send",
+		"action_id":"emergency-broadcast-trigger",
+		"action_run_id":"run-preview-1",
+		"egm_id":"EGM-1"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/templates/render-preview", bytes.NewReader(body))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var payload TemplateRenderPreviewResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.Contains(payload.Rendered.RawPayload, `egm="EGM-1"`) || !strings.Contains(payload.Rendered.RawPayload, `run="run-preview-1"`) {
+		t.Fatalf("unexpected rendered payload: %s", payload.Rendered.RawPayload)
+	}
+}
+
+func TestPostTemplatesRenderPreviewMissingActionKeyReturns400(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDispatchFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	body := []byte(`{"template_id":"template-smoke-no-send"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/templates/render-preview", bytes.NewReader(body))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusBadRequest, res.Body.String())
 	}
 }
 
@@ -671,6 +728,17 @@ func seedDispatchFixtures(t *testing.T, ctx context.Context, db *store.SQLiteSto
 		Status: templates.TemplateStatusActive,
 	}); err != nil {
 		t.Fatalf("seed template: %v", err)
+	}
+	if err := db.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{
+		ID:           "template-smoke-no-send-v1",
+		TemplateID:   "template-smoke-no-send",
+		VersionLabel: "1",
+		ActionsJSON:  `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>"}}}`,
+	}); err != nil {
+		t.Fatalf("seed template version: %v", err)
+	}
+	if err := db.SetActiveG2STemplateVersion(ctx, "template-smoke-no-send", 1); err != nil {
+		t.Fatalf("set active template version: %v", err)
 	}
 	if err := db.UpsertEGMRecord(ctx, egms.EGMRecord{
 		EGMID:              "EGM-1",
