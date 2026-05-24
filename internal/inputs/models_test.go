@@ -44,3 +44,21 @@ func TestInputTransitionValidate(t *testing.T) {
 		t.Fatal("expected validation error for zero transition_at")
 	}
 }
+
+func TestDeriveState(t *testing.T) {
+	state, err := DeriveState(InputStateHigh, InputStateHigh)
+	if err != nil || state != DerivedStateNormal {
+		t.Fatalf("derive high/high = %v, %v", state, err)
+	}
+	state, err = DeriveState(InputStateLow, InputStateHigh)
+	if err != nil || state != DerivedStateTriggered {
+		t.Fatalf("derive low/high = %v, %v", state, err)
+	}
+	state, err = DeriveState(InputStateLow, InputStateLow)
+	if err != nil || state != DerivedStateNormal {
+		t.Fatalf("derive low/low = %v, %v", state, err)
+	}
+	if _, err := DeriveState("NOPE", InputStateLow); err == nil {
+		t.Fatal("expected invalid raw state error")
+	}
+}

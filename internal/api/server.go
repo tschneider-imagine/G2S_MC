@@ -11,6 +11,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
@@ -20,6 +21,8 @@ type Store interface {
 	GetInputChannel(ctx context.Context, id string) (*inputs.InputChannel, error)
 	UpsertInputChannel(ctx context.Context, channel inputs.InputChannel) error
 	ListInputChannels(ctx context.Context) ([]inputs.InputChannel, error)
+	GetInputRuntimeState(ctx context.Context, inputID string) (*inputruntime.InputRuntimeState, error)
+	ListInputTransitions(ctx context.Context, limit int) ([]inputs.InputTransition, error)
 
 	GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error)
 	UpsertActionDefinition(ctx context.Context, definition actions.ActionDefinition) error
@@ -45,6 +48,8 @@ type Server struct {
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/inputs", s.handleInputs)
 	mux.HandleFunc("/api/v2/inputs/", s.handleInputByID)
+	mux.HandleFunc("/api/v2/inputs/state", s.handleInputRuntimeState)
+	mux.HandleFunc("/api/v2/inputs/transitions", s.handleInputTransitions)
 
 	mux.HandleFunc("/api/v2/actions", s.handleActions)
 	mux.HandleFunc("/api/v2/actions/", s.handleActionByID)
@@ -57,6 +62,44 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/v2/comms/messages", s.handleMessages)
 	mux.HandleFunc("/api/v2/audit/timeline", s.handleTimeline)
+}
+
+func (s *Server) handleInputRuntimeState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	channels, err := s.Store.ListInputChannels(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	result := make([]InputStateEnvelope, 0, len(channels))
+	for _, channel := range channels {
+		runtimeState, err := s.Store.GetInputRuntimeState(r.Context(), channel.ID)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		result = append(result, InputStateEnvelope{
+			Channel:      channel,
+			RuntimeState: runtimeState,
+		})
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleInputTransitions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	transitions, err := s.Store.ListInputTransitions(r.Context(), queryLimit(r, 50))
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, transitions)
 }
 
 func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {

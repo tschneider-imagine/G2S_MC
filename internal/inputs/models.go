@@ -13,12 +13,16 @@ const (
 	InputStateLow  InputElectricalState = "LOW"
 )
 
+type DigitalState = InputElectricalState
+
 type InputDerivedState string
 
 const (
 	DerivedStateNormal    InputDerivedState = "NORMAL"
 	DerivedStateTriggered InputDerivedState = "TRIGGERED"
 )
+
+type DerivedInputState = InputDerivedState
 
 type InputLatchingMode string
 
@@ -100,4 +104,17 @@ func (t InputTransition) Validate() error {
 		return fmt.Errorf("transition_at is required")
 	}
 	return nil
+}
+
+func DeriveState(raw DigitalState, normal DigitalState) (DerivedInputState, error) {
+	if raw != InputStateHigh && raw != InputStateLow {
+		return "", fmt.Errorf("raw state must be HIGH or LOW")
+	}
+	if normal != InputStateHigh && normal != InputStateLow {
+		return "", fmt.Errorf("normal state must be HIGH or LOW")
+	}
+	if raw == normal {
+		return DerivedStateNormal, nil
+	}
+	return DerivedStateTriggered, nil
 }

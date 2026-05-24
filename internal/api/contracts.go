@@ -5,6 +5,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
@@ -51,4 +52,9 @@ type AuditTimelineListResponse struct {
 
 type AuditTimelineRecordRequest struct {
 	Entry audit.AuditTimelineEntry `json:"entry"`
+}
+
+type InputStateEnvelope struct {
+	Channel      inputs.InputChannel             `json:"channel"`
+	RuntimeState *inputruntime.InputRuntimeState `json:"runtime_state,omitempty"`
 }

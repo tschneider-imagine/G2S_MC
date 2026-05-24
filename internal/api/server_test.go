@@ -11,6 +11,7 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
@@ -216,6 +217,117 @@ func TestGetAuditTimelineReturnsEntries(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+}
+
+func TestGetInputsStateReturnsJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	if err := db.UpsertInputChannel(ctx, validInputChannel()); err != nil {
+		t.Fatalf("seed input channel: %v", err)
+	}
+	if err := db.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              "input-1",
+		StableRawState:       inputs.InputStateHigh,
+		DerivedState:         inputs.DerivedStateNormal,
+		StableSince:          time.Now().UTC(),
+		LastObservedRawState: inputs.InputStateHigh,
+		LastObservedAt:       time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed input runtime state: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/inputs/state", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusOK)
+	}
+	if got := res.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content-type = %q", got)
+	}
+	var states []InputStateEnvelope
+	if err := json.Unmarshal(res.Body.Bytes(), &states); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(states) != 1 || states[0].Channel.ID != "input-1" || states[0].RuntimeState == nil {
+		t.Fatalf("unexpected states: %+v", states)
+	}
+}
+
+func TestGetInputsTransitionsReturnsJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	if _, err := db.RecordInputTransition(ctx, inputs.InputTransition{
+		InputChannelID:  "input-1",
+		PreviousDerived: inputs.DerivedStateNormal,
+		NewDerived:      inputs.DerivedStateTriggered,
+		TransitionAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed transition: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/inputs/transitions", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusOK)
+	}
+	var transitions []inputs.InputTransition
+	if err := json.Unmarshal(res.Body.Bytes(), &transitions); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(transitions) != 1 {
+		t.Fatalf("transitions len = %d, want 1", len(transitions))
+	}
+}
+
+func TestInputsStateMethodNotAllowed(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/inputs/state", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestInputsTransitionsMethodNotAllowed(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/inputs/transitions", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusMethodNotAllowed)
 	}
 }
 
