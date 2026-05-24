@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	rebuildapi "github.com/tschneider-imagine/G2S_MC/internal/api"
 	"github.com/tschneider-imagine/G2S_MC/internal/certs"
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
@@ -112,6 +113,13 @@ func main() {
 
 	g2sServer := g2s.NewServer(cfg.G2S.HostID, eng)
 	g2sServer.RegisterRoutes(mux, cfg.G2S.EndpointPath)
+	rebuildV2API := &rebuildapi.Server{
+		Store: auditStore,
+		AuthorizeMutation: func(w http.ResponseWriter, r *http.Request) bool {
+			return requireMutationAuth(w, r, cfg)
+		},
+	}
+	rebuildV2API.RegisterRoutes(mux)
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/api/status", statusHandler(eng, auditStore, cfg, runtimeInfo{
 		ConfigPath:       *configPath,

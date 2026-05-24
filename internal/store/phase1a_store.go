@@ -10,10 +10,23 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
+
+type MessageJournalListQuery struct {
+	Limit     int
+	EGMID     string
+	Direction g2sengine.MessageDirection
+}
+
+type AuditTimelineListQuery struct {
+	Limit     int
+	EventType string
+	Severity  audit.AuditSeverity
+}
 
 func (s *SQLiteStore) UpsertInputChannel(ctx context.Context, channel inputs.InputChannel) error {
 	if err := channel.Validate(); err != nil {
@@ -104,6 +117,49 @@ func (s *SQLiteStore) ListInputChannels(ctx context.Context) ([]inputs.InputChan
 		result = append(result, channel)
 	}
 	return result, rows.Err()
+}
+
+func (s *SQLiteStore) GetInputChannel(ctx context.Context, id string) (*inputs.InputChannel, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, name, gpio_channel, enabled, normal_state, current_state, derived_state,
+		        debounce_ms, priority, COALESCE(on_trigger_action_id, ''), COALESCE(on_normal_action_id, ''),
+		        latching_mode, last_transition_at, created_at, updated_at
+		   FROM input_channels
+		  WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	var channel inputs.InputChannel
+	var enabled int
+	var lastTransitionAt sql.NullTime
+	if err := row.Scan(
+		&channel.ID,
+		&channel.Name,
+		&channel.GPIOChannel,
+		&enabled,
+		&channel.NormalState,
+		&channel.CurrentState,
+		&channel.DerivedState,
+		&channel.DebounceMS,
+		&channel.Priority,
+		&channel.OnTriggerActionID,
+		&channel.OnNormalActionID,
+		&channel.LatchingMode,
+		&lastTransitionAt,
+		&channel.CreatedAt,
+		&channel.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	channel.Enabled = enabled != 0
+	if lastTransitionAt.Valid {
+		value := lastTransitionAt.Time
+		channel.LastTransitionAt = &value
+	}
+	return &channel, nil
 }
 
 func (s *SQLiteStore) UpsertActionDefinition(ctx context.Context, definition actions.ActionDefinition) error {
@@ -197,6 +253,47 @@ func (s *SQLiteStore) ListActionDefinitions(ctx context.Context) ([]actions.Acti
 	return definitions, rows.Err()
 }
 
+func (s *SQLiteStore) GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, name, severity, enabled, target_selector, template_selector, steps_json,
+		        COALESCE(retry_policy_json, ''), COALESCE(escalation_policy_json, ''), COALESCE(return_action_id, ''),
+		        COALESCE(audit_policy_json, ''), version, created_at, updated_at
+		   FROM action_definitions
+		  WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	var definition actions.ActionDefinition
+	var enabled int
+	var stepsJSON string
+	if err := row.Scan(
+		&definition.ID,
+		&definition.Name,
+		&definition.Severity,
+		&enabled,
+		&definition.TargetSelector,
+		&definition.TemplateSelector,
+		&stepsJSON,
+		&definition.RetryPolicyJSON,
+		&definition.EscalationJSON,
+		&definition.ReturnActionID,
+		&definition.AuditPolicyJSON,
+		&definition.Version,
+		&definition.CreatedAt,
+		&definition.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	definition.Enabled = enabled != 0
+	if err := json.Unmarshal([]byte(stepsJSON), &definition.Steps); err != nil {
+		return nil, fmt.Errorf("unmarshal steps_json for action %q: %w", definition.ID, err)
+	}
+	return &definition, nil
+}
+
 func (s *SQLiteStore) UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error {
 	if err := tpl.Validate(); err != nil {
 		return err
@@ -263,6 +360,182 @@ func (s *SQLiteStore) ListG2STemplates(ctx context.Context) ([]templates.G2STemp
 	return result, rows.Err()
 }
 
+func (s *SQLiteStore) GetG2STemplate(ctx context.Context, id string) (*templates.G2STemplate, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, name, vendor, COALESCE(cabinet_family, ''), COALESCE(software_version_match, ''), status,
+		        COALESCE(current_version_id, ''), COALESCE(notes, ''), created_at, updated_at
+		   FROM g2s_templates
+		  WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	var tpl templates.G2STemplate
+	if err := row.Scan(
+		&tpl.ID,
+		&tpl.Name,
+		&tpl.Vendor,
+		&tpl.CabinetFamily,
+		&tpl.SoftwareVersionMatch,
+		&tpl.Status,
+		&tpl.CurrentVersionID,
+		&tpl.Notes,
+		&tpl.CreatedAt,
+		&tpl.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &tpl, nil
+}
+
+func (s *SQLiteStore) UpsertEGMRecord(ctx context.Context, record egms.EGMRecord) error {
+	if err := record.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO egm_records (
+		    egm_id, display_name, ip_address, endpoint_path, vendor, cabinet_family, game_title,
+		    software_version, zone, enabled, emergency_enabled, template_id, heartbeat_override_json,
+		    last_seen_at, current_action_state, notes
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(egm_id) DO UPDATE SET
+		    display_name = excluded.display_name,
+		    ip_address = excluded.ip_address,
+		    endpoint_path = excluded.endpoint_path,
+		    vendor = excluded.vendor,
+		    cabinet_family = excluded.cabinet_family,
+		    game_title = excluded.game_title,
+		    software_version = excluded.software_version,
+		    zone = excluded.zone,
+		    enabled = excluded.enabled,
+		    emergency_enabled = excluded.emergency_enabled,
+		    template_id = excluded.template_id,
+		    heartbeat_override_json = excluded.heartbeat_override_json,
+		    last_seen_at = excluded.last_seen_at,
+		    current_action_state = excluded.current_action_state,
+		    notes = excluded.notes`,
+		strings.TrimSpace(record.EGMID),
+		nullableTrimmed(record.DisplayName),
+		nullableTrimmed(record.IPAddress),
+		nullableTrimmed(record.EndpointPath),
+		nullableTrimmed(record.Vendor),
+		nullableTrimmed(record.CabinetFamily),
+		nullableTrimmed(record.GameTitle),
+		nullableTrimmed(record.SoftwareVersion),
+		nullableTrimmed(record.Zone),
+		boolToInt(record.Enabled),
+		boolToInt(record.EmergencyEnabled),
+		nullableTrimmed(record.TemplateID),
+		nullableTrimmed(record.HeartbeatOverrideJSON),
+		nullableTime(record.LastSeenAt),
+		record.CurrentActionState,
+		nullableTrimmed(record.Notes),
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetEGMRecord(ctx context.Context, egmID string) (*egms.EGMRecord, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT egm_id, COALESCE(display_name, ''), COALESCE(ip_address, ''), COALESCE(endpoint_path, ''),
+		        COALESCE(vendor, ''), COALESCE(cabinet_family, ''), COALESCE(game_title, ''), COALESCE(software_version, ''),
+		        COALESCE(zone, ''), enabled, emergency_enabled, COALESCE(template_id, ''), COALESCE(heartbeat_override_json, ''),
+		        last_seen_at, current_action_state, COALESCE(notes, '')
+		   FROM egm_records
+		  WHERE egm_id = ?`,
+		strings.TrimSpace(egmID),
+	)
+	var record egms.EGMRecord
+	var enabled int
+	var emergencyEnabled int
+	var lastSeenAt sql.NullTime
+	if err := row.Scan(
+		&record.EGMID,
+		&record.DisplayName,
+		&record.IPAddress,
+		&record.EndpointPath,
+		&record.Vendor,
+		&record.CabinetFamily,
+		&record.GameTitle,
+		&record.SoftwareVersion,
+		&record.Zone,
+		&enabled,
+		&emergencyEnabled,
+		&record.TemplateID,
+		&record.HeartbeatOverrideJSON,
+		&lastSeenAt,
+		&record.CurrentActionState,
+		&record.Notes,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	record.Enabled = enabled != 0
+	record.EmergencyEnabled = emergencyEnabled != 0
+	if lastSeenAt.Valid {
+		value := lastSeenAt.Time
+		record.LastSeenAt = &value
+	}
+	return &record, nil
+}
+
+func (s *SQLiteStore) ListEGMRecords(ctx context.Context) ([]egms.EGMRecord, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT egm_id, COALESCE(display_name, ''), COALESCE(ip_address, ''), COALESCE(endpoint_path, ''),
+		        COALESCE(vendor, ''), COALESCE(cabinet_family, ''), COALESCE(game_title, ''), COALESCE(software_version, ''),
+		        COALESCE(zone, ''), enabled, emergency_enabled, COALESCE(template_id, ''), COALESCE(heartbeat_override_json, ''),
+		        last_seen_at, current_action_state, COALESCE(notes, '')
+		   FROM egm_records
+		   ORDER BY egm_id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []egms.EGMRecord{}
+	for rows.Next() {
+		var record egms.EGMRecord
+		var enabled int
+		var emergencyEnabled int
+		var lastSeenAt sql.NullTime
+		if err := rows.Scan(
+			&record.EGMID,
+			&record.DisplayName,
+			&record.IPAddress,
+			&record.EndpointPath,
+			&record.Vendor,
+			&record.CabinetFamily,
+			&record.GameTitle,
+			&record.SoftwareVersion,
+			&record.Zone,
+			&enabled,
+			&emergencyEnabled,
+			&record.TemplateID,
+			&record.HeartbeatOverrideJSON,
+			&lastSeenAt,
+			&record.CurrentActionState,
+			&record.Notes,
+		); err != nil {
+			return nil, err
+		}
+		record.Enabled = enabled != 0
+		record.EmergencyEnabled = emergencyEnabled != 0
+		if lastSeenAt.Valid {
+			value := lastSeenAt.Time
+			record.LastSeenAt = &value
+		}
+		result = append(result, record)
+	}
+	return result, rows.Err()
+}
+
 func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error) {
 	if err := entry.Validate(); err != nil {
 		return 0, err
@@ -297,19 +570,32 @@ func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sen
 	return result.LastInsertId()
 }
 
-func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, limit int) ([]g2sengine.MessageJournalEntry, error) {
-	limit = normalizeLimit(limit)
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, timestamp, direction, COALESCE(from_endpoint, ''), COALESCE(to_endpoint, ''), COALESCE(egm_id, ''),
+func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error) {
+	limit := normalizeLimit(query.Limit)
+	where := []string{}
+	args := []any{}
+	if id := strings.TrimSpace(query.EGMID); id != "" {
+		where = append(where, "egm_id = ?")
+		args = append(args, id)
+	}
+	if query.Direction != "" {
+		where = append(where, "direction = ?")
+		args = append(args, query.Direction)
+	}
+	sqlBuilder := strings.Builder{}
+	sqlBuilder.WriteString(`SELECT id, timestamp, direction, COALESCE(from_endpoint, ''), COALESCE(to_endpoint, ''), COALESCE(egm_id, ''),
 		        COALESCE(action_run_id, ''), COALESCE(action_step_id, ''), input_transition_id,
 		        COALESCE(template_id, ''), COALESCE(template_version, ''), COALESCE(handler_rule_id, ''), COALESCE(message_type, ''),
 		        raw_payload, COALESCE(parsed_summary_json, ''), result, COALESCE(error, '')
-		   FROM message_journal
-		   ORDER BY id DESC
-		   LIMIT ?`,
-		limit,
-	)
+		   FROM message_journal`)
+	if len(where) > 0 {
+		sqlBuilder.WriteString(" WHERE ")
+		sqlBuilder.WriteString(strings.Join(where, " AND "))
+	}
+	sqlBuilder.WriteString(" ORDER BY id DESC LIMIT ?")
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, sqlBuilder.String(), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -374,17 +660,30 @@ func (s *SQLiteStore) RecordAuditTimelineEntry(ctx context.Context, entry audit.
 	return result.LastInsertId()
 }
 
-func (s *SQLiteStore) ListAuditTimelineEntries(ctx context.Context, limit int) ([]audit.AuditTimelineEntry, error) {
-	limit = normalizeLimit(limit)
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, occurred_at, severity, event_type, summary, COALESCE(detail_json, ''),
+func (s *SQLiteStore) ListAuditTimelineEntries(ctx context.Context, query AuditTimelineListQuery) ([]audit.AuditTimelineEntry, error) {
+	limit := normalizeLimit(query.Limit)
+	where := []string{}
+	args := []any{}
+	if eventType := strings.TrimSpace(query.EventType); eventType != "" {
+		where = append(where, "event_type = ?")
+		args = append(args, eventType)
+	}
+	if query.Severity != "" {
+		where = append(where, "severity = ?")
+		args = append(args, query.Severity)
+	}
+	sqlBuilder := strings.Builder{}
+	sqlBuilder.WriteString(`SELECT id, occurred_at, severity, event_type, summary, COALESCE(detail_json, ''),
 		        COALESCE(action_run_id, ''), input_transition_id, message_journal_id, COALESCE(operator, '')
-		   FROM audit_timeline
-		   ORDER BY id DESC
-		   LIMIT ?`,
-		limit,
-	)
+		   FROM audit_timeline`)
+	if len(where) > 0 {
+		sqlBuilder.WriteString(" WHERE ")
+		sqlBuilder.WriteString(strings.Join(where, " AND "))
+	}
+	sqlBuilder.WriteString(" ORDER BY id DESC LIMIT ?")
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, sqlBuilder.String(), args...)
 	if err != nil {
 		return nil, err
 	}
