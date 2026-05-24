@@ -1,0 +1,46 @@
+package audit
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+type AuditSeverity string
+
+const (
+	AuditSeverityInfo      AuditSeverity = "INFO"
+	AuditSeverityWarning   AuditSeverity = "WARNING"
+	AuditSeverityEmergency AuditSeverity = "EMERGENCY"
+)
+
+type AuditTimelineEntry struct {
+	ID                int64         `json:"id"`
+	OccurredAt        time.Time     `json:"occurred_at"`
+	Severity          AuditSeverity `json:"severity"`
+	EventType         string        `json:"event_type"`
+	Summary           string        `json:"summary"`
+	DetailJSON        string        `json:"detail_json,omitempty"`
+	ActionRunID       string        `json:"action_run_id,omitempty"`
+	InputTransitionID int64         `json:"input_transition_id,omitempty"`
+	MessageJournalID  int64         `json:"message_journal_id,omitempty"`
+	Operator          string        `json:"operator,omitempty"`
+}
+
+func (e AuditTimelineEntry) Validate() error {
+	if e.OccurredAt.IsZero() {
+		return fmt.Errorf("occurred_at is required")
+	}
+	switch e.Severity {
+	case AuditSeverityInfo, AuditSeverityWarning, AuditSeverityEmergency:
+	default:
+		return fmt.Errorf("severity is invalid")
+	}
+	if strings.TrimSpace(e.EventType) == "" {
+		return fmt.Errorf("event_type is required")
+	}
+	if strings.TrimSpace(e.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	return nil
+}

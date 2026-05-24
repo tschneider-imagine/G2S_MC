@@ -111,6 +111,9 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if _, err := s.db.ExecContext(ctx, phase1ADomainMigration); err != nil {
+		return err
+	}
 	if err := s.ensureHeartbeatPolicyOverrideSchema(ctx); err != nil {
 		return err
 	}
@@ -1342,7 +1345,7 @@ func (s *SQLiteStore) ListRunMarkers(ctx context.Context, limit int) ([]model.Ru
 
 func (s *SQLiteStore) Count(ctx context.Context, table string) (int, error) {
 	switch table {
-	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "endpoint_integrity_alert_states", "egm_registry_overrides", "runtime_override_presets":
+	case "incident_records", "egm_status_snapshots", "egm_compliance_logs", "controller_state_history", "certificate_inventory", "cabinet_profile_overrides", "session_evidence_records", "run_markers", "heartbeat_policy_overrides", "session_workflow_progress", "operator_audit_events", "endpoint_integrity_alert_states", "egm_registry_overrides", "runtime_override_presets", "input_channels", "input_transitions", "action_definitions", "action_runs", "action_target_results", "g2s_templates", "g2s_template_versions", "message_journal", "handler_rules", "egm_records", "egm_groups", "audit_timeline":
 	default:
 		return 0, fmt.Errorf("unsupported count table %q", table)
 	}
