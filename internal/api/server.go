@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
@@ -35,6 +36,8 @@ type Store interface {
 	GetEGMRecord(ctx context.Context, egmID string) (*egms.EGMRecord, error)
 	UpsertEGMRecord(ctx context.Context, record egms.EGMRecord) error
 	ListEGMRecords(ctx context.Context) ([]egms.EGMRecord, error)
+	GetEGMGroup(ctx context.Context, id string) (*egms.EGMGroup, error)
+	ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error)
 
 	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
 	ListAuditTimelineEntries(ctx context.Context, query store.AuditTimelineListQuery) ([]audit.AuditTimelineEntry, error)
@@ -163,16 +166,24 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleActionByID(w http.ResponseWriter, r *http.Request) {
+	id, preview, ok := actionRoute(r.URL.Path)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if preview {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleActionPreviewByID(w, r, id)
+		return
+	}
 	if r.Method != http.MethodPut {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if !s.authorizeMutation(w, r) {
-		return
-	}
-	id, ok := pathID(r.URL.Path, "/api/v2/actions/")
-	if !ok {
-		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
 	var definition actions.ActionDefinition
@@ -194,6 +205,25 @@ func (s *Server) handleActionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, definition)
+}
+
+func (s *Server) handleActionPreviewByID(w http.ResponseWriter, r *http.Request, actionID string) {
+	definition, err := s.Store.GetActionDefinition(r.Context(), actionID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if definition == nil {
+		writeJSONError(w, http.StatusNotFound, "action not found")
+		return
+	}
+	planner := actionplanner.Planner{Store: s.Store}
+	plan, err := planner.BuildPlanForDefinition(r.Context(), *definition)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
 }
 
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +401,28 @@ func pathID(path string, prefix string) (string, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+func actionRoute(path string) (id string, preview bool, ok bool) {
+	const prefix = "/api/v2/actions/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false, false
+	}
+	trimmed := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	if trimmed == "" {
+		return "", false, false
+	}
+	if strings.HasSuffix(trimmed, "/preview") {
+		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/preview"))
+		if id == "" || strings.Contains(id, "/") {
+			return "", false, false
+		}
+		return id, true, true
+	}
+	if strings.Contains(trimmed, "/") {
+		return "", false, false
+	}
+	return trimmed, false, true
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {

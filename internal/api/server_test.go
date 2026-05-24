@@ -9,11 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
+	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
 
 func TestGetInputsReturnsJSON(t *testing.T) {
@@ -328,6 +331,65 @@ func TestInputsTransitionsMethodNotAllowed(t *testing.T) {
 
 	if res.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", res.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestActionPreviewReturnsJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	if err := db.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "action-1",
+		Name:             "Emergency Silence",
+		Severity:         actions.SeverityEmergency,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-1",
+			Name:              "Send mute",
+			Sequence:          0,
+			TemplateActionKey: "mute_primary",
+		}},
+		Version: 1,
+	}); err != nil {
+		t.Fatalf("seed action definition: %v", err)
+	}
+	if err := db.UpsertG2STemplate(ctx, templates.G2STemplate{ID: "tpl-1", Name: "IGT", Vendor: "IGT", Status: templates.TemplateStatusActive}); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	if err := db.UpsertEGMRecord(ctx, egms.EGMRecord{
+		EGMID:              "EGM-001",
+		DisplayName:        "Cabinet 1",
+		Enabled:            true,
+		EmergencyEnabled:   true,
+		TemplateID:         "tpl-1",
+		CurrentActionState: egms.EGMActionStateNormal,
+	}); err != nil {
+		t.Fatalf("seed egm: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/actions/action-1/preview", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content-type = %q", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["action_id"] != "action-1" {
+		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }
 

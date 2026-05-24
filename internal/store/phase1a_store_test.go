@@ -260,6 +260,35 @@ func TestPhase1AValidationErrorsAreNotStored(t *testing.T) {
 	assertCount(t, store, "audit_timeline", 0)
 }
 
+func TestEGMGroupUpsertGetList(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	group := egms.EGMGroup{
+		ID:          "zone-a",
+		Name:        "Zone A",
+		Description: "High priority floor",
+	}
+	if err := store.UpsertEGMGroup(ctx, group); err != nil {
+		t.Fatalf("upsert egm group: %v", err)
+	}
+	fetched, err := store.GetEGMGroup(ctx, "zone-a")
+	if err != nil {
+		t.Fatalf("get egm group: %v", err)
+	}
+	if fetched == nil || fetched.Name != "Zone A" {
+		t.Fatalf("unexpected fetched group: %+v", fetched)
+	}
+	groups, err := store.ListEGMGroups(ctx)
+	if err != nil {
+		t.Fatalf("list egm groups: %v", err)
+	}
+	if len(groups) != 1 || groups[0].ID != "zone-a" {
+		t.Fatalf("unexpected groups: %+v", groups)
+	}
+}
+
 func newPhaseStore(t *testing.T, ctx context.Context) *SQLiteStore {
 	t.Helper()
 	store, err := Open(ctx, ":memory:")

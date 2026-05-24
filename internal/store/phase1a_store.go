@@ -536,6 +536,79 @@ func (s *SQLiteStore) ListEGMRecords(ctx context.Context) ([]egms.EGMRecord, err
 	return result, rows.Err()
 }
 
+func (s *SQLiteStore) GetEGMGroup(ctx context.Context, id string) (*egms.EGMGroup, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, name, COALESCE(description, ''), created_at, updated_at
+		   FROM egm_groups
+		  WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	var group egms.EGMGroup
+	if err := row.Scan(
+		&group.ID,
+		&group.Name,
+		&group.Description,
+		&group.CreatedAt,
+		&group.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &group, nil
+}
+
+func (s *SQLiteStore) UpsertEGMGroup(ctx context.Context, group egms.EGMGroup) error {
+	if err := group.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO egm_groups (
+		    id, name, description, created_at, updated_at
+		) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+		    name = excluded.name,
+		    description = excluded.description,
+		    updated_at = CURRENT_TIMESTAMP`,
+		strings.TrimSpace(group.ID),
+		strings.TrimSpace(group.Name),
+		nullableTrimmed(group.Description),
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, name, COALESCE(description, ''), created_at, updated_at
+		   FROM egm_groups
+		   ORDER BY id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []egms.EGMGroup{}
+	for rows.Next() {
+		var group egms.EGMGroup
+		if err := rows.Scan(
+			&group.ID,
+			&group.Name,
+			&group.Description,
+			&group.CreatedAt,
+			&group.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, group)
+	}
+	return result, rows.Err()
+}
+
 func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error) {
 	if err := entry.Validate(); err != nil {
 		return 0, err
