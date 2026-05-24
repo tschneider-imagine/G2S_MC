@@ -117,6 +117,9 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, phase1CInputRuntimeMigration); err != nil {
 		return err
 	}
+	if err := s.ensurePhase2FMessageJournalSendSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureEGMGroupMembershipSchema(ctx); err != nil {
 		return err
 	}
@@ -156,6 +159,53 @@ func (s *SQLiteStore) ensureEGMGroupMembershipSchema(ctx context.Context) error 
 	}
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE egm_groups ADD COLUMN egm_ids_json TEXT NOT NULL DEFAULT '[]'`)
 	return err
+}
+
+func (s *SQLiteStore) ensurePhase2FMessageJournalSendSchema(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(message_journal)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	type columnDef struct {
+		name string
+		def  string
+	}
+	defs := []columnDef{
+		{name: "http_status_code", def: "INTEGER"},
+		{name: "latency_ms", def: "INTEGER"},
+		{name: "response_excerpt", def: "TEXT"},
+		{name: "sent_at", def: "DATETIME"},
+		{name: "completed_at", def: "DATETIME"},
+		{name: "transport_mode", def: "TEXT"},
+	}
+	for _, def := range defs {
+		if existing[def.name] {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE message_journal ADD COLUMN "+def.name+" "+def.def); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *SQLiteStore) ensureHeartbeatPolicyOverrideSchema(ctx context.Context) error {

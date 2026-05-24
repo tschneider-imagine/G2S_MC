@@ -10,12 +10,16 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
+	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
 type Dispatcher struct {
-	Store Store
-	Clock func() time.Time
+	Store  Store
+	Clock  func() time.Time
+	Sender g2stransport.Sender
 }
 
 func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, error) {
@@ -262,4 +266,182 @@ func mapSeverity(severity actions.ActionSeverity, warnings int) audit.AuditSever
 	default:
 		return audit.AuditSeverityInfo
 	}
+}
+
+func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPreparedMessagesRequest) (SendPreparedMessagesResult, error) {
+	if d.Store == nil {
+		return SendPreparedMessagesResult{}, fmt.Errorf("store is required")
+	}
+	actionRunID := strings.TrimSpace(request.ActionRunID)
+	if actionRunID == "" {
+		return SendPreparedMessagesResult{}, fmt.Errorf("action_run_id is required")
+	}
+
+	now := request.RequestedAt
+	if now.IsZero() {
+		clock := d.Clock
+		if clock == nil {
+			clock = time.Now
+		}
+		now = clock().UTC()
+	}
+
+	run, err := d.Store.GetActionRun(ctx, actionRunID)
+	if err != nil {
+		return SendPreparedMessagesResult{}, err
+	}
+	if run == nil {
+		return SendPreparedMessagesResult{}, fmt.Errorf("action run %q not found", actionRunID)
+	}
+
+	entries, err := d.Store.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+		ActionRunID: actionRunID,
+		Direction:   g2sengine.DirectionOutbound,
+		Limit:       500,
+	})
+	if err != nil {
+		return SendPreparedMessagesResult{}, err
+	}
+
+	sender := d.Sender
+	if sender == nil {
+		sender = g2stransport.NewSender(request.TransportMode)
+	}
+
+	sentCount := 0
+	failedCount := 0
+	blockedCount := 0
+	processed := 0
+	for _, entry := range entries {
+		switch entry.Result {
+		case g2sengine.MessageResultDryRun, g2sengine.MessageResultSendBlocked, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendAttempted:
+		default:
+			continue
+		}
+		processed++
+		egmRecord, err := d.Store.GetEGMRecord(ctx, entry.EGMID)
+		if err != nil {
+			return SendPreparedMessagesResult{}, err
+		}
+		endpointURL := strings.TrimSpace(entry.ToEndpoint)
+		if endpointURL == "" {
+			endpointURL = endpointURLFromEGM(egmRecord)
+		}
+
+		sendResult, sendErr := sender.Send(ctx, g2stransport.SendRequest{
+			MessageID:     entry.ID,
+			ActionRunID:   actionRunID,
+			EGMID:         entry.EGMID,
+			EndpointURL:   endpointURL,
+			Method:        "POST",
+			ContentType:   "application/soap+xml",
+			RawPayload:    entry.RawPayload,
+			TimeoutMS:     request.DefaultTimeout,
+			AllowRealSend: request.AllowRealSend,
+			TransportMode: request.TransportMode,
+			RequestedAt:   now,
+		})
+		if sendErr != nil {
+			sendResult.Error = sendErr.Error()
+			sendResult.CompletedAt = now
+		}
+
+		resultType := g2sengine.MessageResultSendFailed
+		if sendResult.Blocked {
+			resultType = g2sengine.MessageResultSendBlocked
+			blockedCount++
+		} else if sendResult.Sent {
+			resultType = g2sengine.MessageResultSendSucceeded
+			sentCount++
+		} else {
+			failedCount++
+		}
+		completedAt := sendResult.CompletedAt
+		var sentAt *time.Time
+		if sendResult.Sent {
+			value := sendResult.CompletedAt
+			sentAt = &value
+		}
+		if err := d.Store.UpdateMessageJournalResult(
+			ctx,
+			entry.ID,
+			resultType,
+			sendResult.Error,
+			sendResult.ResponseExcerpt,
+			sendResult.HTTPStatusCode,
+			sendResult.LatencyMS,
+			string(sendResult.TransportMode),
+			sentAt,
+			&completedAt,
+		); err != nil {
+			return SendPreparedMessagesResult{}, err
+		}
+	}
+
+	eventType := audit.EventTypeMessageSendAttempted
+	severity := audit.AuditSeverityInfo
+	if blockedCount > 0 && sentCount == 0 && failedCount == 0 {
+		eventType = audit.EventTypeMessageSendBlocked
+		severity = audit.AuditSeverityWarning
+	}
+	if failedCount > 0 {
+		eventType = audit.EventTypeMessageSendFailed
+		severity = audit.AuditSeverityWarning
+	}
+	if sentCount > 0 && failedCount == 0 && blockedCount == 0 {
+		eventType = audit.EventTypeMessageSendSucceeded
+		severity = audit.AuditSeverityInfo
+	}
+
+	detailJSON, err := json.Marshal(map[string]any{
+		"action_run_id":   actionRunID,
+		"transport_mode":  request.TransportMode,
+		"allow_real_send": request.AllowRealSend,
+		"processed":       processed,
+		"sent":            sentCount,
+		"failed":          failedCount,
+		"blocked":         blockedCount,
+	})
+	if err != nil {
+		return SendPreparedMessagesResult{}, fmt.Errorf("marshal send-prepared detail: %w", err)
+	}
+	auditID, err := d.Store.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
+		OccurredAt:  now,
+		Severity:    severity,
+		EventType:   eventType,
+		Summary:     fmt.Sprintf("Prepared messages processed for action run %s", actionRunID),
+		DetailJSON:  string(detailJSON),
+		ActionRunID: actionRunID,
+		Operator:    strings.TrimSpace(request.Actor),
+	})
+	if err != nil {
+		return SendPreparedMessagesResult{}, err
+	}
+
+	return SendPreparedMessagesResult{
+		ActionRunID:   actionRunID,
+		TransportMode: request.TransportMode,
+		SentCount:     sentCount,
+		FailedCount:   failedCount,
+		BlockedCount:  blockedCount,
+		AuditEntryID:  auditID,
+	}, nil
+}
+
+func endpointURLFromEGM(egmRecord *egms.EGMRecord) string {
+	if egmRecord == nil {
+		return ""
+	}
+	endpointPath := strings.TrimSpace(egmRecord.EndpointPath)
+	if strings.HasPrefix(strings.ToLower(endpointPath), "http://") || strings.HasPrefix(strings.ToLower(endpointPath), "https://") {
+		return endpointPath
+	}
+	ipAddress := strings.TrimSpace(egmRecord.IPAddress)
+	if ipAddress == "" || endpointPath == "" {
+		return ""
+	}
+	if !strings.HasPrefix(endpointPath, "/") {
+		endpointPath = "/" + endpointPath
+	}
+	return "http://" + ipAddress + endpointPath
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
@@ -502,6 +503,36 @@ func TestPostActionRunDispatchDryRunRequiresMutationAuth(t *testing.T) {
 	}
 }
 
+func TestPostActionRunSendPreparedRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http","allow_real_send":false}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d, want 1", calls)
+	}
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestPostActionRunDispatchDryRunCreatesMessages(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
@@ -539,6 +570,49 @@ func TestPostActionRunDispatchDryRunCreatesMessages(t *testing.T) {
 	}
 	if run == nil || run.Status != actions.RunStatusDispatchPrepared {
 		t.Fatalf("unexpected run after dispatch: %+v", run)
+	}
+}
+
+func TestPostActionRunSendPreparedBlocksWithoutAllowFlag(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	dispatchReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/dispatch-dry-run", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	dispatchRes := httptest.NewRecorder()
+	mux.ServeHTTP(dispatchRes, dispatchReq)
+	if dispatchRes.Code != http.StatusOK {
+		t.Fatalf("dispatch status=%d, want %d", dispatchRes.Code, http.StatusOK)
+	}
+
+	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http","allow_real_send":false}`)))
+	sendRes := httptest.NewRecorder()
+	mux.ServeHTTP(sendRes, sendReq)
+	if sendRes.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", sendRes.Code, http.StatusOK, sendRes.Body.String())
+	}
+	var response actiondispatch.SendPreparedMessagesResult
+	if err := json.Unmarshal(sendRes.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.BlockedCount == 0 {
+		t.Fatalf("blocked count=%d, want >0", response.BlockedCount)
+	}
+	messages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 50, ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("list message journal by run: %v", err)
+	}
+	if len(messages) == 0 {
+		t.Fatal("expected prepared messages")
+	}
+	if messages[0].Result != g2sengine.MessageResultSendBlocked {
+		t.Fatalf("message result=%q, want %q", messages[0].Result, g2sengine.MessageResultSendBlocked)
 	}
 }
 

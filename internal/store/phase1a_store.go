@@ -1044,8 +1044,9 @@ func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sen
 		`INSERT INTO message_journal (
 		    timestamp, direction, from_endpoint, to_endpoint, egm_id, action_run_id, action_step_id,
 		    input_transition_id, template_id, template_version, handler_rule_id, message_type,
-		    raw_payload, parsed_summary_json, result, error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    raw_payload, parsed_summary_json, result, error, http_status_code, latency_ms,
+		    response_excerpt, sent_at, completed_at, transport_mode
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp,
 		entry.Direction,
 		nullableTrimmed(entry.FromEndpoint),
@@ -1062,11 +1063,62 @@ func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sen
 		nullableTrimmed(entry.ParsedSummaryJSON),
 		entry.Result,
 		nullableTrimmed(entry.Error),
+		nullablePositiveInt(entry.HTTPStatusCode),
+		nullablePositiveInt(entry.LatencyMS),
+		nullableTrimmed(entry.ResponseExcerpt),
+		nullableTime(entry.SentAt),
+		nullableTime(entry.CompletedAt),
+		nullableTrimmed(entry.TransportMode),
 	)
 	if err != nil {
 		return 0, err
 	}
 	return result.LastInsertId()
+}
+
+func (s *SQLiteStore) UpdateMessageJournalResult(
+	ctx context.Context,
+	id int64,
+	result g2sengine.MessageResult,
+	errText string,
+	responseExcerpt string,
+	httpStatusCode int,
+	latencyMS int,
+	transportMode string,
+	sentAt *time.Time,
+	completedAt *time.Time,
+) error {
+	switch result {
+	case g2sengine.MessageResultSent, g2sengine.MessageResultReceived, g2sengine.MessageResultAcked, g2sengine.MessageResultConfirmed, g2sengine.MessageResultFailed, g2sengine.MessageResultIgnored, g2sengine.MessageResultEscalated, g2sengine.MessageResultDryRun, g2sengine.MessageResultSendBlocked, g2sengine.MessageResultSendAttempted, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendSucceeded:
+	default:
+		return fmt.Errorf("result is invalid")
+	}
+	if id <= 0 {
+		return fmt.Errorf("message journal id is required")
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE message_journal
+		    SET result = ?,
+		        error = ?,
+		        response_excerpt = ?,
+		        http_status_code = ?,
+		        latency_ms = ?,
+		        transport_mode = ?,
+		        sent_at = ?,
+		        completed_at = ?
+		  WHERE id = ?`,
+		result,
+		nullableTrimmed(errText),
+		nullableTrimmed(responseExcerpt),
+		nullablePositiveInt(httpStatusCode),
+		nullablePositiveInt(latencyMS),
+		nullableTrimmed(transportMode),
+		nullableTime(sentAt),
+		nullableTime(completedAt),
+		id,
+	)
+	return err
 }
 
 func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error) {
@@ -1089,7 +1141,9 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 	sqlBuilder.WriteString(`SELECT id, timestamp, direction, COALESCE(from_endpoint, ''), COALESCE(to_endpoint, ''), COALESCE(egm_id, ''),
 		        COALESCE(action_run_id, ''), COALESCE(action_step_id, ''), input_transition_id,
 		        COALESCE(template_id, ''), COALESCE(template_version, ''), COALESCE(handler_rule_id, ''), COALESCE(message_type, ''),
-		        raw_payload, COALESCE(parsed_summary_json, ''), result, COALESCE(error, '')
+		        raw_payload, COALESCE(parsed_summary_json, ''), result, COALESCE(error, ''),
+		        COALESCE(http_status_code, 0), COALESCE(latency_ms, 0), COALESCE(response_excerpt, ''),
+		        sent_at, completed_at, COALESCE(transport_mode, '')
 		   FROM message_journal`)
 	if len(where) > 0 {
 		sqlBuilder.WriteString(" WHERE ")
@@ -1108,6 +1162,8 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 	for rows.Next() {
 		var entry g2sengine.MessageJournalEntry
 		var inputTransitionID sql.NullInt64
+		var sentAt sql.NullTime
+		var completedAt sql.NullTime
 		if err := rows.Scan(
 			&entry.ID,
 			&entry.Timestamp,
@@ -1126,11 +1182,25 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 			&entry.ParsedSummaryJSON,
 			&entry.Result,
 			&entry.Error,
+			&entry.HTTPStatusCode,
+			&entry.LatencyMS,
+			&entry.ResponseExcerpt,
+			&sentAt,
+			&completedAt,
+			&entry.TransportMode,
 		); err != nil {
 			return nil, err
 		}
 		if inputTransitionID.Valid {
 			entry.InputTransitionID = inputTransitionID.Int64
+		}
+		if sentAt.Valid {
+			value := sentAt.Time
+			entry.SentAt = &value
+		}
+		if completedAt.Valid {
+			value := completedAt.Time
+			entry.CompletedAt = &value
 		}
 		result = append(result, entry)
 	}
@@ -1246,6 +1316,13 @@ func nullableTime(value *time.Time) any {
 
 func nullableInt64(value int64) any {
 	if value == 0 {
+		return nil
+	}
+	return value
+}
+
+func nullablePositiveInt(value int) any {
+	if value <= 0 {
 		return nil
 	}
 	return value

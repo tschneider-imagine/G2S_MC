@@ -13,6 +13,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/gpioinput"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
@@ -30,6 +31,9 @@ func main() {
 	duration := flag.Duration("duration", 0, "poll duration (default 30s when not -once)")
 	queueActions := flag.Bool("queue-actions", false, "queue pending action runs when transitions include action IDs")
 	dispatchDryRun := flag.Bool("dispatch-dry-run", false, "dry-run dispatch queued runs from this monitor process")
+	sendPrepared := flag.Bool("send-prepared", false, "send prepared outbound messages for newly queued runs")
+	transportModeRaw := flag.String("transport", "disabled", "transport mode: disabled|dry-run|http")
+	allowRealSend := flag.Bool("allow-real-send", false, "allow real network sends (requires -transport http)")
 	seedDemoActions := flag.Bool("seed-demo-actions", false, "seed queue-only demo action definitions and bind default channels")
 	seedDemoEGMs := flag.Bool("seed-demo-egms", false, "seed no-send smoke EGM registry records and template")
 	flag.Parse()
@@ -44,6 +48,15 @@ func main() {
 	}
 	if *dispatchDryRun && !*queueActions {
 		fmt.Fprintln(os.Stderr, "-dispatch-dry-run requires -queue-actions")
+		os.Exit(2)
+	}
+	if *sendPrepared && !*dispatchDryRun {
+		fmt.Fprintln(os.Stderr, "-send-prepared requires -dispatch-dry-run")
+		os.Exit(2)
+	}
+	transportMode, modeErr := parseTransportMode(*transportModeRaw)
+	if modeErr != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", modeErr)
 		os.Exit(2)
 	}
 
@@ -95,7 +108,7 @@ func main() {
 	}
 
 	if *once {
-		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, 1); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, 1); err != nil {
 			fmt.Fprintf(os.Stderr, "poll once: %v\n", err)
 			os.Exit(1)
 		}
@@ -106,7 +119,7 @@ func main() {
 	count := 0
 	for {
 		count++
-		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, count); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, count); err != nil {
 			fmt.Fprintf(os.Stderr, "poll #%d: %v\n", count, err)
 			os.Exit(1)
 		}
@@ -117,7 +130,7 @@ func main() {
 	}
 }
 
-func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, queueActions bool, dispatchDryRun bool, iteration int) error {
+func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, iteration int) error {
 	result, err := poller.PollOnce(ctx)
 	if err != nil {
 		return err
@@ -185,6 +198,27 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 							len(dispatchResult.PreparedMessages),
 							dispatchResult.WarningCount,
 						)
+						if sendPrepared {
+							sendResult, sendErr := dispatcher.SendPreparedMessages(ctx, actiondispatch.SendPreparedMessagesRequest{
+								ActionRunID:   dispatchResult.ActionRunID,
+								TransportMode: transportMode,
+								AllowRealSend: allowRealSend,
+								Actor:         "g2s-input-monitor",
+								RequestedAt:   result.ObservedAt,
+							})
+							if sendErr != nil {
+								fmt.Printf("send_prepared_error run_id=%s err=%v\n", dispatchResult.ActionRunID, sendErr)
+							} else if sendResult.BlockedCount > 0 && sendResult.SentCount == 0 && sendResult.FailedCount == 0 {
+								fmt.Printf("send_blocked run_id=%s messages=%d reason=transport_gate\n", sendResult.ActionRunID, sendResult.BlockedCount)
+							} else {
+								fmt.Printf("send_result run_id=%s sent=%d failed=%d blocked=%d\n",
+									sendResult.ActionRunID,
+									sendResult.SentCount,
+									sendResult.FailedCount,
+									sendResult.BlockedCount,
+								)
+							}
+						}
 					}
 				}
 			} else {
@@ -205,6 +239,19 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 	}
 	fmt.Println()
 	return nil
+}
+
+func parseTransportMode(raw string) (g2stransport.Mode, error) {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "", "DISABLED":
+		return g2stransport.ModeDisabled, nil
+	case "DRY_RUN", "DRY-RUN":
+		return g2stransport.ModeDryRun, nil
+	case "HTTP":
+		return g2stransport.ModeHTTP, nil
+	default:
+		return "", fmt.Errorf("invalid -transport value %q (use disabled|dry-run|http)", raw)
+	}
 }
 
 func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore) error {

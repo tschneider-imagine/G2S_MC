@@ -2,6 +2,7 @@ package actiondispatch
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
+	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
 
@@ -23,6 +26,17 @@ type fakeStore struct {
 
 	messages []g2sengine.MessageJournalEntry
 	audits   []audit.AuditTimelineEntry
+}
+
+type fakeSender struct {
+	sendFn func(context.Context, g2stransport.SendRequest) (g2stransport.SendResult, error)
+}
+
+func (s *fakeSender) Send(ctx context.Context, request g2stransport.SendRequest) (g2stransport.SendResult, error) {
+	if s.sendFn == nil {
+		return g2stransport.SendResult{}, fmt.Errorf("sendFn not configured")
+	}
+	return s.sendFn(ctx, request)
 }
 
 func (f *fakeStore) GetActionRun(_ context.Context, id string) (*actions.ActionRun, error) {
@@ -91,6 +105,38 @@ func (f *fakeStore) RecordAuditTimelineEntry(_ context.Context, entry audit.Audi
 	entry.ID = int64(len(f.audits) + 1)
 	f.audits = append(f.audits, entry)
 	return entry.ID, nil
+}
+
+func (f *fakeStore) ListMessageJournalEntries(_ context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error) {
+	rows := []g2sengine.MessageJournalEntry{}
+	for _, row := range f.messages {
+		if query.ActionRunID != "" && row.ActionRunID != query.ActionRunID {
+			continue
+		}
+		if query.Direction != "" && row.Direction != query.Direction {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func (f *fakeStore) UpdateMessageJournalResult(_ context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error {
+	for i := range f.messages {
+		if f.messages[i].ID != id {
+			continue
+		}
+		f.messages[i].Result = result
+		f.messages[i].Error = errText
+		f.messages[i].ResponseExcerpt = responseExcerpt
+		f.messages[i].HTTPStatusCode = httpStatusCode
+		f.messages[i].LatencyMS = latencyMS
+		f.messages[i].TransportMode = transportMode
+		f.messages[i].SentAt = sentAt
+		f.messages[i].CompletedAt = completedAt
+		return nil
+	}
+	return fmt.Errorf("message id %d not found", id)
 }
 
 func TestDispatchRejectsInvalidMode(t *testing.T) {
@@ -252,6 +298,103 @@ func TestDispatchMissingTemplateVersionStillRecordsJournalWarning(t *testing.T) 
 		if !strings.Contains(row.ParsedSummaryJSON, `"rendered":false`) {
 			t.Fatalf("expected rendered=false summary marker: %s", row.ParsedSummaryJSON)
 		}
+	}
+}
+
+func TestSendPreparedMessagesBlockedUpdatesJournal(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	dispatcher := &Dispatcher{Store: st, Sender: &fakeSender{sendFn: func(_ context.Context, request g2stransport.SendRequest) (g2stransport.SendResult, error) {
+		return g2stransport.SendResult{
+			MessageID:     request.MessageID,
+			EGMID:         request.EGMID,
+			TransportMode: request.TransportMode,
+			Blocked:       true,
+			Sent:          false,
+			Error:         "blocked",
+			CompletedAt:   now,
+		}, nil
+	}}}
+
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		ActionRunID: "run-1",
+		Mode:        DispatchModeDryRun,
+		RequestedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
+		ActionRunID:   "run-1",
+		TransportMode: g2stransport.ModeDisabled,
+		AllowRealSend: false,
+		RequestedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("send prepared: %v", err)
+	}
+	if result.BlockedCount == 0 {
+		t.Fatalf("blocked count=%d, want >0", result.BlockedCount)
+	}
+	for _, row := range st.messages {
+		if row.ActionRunID != "run-1" {
+			continue
+		}
+		if row.Result != g2sengine.MessageResultSendBlocked {
+			t.Fatalf("expected send-blocked result, got %q", row.Result)
+		}
+	}
+}
+
+func TestSendPreparedMessagesAllowedMarksSucceeded(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	dispatcher := &Dispatcher{Store: st, Sender: &fakeSender{sendFn: func(_ context.Context, request g2stransport.SendRequest) (g2stransport.SendResult, error) {
+		return g2stransport.SendResult{
+			MessageID:       request.MessageID,
+			EGMID:           request.EGMID,
+			TransportMode:   request.TransportMode,
+			Sent:            true,
+			Blocked:         false,
+			HTTPStatusCode:  200,
+			ResponseExcerpt: "ok",
+			CompletedAt:     now,
+		}, nil
+	}}}
+
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		ActionRunID: "run-1",
+		Mode:        DispatchModeDryRun,
+		RequestedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
+		ActionRunID:   "run-1",
+		TransportMode: g2stransport.ModeHTTP,
+		AllowRealSend: true,
+		RequestedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("send prepared: %v", err)
+	}
+	if result.SentCount == 0 {
+		t.Fatalf("sent count=%d, want >0", result.SentCount)
+	}
+	for _, row := range st.messages {
+		if row.ActionRunID != "run-1" {
+			continue
+		}
+		if row.Result != g2sengine.MessageResultSendSucceeded {
+			t.Fatalf("expected send-succeeded result, got %q", row.Result)
+		}
+	}
+	updated := st.runs["run-1"]
+	if updated.Status == actions.RunStatusSucceeded {
+		t.Fatalf("run status should not be succeeded in phase 2F: %q", updated.Status)
 	}
 }
 

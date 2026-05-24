@@ -16,14 +16,18 @@ const (
 type MessageResult string
 
 const (
-	MessageResultSent      MessageResult = "SENT"
-	MessageResultReceived  MessageResult = "RECEIVED"
-	MessageResultAcked     MessageResult = "ACKED"
-	MessageResultConfirmed MessageResult = "CONFIRMED"
-	MessageResultFailed    MessageResult = "FAILED"
-	MessageResultIgnored   MessageResult = "IGNORED"
-	MessageResultEscalated MessageResult = "ESCALATED"
-	MessageResultDryRun    MessageResult = "DRY_RUN"
+	MessageResultSent          MessageResult = "SENT"
+	MessageResultReceived      MessageResult = "RECEIVED"
+	MessageResultAcked         MessageResult = "ACKED"
+	MessageResultConfirmed     MessageResult = "CONFIRMED"
+	MessageResultFailed        MessageResult = "FAILED"
+	MessageResultIgnored       MessageResult = "IGNORED"
+	MessageResultEscalated     MessageResult = "ESCALATED"
+	MessageResultDryRun        MessageResult = "DRY_RUN"
+	MessageResultSendBlocked   MessageResult = "SEND_BLOCKED"
+	MessageResultSendAttempted MessageResult = "SEND_ATTEMPTED"
+	MessageResultSendFailed    MessageResult = "SEND_FAILED"
+	MessageResultSendSucceeded MessageResult = "SEND_SUCCEEDED"
 )
 
 type MessageJournalEntry struct {
@@ -44,6 +48,12 @@ type MessageJournalEntry struct {
 	ParsedSummaryJSON string           `json:"parsed_summary_json,omitempty"`
 	Result            MessageResult    `json:"result"`
 	Error             string           `json:"error,omitempty"`
+	HTTPStatusCode    int              `json:"http_status_code,omitempty"`
+	LatencyMS         int              `json:"latency_ms,omitempty"`
+	ResponseExcerpt   string           `json:"response_excerpt,omitempty"`
+	SentAt            *time.Time       `json:"sent_at,omitempty"`
+	CompletedAt       *time.Time       `json:"completed_at,omitempty"`
+	TransportMode     string           `json:"transport_mode,omitempty"`
 }
 
 func (m MessageJournalEntry) Validate() error {
@@ -57,7 +67,7 @@ func (m MessageJournalEntry) Validate() error {
 		return fmt.Errorf("raw_payload is required")
 	}
 	switch m.Result {
-	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun:
+	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun, MessageResultSendBlocked, MessageResultSendAttempted, MessageResultSendFailed, MessageResultSendSucceeded:
 	default:
 		return fmt.Errorf("result is invalid")
 	}

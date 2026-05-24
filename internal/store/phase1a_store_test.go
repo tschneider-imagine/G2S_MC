@@ -43,6 +43,8 @@ func TestPhase1AMigrationIdempotent(t *testing.T) {
 	} {
 		assertCount(t, store, table, 0)
 	}
+
+	assertMessageJournalSendColumns(t, store)
 }
 
 func TestInputChannelUpsertGetList(t *testing.T) {
@@ -374,6 +376,62 @@ func TestMessageJournalRecordAndList(t *testing.T) {
 	}
 }
 
+func TestMessageJournalUpdateResultPersistsSendFields(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	messageID, err := store.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		MessageType: "mute",
+		RawPayload:  "<mute/>",
+		Result:      g2sengine.MessageResultDryRun,
+	})
+	if err != nil {
+		t.Fatalf("record message journal entry: %v", err)
+	}
+	sentAt := time.Now().UTC()
+	completedAt := sentAt.Add(20 * time.Millisecond)
+	if err := store.UpdateMessageJournalResult(
+		ctx,
+		messageID,
+		g2sengine.MessageResultSendBlocked,
+		"blocked by transport gate",
+		"no response",
+		0,
+		20,
+		"DISABLED",
+		&sentAt,
+		&completedAt,
+	); err != nil {
+		t.Fatalf("update message result: %v", err)
+	}
+
+	entries, err := store.ListMessageJournalEntries(ctx, MessageJournalListQuery{Limit: 10, ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("list message journal entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries len=%d, want 1", len(entries))
+	}
+	row := entries[0]
+	if row.Result != g2sengine.MessageResultSendBlocked {
+		t.Fatalf("result=%q, want %q", row.Result, g2sengine.MessageResultSendBlocked)
+	}
+	if row.TransportMode != "DISABLED" {
+		t.Fatalf("transport_mode=%q", row.TransportMode)
+	}
+	if row.LatencyMS != 20 {
+		t.Fatalf("latency_ms=%d, want 20", row.LatencyMS)
+	}
+	if row.CompletedAt == nil {
+		t.Fatal("expected completed_at")
+	}
+}
+
 func TestAuditTimelineRecordAndList(t *testing.T) {
 	ctx := context.Background()
 	store := newPhaseStore(t, ctx)
@@ -476,4 +534,35 @@ func newPhaseStore(t *testing.T, ctx context.Context) *SQLiteStore {
 		t.Fatalf("open store: %v", err)
 	}
 	return store
+}
+
+func assertMessageJournalSendColumns(t *testing.T, store *SQLiteStore) {
+	t.Helper()
+	rows, err := store.db.Query(`PRAGMA table_info(message_journal)`)
+	if err != nil {
+		t.Fatalf("table_info(message_journal): %v", err)
+	}
+	defer rows.Close()
+
+	found := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan table_info row: %v", err)
+		}
+		found[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("table_info rows: %v", err)
+	}
+	for _, column := range []string{"http_status_code", "latency_ms", "response_excerpt", "sent_at", "completed_at", "transport_mode"} {
+		if !found[column] {
+			t.Fatalf("expected message_journal column %q", column)
+		}
+	}
 }

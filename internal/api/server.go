@@ -15,6 +15,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
@@ -52,6 +53,7 @@ type Store interface {
 
 	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
 	RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error)
+	UpdateMessageJournalResult(ctx context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error
 	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 	ListAuditTimelineEntries(ctx context.Context, query store.AuditTimelineListQuery) ([]audit.AuditTimelineEntry, error)
 }
@@ -165,6 +167,35 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 			ActionRunID: id,
 			Mode:        actiondispatch.DispatchModeDryRun,
 			Actor:       strings.TrimSpace(req.Actor),
+		})
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				writeJSONError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	case "send-prepared":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		var req ActionRunSendPreparedRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		dispatcher := actiondispatch.Dispatcher{Store: s.Store}
+		result, err := dispatcher.SendPreparedMessages(r.Context(), actiondispatch.SendPreparedMessagesRequest{
+			ActionRunID:   id,
+			TransportMode: g2stransport.Mode(strings.ToUpper(strings.TrimSpace(req.TransportMode))),
+			AllowRealSend: req.AllowRealSend,
+			Actor:         strings.TrimSpace(req.Actor),
 		})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {
@@ -679,6 +710,13 @@ func actionRunRoute(path string) (id string, action string, ok bool) {
 			return "", "", false
 		}
 		return id, "dispatch-dry-run", true
+	}
+	if strings.HasSuffix(trimmed, "/send-prepared") {
+		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/send-prepared"))
+		if id == "" || strings.Contains(id, "/") {
+			return "", "", false
+		}
+		return id, "send-prepared", true
 	}
 	if strings.Contains(trimmed, "/") {
 		return "", "", false

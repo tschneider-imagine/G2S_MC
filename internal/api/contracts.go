@@ -38,6 +38,12 @@ type ActionRunDispatchDryRunRequest struct {
 	Actor string `json:"actor,omitempty"`
 }
 
+type ActionRunSendPreparedRequest struct {
+	TransportMode string `json:"transport_mode"`
+	AllowRealSend bool   `json:"allow_real_send"`
+	Actor         string `json:"actor,omitempty"`
+}
+
 type TemplatesListResponse struct {
 	Templates []templates.G2STemplate `json:"templates"`
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
@@ -122,6 +123,32 @@ func TestSeedDemoEGMRegistry(t *testing.T) {
 		}
 		if row.TemplateID != "template-smoke-no-send" {
 			t.Fatalf("template_id=%q for %s", row.TemplateID, id)
+		}
+	}
+}
+
+func TestParseTransportMode(t *testing.T) {
+	cases := []struct {
+		raw    string
+		expect g2stransport.Mode
+		ok     bool
+	}{
+		{raw: "", expect: g2stransport.ModeDisabled, ok: true},
+		{raw: "disabled", expect: g2stransport.ModeDisabled, ok: true},
+		{raw: "dry-run", expect: g2stransport.ModeDryRun, ok: true},
+		{raw: "http", expect: g2stransport.ModeHTTP, ok: true},
+		{raw: "udp", expect: "", ok: false},
+	}
+	for _, tc := range cases {
+		got, err := parseTransportMode(tc.raw)
+		if tc.ok && err != nil {
+			t.Fatalf("parseTransportMode(%q) err=%v", tc.raw, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("parseTransportMode(%q) expected error", tc.raw)
+		}
+		if tc.ok && got != tc.expect {
+			t.Fatalf("parseTransportMode(%q)=%q want %q", tc.raw, got, tc.expect)
 		}
 	}
 }
