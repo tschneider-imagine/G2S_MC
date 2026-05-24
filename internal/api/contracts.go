@@ -18,6 +18,11 @@ type InputUpsertRequest struct {
 	Channel inputs.InputChannel `json:"channel"`
 }
 
+type InputClearLatchRequest struct {
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
 type ActionsListResponse struct {
 	Definitions []actions.ActionDefinition `json:"definitions"`
 }

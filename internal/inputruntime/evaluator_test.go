@@ -149,6 +149,33 @@ func TestApplySampleReturnToNormalQueuesOnNormalAction(t *testing.T) {
 	}
 }
 
+func TestApplySampleManualClearStaysTriggeredWhenRawReturnsNormal(t *testing.T) {
+	now := time.Now().UTC()
+	store := seededStore(now, inputs.InputStateLow, inputs.DerivedStateTriggered)
+	store.channel.LatchingMode = inputs.LatchingManualClear
+	store.runtimeState.LatchActive = true
+	store.channel.OnNormalActionID = "action-normal"
+	evaluator := &Evaluator{Store: store}
+
+	_, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(10 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("first high sample: %v", err)
+	}
+	result, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(40 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("second high sample: %v", err)
+	}
+	if result.State.DerivedState != inputs.DerivedStateTriggered {
+		t.Fatalf("derived state=%s want TRIGGERED", result.State.DerivedState)
+	}
+	if result.ActionQueuedID != "" {
+		t.Fatalf("action queued=%q want empty", result.ActionQueuedID)
+	}
+	if result.Transition != nil {
+		t.Fatalf("expected no transition while manual-clear latched: %+v", result.Transition)
+	}
+}
+
 func TestApplySampleDisabledChannelDoesNotCreateTransition(t *testing.T) {
 	now := time.Now().UTC()
 	store := seededStore(now, inputs.InputStateHigh, inputs.DerivedStateNormal)
@@ -203,6 +230,110 @@ func TestApplySampleInvalidRawStateReturnsError(t *testing.T) {
 	_, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: "BAD", ObservedAt: time.Now().UTC()})
 	if err == nil {
 		t.Fatal("expected invalid raw state error")
+	}
+}
+
+func TestClearLatchedInputFailsWhenStillPhysicallyTriggered(t *testing.T) {
+	now := time.Now().UTC()
+	store := seededStore(now, inputs.InputStateLow, inputs.DerivedStateTriggered)
+	store.channel.LatchingMode = inputs.LatchingManualClear
+	store.runtimeState.LatchActive = true
+	evaluator := &Evaluator{Store: store, Clock: func() time.Time { return now }}
+
+	_, err := evaluator.ClearLatchedInput(context.Background(), "in-1", "operator-a", "clear attempt")
+	if err == nil {
+		t.Fatal("expected clear failure while physically triggered")
+	}
+}
+
+func TestClearLatchedInputSucceedsAfterRawReturnsNormalAndQueuesOnNormal(t *testing.T) {
+	now := time.Now().UTC()
+	store := seededStore(now, inputs.InputStateLow, inputs.DerivedStateTriggered)
+	store.channel.LatchingMode = inputs.LatchingManualClear
+	store.runtimeState.LatchActive = true
+	store.channel.OnNormalActionID = "action-normal"
+	evaluator := &Evaluator{Store: store}
+
+	_, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(10 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("first high sample: %v", err)
+	}
+	_, err = evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(40 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("second high sample: %v", err)
+	}
+	result, err := evaluator.ClearLatchedInput(context.Background(), "in-1", "operator-a", "manual clear")
+	if err != nil {
+		t.Fatalf("clear latched input: %v", err)
+	}
+	if !result.Cleared {
+		t.Fatalf("expected cleared result: %+v", result)
+	}
+	if result.ActionQueuedID != "action-normal" {
+		t.Fatalf("action queued=%q want action-normal", result.ActionQueuedID)
+	}
+	if result.Transition == nil || result.Transition.NewDerived != inputs.DerivedStateNormal {
+		t.Fatalf("expected transition to NORMAL: %+v", result.Transition)
+	}
+}
+
+func TestAutoClearInputReturnsToNormalAutomatically(t *testing.T) {
+	now := time.Now().UTC()
+	store := seededStore(now, inputs.InputStateLow, inputs.DerivedStateTriggered)
+	store.channel.LatchingMode = inputs.LatchingAutoClear
+	evaluator := &Evaluator{Store: store}
+
+	_, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(10 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("first high sample: %v", err)
+	}
+	result, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(40 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("second high sample: %v", err)
+	}
+	if result.State.DerivedState != inputs.DerivedStateNormal {
+		t.Fatalf("derived state=%s want NORMAL", result.State.DerivedState)
+	}
+}
+
+func TestCooldownSuppressesRapidTransitionsAfterManualClear(t *testing.T) {
+	now := time.Now().UTC()
+	store := seededStore(now, inputs.InputStateHigh, inputs.DerivedStateNormal)
+	store.channel.LatchingMode = inputs.LatchingManualClear
+	evaluator := &Evaluator{Store: store, Clock: func() time.Time { return now.Add(70 * time.Millisecond) }}
+
+	_, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateLow, ObservedAt: now.Add(10 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("first low sample: %v", err)
+	}
+	firstTransition, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateLow, ObservedAt: now.Add(40 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("second low sample: %v", err)
+	}
+	if firstTransition.Transition == nil {
+		t.Fatal("expected trigger transition")
+	}
+	_, err = evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(50 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("first high sample: %v", err)
+	}
+	_, err = evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateHigh, ObservedAt: now.Add(80 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("second high sample: %v", err)
+	}
+	if _, err := evaluator.ClearLatchedInput(context.Background(), "in-1", "operator-a", "clear"); err != nil {
+		t.Fatalf("clear latched input: %v", err)
+	}
+	_, err = evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateLow, ObservedAt: now.Add(90 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("third low sample: %v", err)
+	}
+	suppressed, err := evaluator.ApplySample(context.Background(), InputSample{InputID: "in-1", RawState: inputs.InputStateLow, ObservedAt: now.Add(130 * time.Millisecond)})
+	if err != nil {
+		t.Fatalf("fourth low sample: %v", err)
+	}
+	if !suppressed.Suppressed {
+		t.Fatalf("expected cooldown suppression: %+v", suppressed)
 	}
 }
 

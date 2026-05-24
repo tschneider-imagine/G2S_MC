@@ -23,6 +23,7 @@ func TestPhase1CMigrationIdempotent(t *testing.T) {
 		}
 	}
 	assertCount(t, store, "input_runtime_states", 0)
+	assertInputRuntimeLatchColumns(t, store)
 }
 
 func TestInputRuntimeStateUpsertGet(t *testing.T) {
@@ -39,12 +40,15 @@ func TestInputRuntimeStateUpsertGet(t *testing.T) {
 		InputID:              "input-1",
 		StableRawState:       inputs.InputStateHigh,
 		DerivedState:         inputs.DerivedStateNormal,
+		LatchActive:          true,
 		StableSince:          now,
 		LastObservedRawState: inputs.InputStateLow,
 		LastObservedAt:       now.Add(1 * time.Second),
 		PendingRawState:      inputs.InputStateLow,
 		PendingSince:         &pending,
 		LastTransitionID:     33,
+		LastTransitionAt:     &now,
+		LatchClearedAt:       &now,
 		UpdatedAt:            now.Add(2 * time.Second),
 	}
 	if err := store.UpsertInputRuntimeState(ctx, state); err != nil {
@@ -59,6 +63,12 @@ func TestInputRuntimeStateUpsertGet(t *testing.T) {
 	}
 	if fetched.StableRawState != inputs.InputStateHigh || fetched.PendingRawState != inputs.InputStateLow {
 		t.Fatalf("unexpected fetched state: %+v", fetched)
+	}
+	if !fetched.LatchActive {
+		t.Fatalf("expected latch_active true: %+v", fetched)
+	}
+	if fetched.LastTransitionAt == nil || fetched.LatchClearedAt == nil {
+		t.Fatalf("expected latch timestamps: %+v", fetched)
 	}
 }
 
@@ -89,5 +99,36 @@ func TestRecordListInputTransitions(t *testing.T) {
 	}
 	if len(transitions) != 1 || transitions[0].ID != id {
 		t.Fatalf("unexpected transitions: %+v", transitions)
+	}
+}
+
+func assertInputRuntimeLatchColumns(t *testing.T, store *SQLiteStore) {
+	t.Helper()
+	rows, err := store.db.Query(`PRAGMA table_info(input_runtime_states)`)
+	if err != nil {
+		t.Fatalf("table_info(input_runtime_states): %v", err)
+	}
+	defer rows.Close()
+
+	found := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan table_info row: %v", err)
+		}
+		found[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("table_info rows: %v", err)
+	}
+	for _, column := range []string{"latch_active", "latch_cleared_at", "last_transition_at"} {
+		if !found[column] {
+			t.Fatalf("expected input_runtime_states column %q", column)
+		}
 	}
 }

@@ -158,6 +158,104 @@ func TestMutationAuthHookCalledForPut(t *testing.T) {
 	}
 }
 
+func TestPostInputClearLatchRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	channel := validInputChannel()
+	channel.LatchingMode = inputs.LatchingManualClear
+	channel.NormalState = inputs.InputStateHigh
+	channel.CurrentState = inputs.InputStateLow
+	channel.DerivedState = inputs.DerivedStateTriggered
+	if err := db.UpsertInputChannel(ctx, channel); err != nil {
+		t.Fatalf("seed input channel: %v", err)
+	}
+	if err := db.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              channel.ID,
+		StableRawState:       inputs.InputStateLow,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          time.Now().UTC().Add(-2 * time.Second),
+		LastObservedRawState: inputs.InputStateLow,
+		LastObservedAt:       time.Now().UTC().Add(-1 * time.Second),
+		UpdatedAt:            time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed runtime state: %v", err)
+	}
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/inputs/input-1/clear-latch", bytes.NewReader([]byte(`{"actor":"op"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d, want 1", calls)
+	}
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestPostInputClearLatchSuccess(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	channel := validInputChannel()
+	channel.LatchingMode = inputs.LatchingManualClear
+	channel.NormalState = inputs.InputStateHigh
+	channel.CurrentState = inputs.InputStateLow
+	channel.DerivedState = inputs.DerivedStateTriggered
+	channel.OnNormalActionID = "action-normal"
+	if err := db.UpsertInputChannel(ctx, channel); err != nil {
+		t.Fatalf("seed input channel: %v", err)
+	}
+	if err := db.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              channel.ID,
+		StableRawState:       inputs.InputStateHigh,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          time.Now().UTC().Add(-2 * time.Second),
+		LastObservedRawState: inputs.InputStateHigh,
+		LastObservedAt:       time.Now().UTC().Add(-1 * time.Second),
+		UpdatedAt:            time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed runtime state: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/inputs/input-1/clear-latch", bytes.NewReader([]byte(`{"actor":"op","reason":"test"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var payload inputruntime.ClearLatchResult
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !payload.Cleared {
+		t.Fatalf("expected cleared payload: %+v", payload)
+	}
+	if payload.ActionQueuedID != "action-normal" {
+		t.Fatalf("action queued id=%q", payload.ActionQueuedID)
+	}
+}
+
 func TestGetCommsMessagesReturnsEntries(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)

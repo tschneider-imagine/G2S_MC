@@ -34,6 +34,7 @@ func main() {
 	sendPrepared := flag.Bool("send-prepared", false, "send prepared outbound messages for newly queued runs")
 	transportModeRaw := flag.String("transport", "disabled", "transport mode: disabled|dry-run|http")
 	allowRealSend := flag.Bool("allow-real-send", false, "allow real network sends (requires -transport http)")
+	clearLatchInputID := flag.String("clear-latch", "", "manually clear a MANUAL_CLEAR latched input by input ID")
 	seedDemoActions := flag.Bool("seed-demo-actions", false, "seed queue-only demo action definitions and bind default channels")
 	seedDemoEGMs := flag.Bool("seed-demo-egms", false, "seed no-send smoke EGM registry records and template")
 	flag.Parse()
@@ -96,15 +97,20 @@ func main() {
 	reader.Consumer = "g2s_input_monitor"
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
+	evaluator := &inputruntime.Evaluator{Store: st, Clock: time.Now}
 
 	poller := &inputpoller.Poller{
-		Store:  st,
-		Reader: reader,
-		Evaluator: &inputruntime.Evaluator{
-			Store: st,
-			Clock: time.Now,
-		},
-		Clock: time.Now,
+		Store:     st,
+		Reader:    reader,
+		Evaluator: evaluator,
+		Clock:     time.Now,
+	}
+
+	if strings.TrimSpace(*clearLatchInputID) != "" {
+		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, strings.TrimSpace(*clearLatchInputID), *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend); err != nil {
+			fmt.Fprintf(os.Stderr, "clear latch: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if *once {
@@ -252,6 +258,84 @@ func parseTransportMode(raw string) (g2stransport.Mode, error) {
 	default:
 		return "", fmt.Errorf("invalid -transport value %q (use disabled|dry-run|http)", raw)
 	}
+}
+
+func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, inputID string, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool) error {
+	clearedAt := time.Now().UTC()
+	clearResult, err := evaluator.ClearLatchedInput(ctx, inputID, "g2s-input-monitor", "operator requested clear-latch")
+	if err != nil {
+		fmt.Printf("clear_latch_failed input=%s err=%v\n", inputID, err)
+		return err
+	}
+	fmt.Printf("clear_latch_succeeded input=%s transition_id=%d action_queued=%s\n",
+		clearResult.InputID,
+		clearResult.Transition.ID,
+		clearResult.ActionQueuedID,
+	)
+	if !queueActions || strings.TrimSpace(clearResult.ActionQueuedID) == "" || clearResult.Transition == nil {
+		return nil
+	}
+	queueResult, queueErr := queuer.QueueActionRun(ctx, actionruntime.QueueRequest{
+		InputTransition: *clearResult.Transition,
+		ActionID:        clearResult.ActionQueuedID,
+		TriggerReason:   fmt.Sprintf("manual clear transition %d", clearResult.Transition.ID),
+		Actor:           "g2s-input-monitor",
+		QueuedAt:        clearedAt,
+	})
+	if queueErr != nil {
+		return queueErr
+	}
+	if !queueResult.Queued || queueResult.ActionRun == nil {
+		fmt.Printf("queue_skipped input=%s action_id=%s reason=%s\n", clearResult.InputID, clearResult.ActionQueuedID, queueResult.Reason)
+		return nil
+	}
+	fmt.Printf("queued_run run_id=%s action_id=%s targets=%d warnings=%d\n",
+		queueResult.ActionRun.ID,
+		clearResult.ActionQueuedID,
+		len(queueResult.TargetResults),
+		len(queueResult.PlanWarnings),
+	)
+	if !dispatchDryRun {
+		return nil
+	}
+	dispatchResult, dispatchErr := dispatcher.Dispatch(ctx, actiondispatch.DispatchRequest{
+		ActionRunID: queueResult.ActionRun.ID,
+		Mode:        actiondispatch.DispatchModeDryRun,
+		Actor:       "g2s-input-monitor",
+		RequestedAt: clearedAt,
+	})
+	if dispatchErr != nil {
+		return dispatchErr
+	}
+	fmt.Printf("dry_run_dispatch run_id=%s messages=%d warnings=%d\n",
+		dispatchResult.ActionRunID,
+		len(dispatchResult.PreparedMessages),
+		dispatchResult.WarningCount,
+	)
+	if !sendPrepared {
+		return nil
+	}
+	sendResult, sendErr := dispatcher.SendPreparedMessages(ctx, actiondispatch.SendPreparedMessagesRequest{
+		ActionRunID:   dispatchResult.ActionRunID,
+		TransportMode: transportMode,
+		AllowRealSend: allowRealSend,
+		Actor:         "g2s-input-monitor",
+		RequestedAt:   clearedAt,
+	})
+	if sendErr != nil {
+		return sendErr
+	}
+	if sendResult.BlockedCount > 0 && sendResult.SentCount == 0 && sendResult.FailedCount == 0 {
+		fmt.Printf("send_blocked run_id=%s messages=%d reason=transport_gate\n", sendResult.ActionRunID, sendResult.BlockedCount)
+	} else {
+		fmt.Printf("send_result run_id=%s sent=%d failed=%d blocked=%d\n",
+			sendResult.ActionRunID,
+			sendResult.SentCount,
+			sendResult.FailedCount,
+			sendResult.BlockedCount,
+		)
+	}
+	return nil
 }
 
 func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore) error {

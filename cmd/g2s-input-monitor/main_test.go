@@ -6,9 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
+	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
+	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -150,5 +155,76 @@ func TestParseTransportMode(t *testing.T) {
 		if tc.ok && got != tc.expect {
 			t.Fatalf("parseTransportMode(%q)=%q want %q", tc.raw, got, tc.expect)
 		}
+	}
+}
+
+func TestRunClearLatchPath(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	channel := inputs.InputChannel{
+		ID:                "emergency-broadcast",
+		Name:              "Emergency Broadcast",
+		GPIOChannel:       "GPIO21",
+		Enabled:           true,
+		NormalState:       inputs.InputStateHigh,
+		CurrentState:      inputs.InputStateLow,
+		DerivedState:      inputs.DerivedStateTriggered,
+		DebounceMS:        30,
+		Priority:          400,
+		OnTriggerActionID: "emergency-broadcast-trigger",
+		OnNormalActionID:  "emergency-broadcast-normal",
+		LatchingMode:      inputs.LatchingManualClear,
+	}
+	if err := st.UpsertInputChannel(ctx, channel); err != nil {
+		t.Fatalf("upsert input channel: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := st.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              channel.ID,
+		StableRawState:       inputs.InputStateHigh,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          now.Add(-2 * time.Second),
+		LastObservedRawState: inputs.InputStateHigh,
+		LastObservedAt:       now.Add(-1 * time.Second),
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert input runtime state: %v", err)
+	}
+	if err := st.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "emergency-broadcast-normal",
+		Name:             "Emergency Broadcast Normal (Queue Only)",
+		Severity:         actions.SeverityRestore,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-1",
+			Name:              "Queue only no send",
+			Sequence:          0,
+			TemplateActionKey: "queue_only_no_send",
+		}},
+		Version: 1,
+	}); err != nil {
+		t.Fatalf("upsert action definition: %v", err)
+	}
+
+	evaluator := &inputruntime.Evaluator{Store: st, Clock: time.Now}
+	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
+	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, channel.ID, true, false, false, g2stransport.ModeDisabled, false); err != nil {
+		t.Fatalf("runClearLatch: %v", err)
+	}
+	rows, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list action runs: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("action run count=%d want 1", len(rows))
 	}
 }

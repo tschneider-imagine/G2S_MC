@@ -117,6 +117,9 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, phase1CInputRuntimeMigration); err != nil {
 		return err
 	}
+	if err := s.ensureInputRuntimeLatchSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensurePhase2FMessageJournalSendSchema(ctx); err != nil {
 		return err
 	}
@@ -202,6 +205,50 @@ func (s *SQLiteStore) ensurePhase2FMessageJournalSendSchema(ctx context.Context)
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, "ALTER TABLE message_journal ADD COLUMN "+def.name+" "+def.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ensureInputRuntimeLatchSchema(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(input_runtime_states)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	type columnDef struct {
+		name string
+		def  string
+	}
+	defs := []columnDef{
+		{name: "latch_active", def: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "latch_cleared_at", def: "DATETIME"},
+		{name: "last_transition_at", def: "DATETIME"},
+	}
+	for _, def := range defs {
+		if existing[def.name] {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE input_runtime_states ADD COLUMN "+def.name+" "+def.def); err != nil {
 			return err
 		}
 	}

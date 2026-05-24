@@ -27,6 +27,8 @@ type Store interface {
 	UpsertInputChannel(ctx context.Context, channel inputs.InputChannel) error
 	ListInputChannels(ctx context.Context) ([]inputs.InputChannel, error)
 	GetInputRuntimeState(ctx context.Context, inputID string) (*inputruntime.InputRuntimeState, error)
+	UpsertInputRuntimeState(ctx context.Context, state inputruntime.InputRuntimeState) error
+	RecordInputTransition(ctx context.Context, transition inputs.InputTransition) (int64, error)
 	ListInputTransitions(ctx context.Context, limit int) ([]inputs.InputTransition, error)
 
 	GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error)
@@ -281,37 +283,66 @@ func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !s.authorizeMutation(w, r) {
-		return
-	}
-	id, ok := pathID(r.URL.Path, "/api/v2/inputs/")
+	id, action, ok := inputRoute(r.URL.Path)
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
-	var channel inputs.InputChannel
-	if !decodeJSON(w, r, &channel) {
+	switch action {
+	case "clear-latch":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		var req InputClearLatchRequest
+		if r.ContentLength > 0 {
+			if !decodeJSON(w, r, &req) {
+				return
+			}
+		}
+		evaluator := inputruntime.Evaluator{Store: s.Store}
+		result, err := evaluator.ClearLatchedInput(r.Context(), id, strings.TrimSpace(req.Actor), strings.TrimSpace(req.Reason))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	case "input":
+		if r.Method != http.MethodPut {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		var channel inputs.InputChannel
+		if !decodeJSON(w, r, &channel) {
+			return
+		}
+		if strings.TrimSpace(channel.ID) == "" {
+			channel.ID = id
+		} else if channel.ID != id {
+			writeJSONError(w, http.StatusBadRequest, "path id must match body id")
+			return
+		}
+		if err := channel.Validate(); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.Store.UpsertInputChannel(r.Context(), channel); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, channel)
+		return
+	default:
+		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if strings.TrimSpace(channel.ID) == "" {
-		channel.ID = id
-	} else if channel.ID != id {
-		writeJSONError(w, http.StatusBadRequest, "path id must match body id")
-		return
-	}
-	if err := channel.Validate(); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.Store.UpsertInputChannel(r.Context(), channel); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, channel)
 }
 
 func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
@@ -679,6 +710,28 @@ func actionRoute(path string) (id string, preview bool, ok bool) {
 		return "", false, false
 	}
 	return trimmed, false, true
+}
+
+func inputRoute(path string) (id string, action string, ok bool) {
+	const prefix = "/api/v2/inputs/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	trimmed := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	if trimmed == "" {
+		return "", "", false
+	}
+	if strings.HasSuffix(trimmed, "/clear-latch") {
+		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/clear-latch"))
+		if id == "" || strings.Contains(id, "/") {
+			return "", "", false
+		}
+		return id, "clear-latch", true
+	}
+	if strings.Contains(trimmed, "/") {
+		return "", "", false
+	}
+	return trimmed, "input", true
 }
 
 func actionRunRoute(path string) (id string, action string, ok bool) {
