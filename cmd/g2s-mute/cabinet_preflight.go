@@ -26,7 +26,12 @@ const (
 type cabinetPreflightResponse struct {
 	Overall   string                  `json:"overall"`
 	Checks    []cabinetPreflightCheck `json:"checks"`
+<<<<<<< HEAD
 	Issues    []string                `json:"issues,omitempty"`
+=======
+	Issues    []string                `json:"issues"`
+	Blockers  []string                `json:"blockers,omitempty"`
+>>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
 	Warnings  []string                `json:"warnings,omitempty"`
 	Timestamp time.Time               `json:"timestamp"`
 }
@@ -54,6 +59,10 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 		Overall:   preflightPass,
 		Checks:    []cabinetPreflightCheck{},
 		Issues:    []string{},
+<<<<<<< HEAD
+=======
+		Blockers:  []string{},
+>>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
 		Warnings:  []string{},
 		Timestamp: time.Now().UTC(),
 	}
@@ -72,12 +81,30 @@ func evaluateCabinetPreflight(ctx context.Context, eng *engine.Engine, store *st
 	addCheck(evaluatePreflightModeCertificates(cfg, certificates, certificatesErr))
 	addCheck(evaluatePreflightWireIdentitySAN(cfg, profile, profileErr, certificates, certificatesErr))
 
+	issueSet := map[string]struct{}{}
+	addIssue := func(message string) {
+		msg := strings.TrimSpace(message)
+		if msg == "" {
+			return
+		}
+		if _, exists := issueSet[msg]; exists {
+			return
+		}
+		issueSet[msg] = struct{}{}
+		response.Issues = append(response.Issues, msg)
+		response.Blockers = append(response.Blockers, msg)
+	}
+
 	for _, check := range response.Checks {
 		if check.Result != preflightFail {
 			continue
 		}
 		response.Overall = preflightFail
+<<<<<<< HEAD
 		response.Issues = append(response.Issues, check.Message)
+=======
+		addIssue(check.Message)
+>>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
 	}
 
 	return response

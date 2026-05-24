@@ -179,7 +179,7 @@ func runtimeOverridesPresetsLoadHandler(eng *engine.Engine, auditStore *store.SQ
 			return
 		}
 		restorePayload := runtimeOverridesRestoreRequestFromSnapshot(snapshotPayload)
-		restoreInput, err := runtimeOverridesReplaceInputFromRestoreRequest(restorePayload, updateActorNameFromRequest(r), operatorAuditActorScope(r, cfg))
+		restoreInput, err := runtimeOverridesReplaceInputFromRestoreRequest(restorePayload, updateActorNameFromRequest(r))
 		if err != nil {
 			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "runtime_overrides.preset_load", "fail", "Runtime preset load failed", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -244,7 +244,7 @@ func runtimeOverridesRestoreHandler(eng *engine.Engine, auditStore *store.SQLite
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		restoreInput, err := runtimeOverridesReplaceInputFromRestoreRequest(payload, updateActorNameFromRequest(r), operatorAuditActorScope(r, cfg))
+		restoreInput, err := runtimeOverridesReplaceInputFromRestoreRequest(payload, updateActorNameFromRequest(r))
 		if err != nil {
 			recordOperatorAuditEvent(r.Context(), auditStore, r, cfg, "runtime_overrides.restore", "fail", "Runtime override restore rejected", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -342,7 +342,7 @@ func runtimeOverridesRestoreRequestFromSnapshot(snapshot runtimeOverridesSnapsho
 	return request
 }
 
-func runtimeOverridesReplaceInputFromRestoreRequest(payload runtimeOverridesRestoreRequest, updatedBy string, actorScope string) (store.RuntimeOverridesReplaceInput, error) {
+func runtimeOverridesReplaceInputFromRestoreRequest(payload runtimeOverridesRestoreRequest, updatedBy string) (store.RuntimeOverridesReplaceInput, error) {
 	if payload.CabinetProfileOverride != nil {
 		if err := config.ValidateCabinetProfile(*payload.CabinetProfileOverride); err != nil {
 			return store.RuntimeOverridesReplaceInput{}, err

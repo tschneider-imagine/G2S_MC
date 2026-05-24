@@ -4030,7 +4030,11 @@ function appendUniqueIssue(issues, message) {
   }
 }
 
+<<<<<<< HEAD
 function appendFriendlyPreflightIssues(preflight, issues) {
+=======
+function appendFriendlyPreflightBlockers(preflight, blockers) {
+>>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
   const checks = Array.isArray(preflight?.checks) ? preflight.checks : [];
   let mappedAny = false;
   checks.forEach((check) => {
@@ -4061,8 +4065,13 @@ function appendFriendlyPreflightIssues(preflight, issues) {
     }
   });
   if (mappedAny) return;
+<<<<<<< HEAD
   const raw = Array.isArray(preflight?.issues) ? preflight.issues : [];
   raw.forEach((item) => appendUniqueIssue(issues, String(item || "").trim()));
+=======
+  const raw = Array.isArray(preflight?.issues) ? preflight.issues : (Array.isArray(preflight?.blockers) ? preflight.blockers : []);
+  raw.forEach((item) => appendUniqueBlocker(blockers, String(item || "").trim()));
+>>>>>>> 9054deb (Remove blocker-policy enforcement and API surface)
 }
 
 function buildFirstCabinetSessionState(snapshot) {
@@ -4496,13 +4505,6 @@ function buildOperatorReadinessModel(snapshot, session, workflow) {
       pushUniqueString(nextActions, "Review failed system checks and resolve setup issues.");
     }
   }
-  const downgradedFindings = Array.isArray(preflight?.downgraded_findings) ? preflight.downgraded_findings : [];
-  downgradedFindings.forEach((finding) => {
-    const id = String(finding?.id || "").trim();
-    if (!id) return;
-    pushUniqueString(labWarning, "System Check finding downgraded by stop-condition policy: " + id + ".");
-    pushUniqueString(nextActions, "Review downgraded system check finding " + id + " before production deployment.");
-  });
   const preflightProfileCheck = preflightCheckByID(preflight, "cabinet_profile");
   const placeholderFirstTestWarning = String(preflightProfileCheck?.detail || "").indexOf("lab_warning_code=FIRST_TEST_EGM_IDS_PLACEHOLDER") >= 0;
   if (placeholderFirstTestWarning) {
