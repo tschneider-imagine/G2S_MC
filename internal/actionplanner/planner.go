@@ -127,9 +127,19 @@ func (p *Planner) selectTargets(ctx context.Context, selectorRaw string, records
 			return nil, nil, err
 		}
 		if group == nil {
-			return nil, []PlanningWarning{{Code: "GROUP_SELECTOR_UNSUPPORTED", Message: fmt.Sprintf("Group %s not found or membership support unavailable", groupID)}}, nil
+			return nil, []PlanningWarning{{Code: "GROUP_NOT_FOUND", Message: fmt.Sprintf("Group %s not found", groupID)}}, nil
 		}
-		return selectByGroupZone(records, groupID), []PlanningWarning{{Code: "GROUP_SELECTOR_ZONE_FALLBACK", Message: fmt.Sprintf("Group %s resolved using EGM zone matching", groupID)}}, nil
+		if len(group.EGMIDs) == 0 {
+			return nil, []PlanningWarning{{Code: "GROUP_EMPTY", Message: fmt.Sprintf("Group %s has no EGM membership", groupID)}}, nil
+		}
+		return selectByEGMIDs(records, group.EGMIDs), nil, nil
+	}
+	if strings.HasPrefix(selector, SelectorZonePrefix) {
+		zoneID := strings.TrimSpace(strings.TrimPrefix(selector, SelectorZonePrefix))
+		if zoneID == "" {
+			return nil, []PlanningWarning{{Code: "ZONE_SELECTOR_INVALID", Message: "ZONE selector is missing a zone id"}}, nil
+		}
+		return selectByZone(records, zoneID), nil, nil
 	}
 	return nil, []PlanningWarning{{Code: "SELECTOR_UNKNOWN", Message: fmt.Sprintf("Unknown target selector: %s", selector)}}, nil
 }
@@ -175,13 +185,13 @@ func selectByTemplate(records []egms.EGMRecord, templateID string) []egms.EGMRec
 	return selected
 }
 
-func selectByGroupZone(records []egms.EGMRecord, groupID string) []egms.EGMRecord {
+func selectByZone(records []egms.EGMRecord, zoneID string) []egms.EGMRecord {
 	selected := []egms.EGMRecord{}
 	for _, record := range records {
 		if !record.Enabled {
 			continue
 		}
-		if strings.TrimSpace(record.Zone) == groupID {
+		if strings.TrimSpace(record.Zone) == zoneID {
 			selected = append(selected, record)
 		}
 	}

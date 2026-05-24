@@ -14,12 +14,18 @@ func TestEGMRecordValidate(t *testing.T) {
 }
 
 func TestEGMGroupValidate(t *testing.T) {
-	group := EGMGroup{ID: "zone-a", Name: "Zone A"}
+	group := EGMGroup{ID: "zone-a", Name: "Zone A", EGMIDs: []string{"EGM-1", "EGM-2"}}
 	if err := group.Validate(); err != nil {
 		t.Fatalf("validate group: %v", err)
 	}
 	group.Name = ""
 	if err := group.Validate(); err == nil {
 		t.Fatal("expected validation error for missing name")
+	}
+
+	group.Name = "Zone A"
+	group.EGMIDs = []string{"EGM-1", "EGM-1"}
+	if err := group.Validate(); err == nil {
+		t.Fatal("expected validation error for duplicate egm ids")
 	}
 }

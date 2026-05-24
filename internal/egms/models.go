@@ -52,6 +52,7 @@ type EGMGroup struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
+	EGMIDs      []string  `json:"egm_ids,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
@@ -62,6 +63,17 @@ func (g EGMGroup) Validate() error {
 	}
 	if strings.TrimSpace(g.Name) == "" {
 		return fmt.Errorf("name is required")
+	}
+	seen := map[string]struct{}{}
+	for _, raw := range g.EGMIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return fmt.Errorf("egm_ids entries must be non-empty")
+		}
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("egm_ids contains duplicate %q", id)
+		}
+		seen[id] = struct{}{}
 	}
 	return nil
 }

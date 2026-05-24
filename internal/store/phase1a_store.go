@@ -539,16 +539,18 @@ func (s *SQLiteStore) ListEGMRecords(ctx context.Context) ([]egms.EGMRecord, err
 func (s *SQLiteStore) GetEGMGroup(ctx context.Context, id string) (*egms.EGMGroup, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, COALESCE(description, ''), created_at, updated_at
+		`SELECT id, name, COALESCE(description, ''), COALESCE(egm_ids_json, '[]'), created_at, updated_at
 		   FROM egm_groups
 		  WHERE id = ?`,
 		strings.TrimSpace(id),
 	)
 	var group egms.EGMGroup
+	var egmIDsJSON string
 	if err := row.Scan(
 		&group.ID,
 		&group.Name,
 		&group.Description,
+		&egmIDsJSON,
 		&group.CreatedAt,
 		&group.UpdatedAt,
 	); err != nil {
@@ -557,6 +559,9 @@ func (s *SQLiteStore) GetEGMGroup(ctx context.Context, id string) (*egms.EGMGrou
 		}
 		return nil, err
 	}
+	if err := decodeJSONStringSlice(egmIDsJSON, &group.EGMIDs); err != nil {
+		return nil, fmt.Errorf("decode egm_ids_json for group %q: %w", group.ID, err)
+	}
 	return &group, nil
 }
 
@@ -564,18 +569,24 @@ func (s *SQLiteStore) UpsertEGMGroup(ctx context.Context, group egms.EGMGroup) e
 	if err := group.Validate(); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(
+	egmIDsJSON, err := encodeJSONStringSlice(group.EGMIDs)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(
 		ctx,
 		`INSERT INTO egm_groups (
-		    id, name, description, created_at, updated_at
-		) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		    id, name, description, egm_ids_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET
 		    name = excluded.name,
 		    description = excluded.description,
+		    egm_ids_json = excluded.egm_ids_json,
 		    updated_at = CURRENT_TIMESTAMP`,
 		strings.TrimSpace(group.ID),
 		strings.TrimSpace(group.Name),
 		nullableTrimmed(group.Description),
+		egmIDsJSON,
 	)
 	return err
 }
@@ -583,7 +594,7 @@ func (s *SQLiteStore) UpsertEGMGroup(ctx context.Context, group egms.EGMGroup) e
 func (s *SQLiteStore) ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, COALESCE(description, ''), created_at, updated_at
+		`SELECT id, name, COALESCE(description, ''), COALESCE(egm_ids_json, '[]'), created_at, updated_at
 		   FROM egm_groups
 		   ORDER BY id ASC`,
 	)
@@ -595,14 +606,19 @@ func (s *SQLiteStore) ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error
 	result := []egms.EGMGroup{}
 	for rows.Next() {
 		var group egms.EGMGroup
+		var egmIDsJSON string
 		if err := rows.Scan(
 			&group.ID,
 			&group.Name,
 			&group.Description,
+			&egmIDsJSON,
 			&group.CreatedAt,
 			&group.UpdatedAt,
 		); err != nil {
 			return nil, err
+		}
+		if err := decodeJSONStringSlice(egmIDsJSON, &group.EGMIDs); err != nil {
+			return nil, fmt.Errorf("decode egm_ids_json for group %q: %w", group.ID, err)
 		}
 		result = append(result, group)
 	}

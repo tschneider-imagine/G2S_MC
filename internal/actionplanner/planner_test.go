@@ -104,9 +104,26 @@ func TestPlannerTemplateSelector(t *testing.T) {
 	}
 }
 
-func TestPlannerDisabledEGMExcluded(t *testing.T) {
+func TestPlannerGroupSelectorUsesMembershipOnly(t *testing.T) {
 	store := baseMockStore()
-	store.action.TargetSelector = "EGM_IDS:EGM-002"
+	store.action.TargetSelector = "GROUP:group-a"
+	planner := &Planner{Store: store}
+
+	plan, err := planner.BuildPlan(context.Background(), store.action.ID)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if plan.TargetCount != 1 {
+		t.Fatalf("target count = %d, want 1", plan.TargetCount)
+	}
+	if plan.Targets[0].EGMID != "EGM-003" {
+		t.Fatalf("expected membership target EGM-003, got %+v", plan.Targets)
+	}
+}
+
+func TestPlannerGroupSelectorExcludesDisabledEGM(t *testing.T) {
+	store := baseMockStore()
+	store.action.TargetSelector = "GROUP:group-disabled-only"
 	planner := &Planner{Store: store}
 
 	plan, err := planner.BuildPlan(context.Background(), store.action.ID)
@@ -115,6 +132,68 @@ func TestPlannerDisabledEGMExcluded(t *testing.T) {
 	}
 	if plan.TargetCount != 0 {
 		t.Fatalf("expected disabled egm excluded, got %+v", plan.Targets)
+	}
+	if !hasWarningCode(plan.Warnings, "EMPTY_TARGET_SET") {
+		t.Fatalf("expected EMPTY_TARGET_SET warning, got %+v", plan.Warnings)
+	}
+}
+
+func TestPlannerGroupSelectorDoesNotFallbackToZone(t *testing.T) {
+	store := baseMockStore()
+	store.action.TargetSelector = "GROUP:zone-a"
+	planner := &Planner{Store: store}
+
+	plan, err := planner.BuildPlan(context.Background(), store.action.ID)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if plan.TargetCount != 0 {
+		t.Fatalf("expected no group fallback to zone, got %+v", plan.Targets)
+	}
+	if !hasWarningCode(plan.Warnings, "GROUP_NOT_FOUND") {
+		t.Fatalf("expected GROUP_NOT_FOUND warning, got %+v", plan.Warnings)
+	}
+}
+
+func TestPlannerGroupSelectorMissingWarning(t *testing.T) {
+	store := baseMockStore()
+	store.action.TargetSelector = "GROUP:missing-group"
+	planner := &Planner{Store: store}
+
+	plan, err := planner.BuildPlan(context.Background(), store.action.ID)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if !hasWarningCode(plan.Warnings, "GROUP_NOT_FOUND") {
+		t.Fatalf("expected GROUP_NOT_FOUND warning, got %+v", plan.Warnings)
+	}
+}
+
+func TestPlannerGroupSelectorEmptyWarning(t *testing.T) {
+	store := baseMockStore()
+	store.action.TargetSelector = "GROUP:group-empty"
+	planner := &Planner{Store: store}
+
+	plan, err := planner.BuildPlan(context.Background(), store.action.ID)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if !hasWarningCode(plan.Warnings, "GROUP_EMPTY") {
+		t.Fatalf("expected GROUP_EMPTY warning, got %+v", plan.Warnings)
+	}
+}
+
+func TestPlannerZoneSelector(t *testing.T) {
+	store := baseMockStore()
+	store.action.TargetSelector = "ZONE:zone-a"
+	planner := &Planner{Store: store}
+
+	plan, err := planner.BuildPlan(context.Background(), store.action.ID)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if plan.TargetCount != 1 || plan.Targets[0].EGMID != "EGM-001" {
+		t.Fatalf("unexpected zone selector targets: %+v", plan.Targets)
 	}
 }
 
@@ -130,8 +209,8 @@ func TestPlannerMissingTemplateWarning(t *testing.T) {
 	if plan.TargetCount != 1 {
 		t.Fatalf("target count = %d, want 1", plan.TargetCount)
 	}
-	if len(plan.Warnings) == 0 {
-		t.Fatal("expected missing template warning")
+	if !hasWarningCode(plan.Warnings, "MISSING_TEMPLATE") {
+		t.Fatalf("expected missing template warning, got %+v", plan.Warnings)
 	}
 }
 
@@ -147,14 +226,14 @@ func TestPlannerEmptyTargetWarning(t *testing.T) {
 	if plan.TargetCount != 0 {
 		t.Fatalf("target count = %d, want 0", plan.TargetCount)
 	}
-	if len(plan.Warnings) == 0 || plan.Warnings[0].Code != "EMPTY_TARGET_SET" {
-		t.Fatalf("expected empty target warning, got %+v", plan.Warnings)
+	if !hasWarningCode(plan.Warnings, "EMPTY_TARGET_SET") {
+		t.Fatalf("expected EMPTY_TARGET_SET warning, got %+v", plan.Warnings)
 	}
 }
 
 func TestPlannerDeterministicSort(t *testing.T) {
 	store := baseMockStore()
-	store.action.TargetSelector = "EGM_IDS:EGM-003,EGM-001"
+	store.action.TargetSelector = "GROUP:group-sort"
 	planner := &Planner{Store: store}
 
 	plan1, err := planner.BuildPlan(context.Background(), store.action.ID)
@@ -165,9 +244,24 @@ func TestPlannerDeterministicSort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build plan2: %v", err)
 	}
-	if plan1.Targets[0].EGMID != plan2.Targets[0].EGMID || plan1.Targets[1].EGMID != plan2.Targets[1].EGMID {
-		t.Fatalf("plans are not deterministic: plan1=%+v plan2=%+v", plan1.Targets, plan2.Targets)
+	if len(plan1.Targets) != 2 || len(plan2.Targets) != 2 {
+		t.Fatalf("expected 2 targets in each plan: plan1=%+v plan2=%+v", plan1.Targets, plan2.Targets)
 	}
+	if plan1.Targets[0].EGMID != "EGM-001" || plan1.Targets[1].EGMID != "EGM-003" {
+		t.Fatalf("plan1 not sorted deterministically: %+v", plan1.Targets)
+	}
+	if plan2.Targets[0].EGMID != "EGM-001" || plan2.Targets[1].EGMID != "EGM-003" {
+		t.Fatalf("plan2 not sorted deterministically: %+v", plan2.Targets)
+	}
+}
+
+func hasWarningCode(warnings []PlanningWarning, code string) bool {
+	for _, warning := range warnings {
+		if warning.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func baseMockStore() *mockStore {
@@ -188,17 +282,20 @@ func baseMockStore() *mockStore {
 			Version: 1,
 		},
 		records: []egms.EGMRecord{
-			{EGMID: "EGM-003", Enabled: true, EmergencyEnabled: true, TemplateID: "tpl-b", CurrentActionState: egms.EGMActionStateNormal},
-			{EGMID: "EGM-001", Enabled: true, EmergencyEnabled: true, TemplateID: "tpl-a", CurrentActionState: egms.EGMActionStateNormal},
-			{EGMID: "EGM-002", Enabled: false, EmergencyEnabled: true, TemplateID: "tpl-a", CurrentActionState: egms.EGMActionStateNormal},
-			{EGMID: "EGM-004", Enabled: true, EmergencyEnabled: false, TemplateID: "", CurrentActionState: egms.EGMActionStateNormal},
+			{EGMID: "EGM-003", Enabled: true, EmergencyEnabled: true, TemplateID: "tpl-b", Zone: "zone-b", CurrentActionState: egms.EGMActionStateNormal},
+			{EGMID: "EGM-001", Enabled: true, EmergencyEnabled: true, TemplateID: "tpl-a", Zone: "zone-a", CurrentActionState: egms.EGMActionStateNormal},
+			{EGMID: "EGM-002", Enabled: false, EmergencyEnabled: true, TemplateID: "tpl-a", Zone: "zone-a", CurrentActionState: egms.EGMActionStateNormal},
+			{EGMID: "EGM-004", Enabled: true, EmergencyEnabled: false, TemplateID: "", Zone: "zone-c", CurrentActionState: egms.EGMActionStateNormal},
 		},
 		templates: map[string]templates.G2STemplate{
 			"tpl-a": {ID: "tpl-a", Name: "A", Vendor: "IGT", Status: templates.TemplateStatusActive},
 			"tpl-b": {ID: "tpl-b", Name: "B", Vendor: "Bally", Status: templates.TemplateStatusActive},
 		},
 		groups: map[string]egms.EGMGroup{
-			"zone-a": {ID: "zone-a", Name: "Zone A"},
+			"group-a":             {ID: "group-a", Name: "Group A", EGMIDs: []string{"EGM-003"}},
+			"group-disabled-only": {ID: "group-disabled-only", Name: "Disabled", EGMIDs: []string{"EGM-002"}},
+			"group-empty":         {ID: "group-empty", Name: "Empty", EGMIDs: []string{}},
+			"group-sort":          {ID: "group-sort", Name: "Sort", EGMIDs: []string{"EGM-003", "EGM-001"}},
 		},
 	}
 }

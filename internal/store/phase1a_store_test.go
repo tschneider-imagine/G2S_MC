@@ -269,6 +269,7 @@ func TestEGMGroupUpsertGetList(t *testing.T) {
 		ID:          "zone-a",
 		Name:        "Zone A",
 		Description: "High priority floor",
+		EGMIDs:      []string{"EGM-3", "EGM-1"},
 	}
 	if err := store.UpsertEGMGroup(ctx, group); err != nil {
 		t.Fatalf("upsert egm group: %v", err)
@@ -280,12 +281,18 @@ func TestEGMGroupUpsertGetList(t *testing.T) {
 	if fetched == nil || fetched.Name != "Zone A" {
 		t.Fatalf("unexpected fetched group: %+v", fetched)
 	}
+	if len(fetched.EGMIDs) != 2 || fetched.EGMIDs[0] != "EGM-3" || fetched.EGMIDs[1] != "EGM-1" {
+		t.Fatalf("unexpected fetched group membership: %+v", fetched.EGMIDs)
+	}
 	groups, err := store.ListEGMGroups(ctx)
 	if err != nil {
 		t.Fatalf("list egm groups: %v", err)
 	}
 	if len(groups) != 1 || groups[0].ID != "zone-a" {
 		t.Fatalf("unexpected groups: %+v", groups)
+	}
+	if len(groups[0].EGMIDs) != 2 || groups[0].EGMIDs[0] != "EGM-3" || groups[0].EGMIDs[1] != "EGM-1" {
+		t.Fatalf("unexpected listed group membership: %+v", groups[0].EGMIDs)
 	}
 }
 

@@ -40,6 +40,7 @@ const (
 	SelectorEGMIDsPrefix        = "EGM_IDS:"
 	SelectorGroupPrefix         = "GROUP:"
 	SelectorTemplatePrefix      = "TEMPLATE:"
+	SelectorZonePrefix          = "ZONE:"
 )
 
 func planStepsFromDefinition(definition actions.ActionDefinition) []ActionPlanStep {

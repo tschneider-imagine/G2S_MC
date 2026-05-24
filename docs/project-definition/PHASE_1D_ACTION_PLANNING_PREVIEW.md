@@ -6,7 +6,7 @@ Phase 1D introduces a non-executing action planner that resolves action target s
 
 Implemented in this phase:
 - `internal/actionplanner` package,
-- selector resolution for emergency, explicit IDs, group, and template selectors,
+- selector resolution for emergency, explicit IDs, group, zone, and template selectors,
 - plan warnings for empty target sets, missing templates, and unsupported group membership details,
 - read-only API preview endpoint.
 
@@ -35,7 +35,12 @@ Planner output:
 - `ALL_EMERGENCY_ENABLED`: selects EGMs that are enabled and emergency-enabled.
 - `EGM_IDS:<id1,id2,...>`: selects explicit enabled EGMs by ID.
 - `TEMPLATE:<template-id>`: selects enabled EGMs assigned to a template.
-- `GROUP:<group-id>`: uses group metadata and zone-based fallback (`EGMRecord.zone == group-id`) with warning.
+- `GROUP:<group-id>`: uses explicit `EGMGroup.egm_ids` membership only.
+  - if group is missing: `GROUP_NOT_FOUND` warning
+  - if group exists but has no members: `GROUP_EMPTY` warning
+- `ZONE:<zone-id>`: selects enabled EGMs where `EGMRecord.zone == zone-id`.
+
+`GROUP` no longer falls back to zone matching.
 
 Disabled EGMs are excluded in all selectors during this phase.
 
@@ -45,7 +50,7 @@ Warnings are generated when:
 - selected EGMs do not have a template,
 - selected EGMs reference unknown templates,
 - selector resolves to no eligible targets,
-- group selector uses fallback behavior.
+- group selector references a missing/empty group.
 
 ## API Addition
 

@@ -117,10 +117,45 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, phase1CInputRuntimeMigration); err != nil {
 		return err
 	}
+	if err := s.ensureEGMGroupMembershipSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureHeartbeatPolicyOverrideSchema(ctx); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *SQLiteStore) ensureEGMGroupMembershipSchema(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(egm_groups)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasEGMIDsJSON := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(strings.TrimSpace(name), "egm_ids_json") {
+			hasEGMIDsJSON = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasEGMIDsJSON {
+		return nil
+	}
+	_, err = s.db.ExecContext(ctx, `ALTER TABLE egm_groups ADD COLUMN egm_ids_json TEXT NOT NULL DEFAULT '[]'`)
+	return err
 }
 
 func (s *SQLiteStore) ensureHeartbeatPolicyOverrideSchema(ctx context.Context) error {
