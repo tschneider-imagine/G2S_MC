@@ -16,8 +16,10 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/deliverycheck"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
@@ -97,28 +99,30 @@ type Store interface {
 }
 
 type Options struct {
-	AppVersion              string
-	ControllerID            string
-	SiteName                string
-	DatabasePath            string
-	ConfigPath              string
-	BindAddress             string
-	G2SHostURL              string
-	G2SEndpointPath         string
-	G2SHostID               string
-	TLSRequired             bool
-	ClientCertRequired      bool
-	WebLoginRequired        bool
-	AdminClientCertRequired bool
-	CAConfigured            bool
-	ClientCertConfigured    bool
-	ServerCertConfigured    bool
-	DeliveryMode            string
-	AllowDeliveryDefault    bool
-	CaptureOnlyDefault      bool
-	DeliveryTimeoutMS       int
-	InputRuntimeEnabled     bool
-	StartedAt               time.Time
+	AppVersion               string
+	ControllerID             string
+	SiteName                 string
+	DatabasePath             string
+	ConfigPath               string
+	BindAddress              string
+	G2SHostURL               string
+	G2SEndpointPath          string
+	G2SHostID                string
+	TLSRequired              bool
+	ClientCertRequired       bool
+	WebLoginRequired         bool
+	AdminClientCertRequired  bool
+	CAConfigured             bool
+	ClientCertConfigured     bool
+	ServerCertConfigured     bool
+	DeliveryMode             string
+	AllowDeliveryDefault     bool
+	CaptureOnlyDefault       bool
+	DeliveryTimeoutMS        int
+	DeliveryEndpointDefaults g2stransport.EndpointDefaults
+	DeliveryClientConfig     g2stransport.HTTPClientConfig
+	InputRuntimeEnabled      bool
+	StartedAt                time.Time
 }
 
 type Server struct {
@@ -162,6 +166,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute("/audit/export"), s.handleAuditExport)
 	mux.HandleFunc(operatorRoute("/audit/evidence-export"), s.handleAuditEvidenceExport)
 	mux.HandleFunc(operatorRoute("/settings"), s.handleSettings)
+	mux.HandleFunc(operatorRoute("/settings/message-delivery-check"), s.handleMessageDeliveryCheck)
 	mux.HandleFunc(operatorCSSRoute, s.handleStyles)
 }
 
@@ -3237,6 +3242,79 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	s.renderSettingsPage(w, r, deliveryCheckForm{TimeoutMS: s.Options.DeliveryTimeoutMS}, nil, "", "")
+}
+
+type deliveryCheckForm struct {
+	EGMID               string
+	ActionID            string
+	TemplateID          string
+	TemplateActionKey   string
+	IncludeNetworkCheck bool
+	IncludeTLSCheck     bool
+	TimeoutMS           int
+}
+
+func (s *Server) handleMessageDeliveryCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.renderSettingsPage(w, r, deliveryCheckForm{TimeoutMS: s.Options.DeliveryTimeoutMS}, nil, "", "invalid form payload")
+		return
+	}
+
+	form := deliveryCheckForm{
+		EGMID:               strings.TrimSpace(r.FormValue("egm_id")),
+		ActionID:            strings.TrimSpace(r.FormValue("action_id")),
+		TemplateID:          strings.TrimSpace(r.FormValue("template_id")),
+		TemplateActionKey:   strings.TrimSpace(r.FormValue("template_action_key")),
+		IncludeNetworkCheck: parseCheckboxValue(r.FormValue("include_network_check")),
+		IncludeTLSCheck:     parseCheckboxValue(r.FormValue("include_tls_check")),
+		TimeoutMS:           s.Options.DeliveryTimeoutMS,
+	}
+	timeoutMS, err := parseNonNegativeIntField(r.FormValue("timeout_ms"), "timeout milliseconds")
+	if err != nil {
+		s.renderSettingsPage(w, r, form, nil, "", err.Error())
+		return
+	}
+	if timeoutMS > 0 {
+		form.TimeoutMS = timeoutMS
+	}
+
+	if form.IncludeNetworkCheck || form.IncludeTLSCheck {
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+	}
+
+	checkService := deliverycheck.Service{
+		Store: s.Store,
+		Options: deliverycheck.Options{
+			EndpointDefaults: s.Options.DeliveryEndpointDefaults,
+			ClientConfig:     s.Options.DeliveryClientConfig,
+			DeliveryMode:     s.Options.DeliveryMode,
+			DefaultTimeoutMS: s.Options.DeliveryTimeoutMS,
+		},
+	}
+	result, checkErr := checkService.Check(r.Context(), deliverycheck.CheckRequest{
+		EGMID:               form.EGMID,
+		ActionID:            form.ActionID,
+		TemplateID:          form.TemplateID,
+		TemplateActionKey:   form.TemplateActionKey,
+		IncludeNetworkCheck: form.IncludeNetworkCheck,
+		IncludeTLSCheck:     form.IncludeTLSCheck,
+		TimeoutMS:           form.TimeoutMS,
+	})
+	if checkErr != nil {
+		s.renderSettingsPage(w, r, form, nil, "", checkErr.Error())
+		return
+	}
+	s.renderSettingsPage(w, r, form, &result, "Message Delivery Check completed.", "")
+}
+
+func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form deliveryCheckForm, checkResult *deliverycheck.CheckResult, message string, errText string) {
 	certs, err := s.Store.ListCertificateInventory(r.Context())
 	if err != nil {
 		s.renderError(w, "/operator/settings", "Operator Console Settings", err)
@@ -3342,7 +3420,68 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<li>Message delivery behavior is unchanged in this view.</li>`)
 	body.WriteString(`</ul></div>`)
 
-	s.renderPage(w, operatorRoute("/settings"), "Operator Settings", body.String(), "", "")
+	body.WriteString(`<div class="panel"><h2>Message Delivery Check</h2>`)
+	body.WriteString(`<form method="post" action="` + operatorRoute("/settings/message-delivery-check") + `">`)
+	body.WriteString(`<label>EGM ID <input type="text" name="egm_id" value="` + esc(form.EGMID) + `"></label>`)
+	body.WriteString(`<label>Action ID <input type="text" name="action_id" value="` + esc(form.ActionID) + `"></label>`)
+	body.WriteString(`<label>Template ID <input type="text" name="template_id" value="` + esc(form.TemplateID) + `"></label>`)
+	body.WriteString(`<label>Template Action Key <input type="text" name="template_action_key" value="` + esc(form.TemplateActionKey) + `"></label>`)
+	body.WriteString(`<label>Timeout ms <input type="number" min="0" name="timeout_ms" value="` + esc(strconv.Itoa(form.TimeoutMS)) + `"></label>`)
+	body.WriteString(`<label>Include Network Check <input type="checkbox" name="include_network_check" value="true"` + checked(form.IncludeNetworkCheck) + `></label>`)
+	body.WriteString(`<label>Include TLS Check <input type="checkbox" name="include_tls_check" value="true"` + checked(form.IncludeTLSCheck) + `></label>`)
+	body.WriteString(`<button type="submit">Run Message Delivery Check</button>`)
+	body.WriteString(`</form>`)
+
+	if checkResult != nil {
+		body.WriteString(`<h3>Result</h3>`)
+		body.WriteString(`<p>Overall Status: <span class="mono">` + esc(checkResult.OverallStatus) + `</span></p>`)
+		body.WriteString(`<table><tr><th>Field</th><th>Value</th></tr>`)
+		body.WriteString(`<tr><td>EGM</td><td class="mono">` + esc(defaultString(checkResult.EGMID, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Action</td><td class="mono">` + esc(defaultString(checkResult.ActionID, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Template</td><td class="mono">` + esc(defaultString(checkResult.TemplateID, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Template Version</td><td class="mono">` + esc(defaultString(checkResult.TemplateVersion, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Template Action Key</td><td class="mono">` + esc(defaultString(checkResult.TemplateActionKey, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Endpoint</td><td class="mono">` + esc(defaultString(checkResult.EndpointURL, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Method</td><td class="mono">` + esc(defaultString(checkResult.Method, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Content Type</td><td class="mono">` + esc(defaultString(checkResult.ContentType, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Delivery Mode</td><td class="mono">` + esc(defaultString(checkResult.DeliveryMode, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Network Check</td><td>` + esc(checkResult.NetworkCheck.Status+": "+checkResult.NetworkCheck.Detail) + `</td></tr>`)
+		body.WriteString(`<tr><td>TLS Check</td><td>` + esc(checkResult.TLSCheck.Status+": "+checkResult.TLSCheck.Detail) + `</td></tr>`)
+		body.WriteString(`</table>`)
+		if len(checkResult.Errors) > 0 {
+			body.WriteString(`<p>Error</p><ul>`)
+			for _, row := range checkResult.Errors {
+				body.WriteString(`<li>` + esc(row) + `</li>`)
+			}
+			body.WriteString(`</ul>`)
+		}
+		if len(checkResult.Warnings) > 0 {
+			body.WriteString(`<p>Warning</p><ul>`)
+			for _, row := range checkResult.Warnings {
+				body.WriteString(`<li>` + esc(row) + `</li>`)
+			}
+			body.WriteString(`</ul>`)
+		}
+		if len(checkResult.CertificateSummary) > 0 {
+			body.WriteString(`<h4>Certificate Status</h4>`)
+			body.WriteString(`<table><tr><th>Role</th><th>Configured</th><th>File Exists</th><th>Parse Status</th><th>Status</th><th>Fingerprint</th><th>Detail</th></tr>`)
+			for _, row := range checkResult.CertificateSummary {
+				body.WriteString(`<tr>`)
+				body.WriteString(`<td class="mono">` + esc(row.Role) + `</td>`)
+				body.WriteString(`<td>` + esc(enabledText(row.Configured)) + `</td>`)
+				body.WriteString(`<td>` + esc(enabledText(row.FileExists)) + `</td>`)
+				body.WriteString(`<td>` + esc(defaultString(row.ParseStatus, "-")) + `</td>`)
+				body.WriteString(`<td>` + esc(defaultString(row.Status, "-")) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(defaultString(row.Fingerprint, "-")) + `</td>`)
+				body.WriteString(`<td>` + esc(defaultString(row.Detail, "-")) + `</td>`)
+				body.WriteString(`</tr>`)
+			}
+			body.WriteString(`</table>`)
+		}
+	}
+	body.WriteString(`</div>`)
+
+	s.renderPage(w, operatorRoute("/settings"), "Operator Settings", body.String(), message, errText)
 }
 
 func (s *Server) renderError(w http.ResponseWriter, active string, title string, err error) {
@@ -3667,6 +3806,15 @@ func parseNonNegativeIntField(raw string, fieldLabel string) (int, error) {
 		return 0, fmt.Errorf("invalid %s", fieldLabel)
 	}
 	return value, nil
+}
+
+func parseCheckboxValue(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseRetryPolicyJSON(raw string) retryPolicyConfig {

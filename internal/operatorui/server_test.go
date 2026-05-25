@@ -16,6 +16,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
@@ -1811,6 +1812,99 @@ func TestSettingsPageShowsDeliverySettings(t *testing.T) {
 	}
 }
 
+func TestSettingsPageRendersMessageDeliveryCheckPanel(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Message Delivery Check",
+		"Run Message Delivery Check",
+		"EGM ID",
+		"Include Network Check",
+		"Include TLS Check",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in settings page", expected)
+		}
+	}
+}
+
+func TestPostSettingsMessageDeliveryCheckReadOnly(t *testing.T) {
+	mux := setupOperatorServer(t)
+	form := url.Values{
+		"egm_id": {"EGM-001"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Message Delivery Check completed.",
+		"Result",
+		"Endpoint",
+		"Certificate Status",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in response body", expected)
+		}
+	}
+}
+
+func TestPostSettingsMessageDeliveryCheckNetworkRequiresAuth(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(http.ResponseWriter, *http.Request) bool { return false })
+	server.RegisterRoutes(mux)
+
+	form := url.Values{
+		"egm_id":                {"EGM-001"},
+		"include_network_check": {"true"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+}
+
+func TestPostSettingsMessageDeliveryCheckDoesNotExposePrivateKeyMaterial(t *testing.T) {
+	mux := setupOperatorServer(t)
+	form := url.Values{
+		"egm_id": {"EGM-001"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, forbidden := range []string{
+		"BEGIN PRIVATE KEY",
+		"PRIVATE KEY-----",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("delivery check output must not expose private key material: found %q", forbidden)
+		}
+	}
+}
+
 func TestSettingsPageRendersCertificateInventoryRows(t *testing.T) {
 	mux := setupOperatorServer(t)
 	res := httptest.NewRecorder()
@@ -2267,28 +2361,36 @@ func setupOperatorServerWithStore(t *testing.T) (*http.ServeMux, *store.SQLiteSt
 
 func defaultOperatorOptions() Options {
 	return Options{
-		AppVersion:              "operator-console",
-		ControllerID:            "controller-test",
-		SiteName:                "Site Alpha",
-		DatabasePath:            `C:\\data\\g2s.db`,
-		ConfigPath:              `C:\\configs\\g2s.json`,
-		BindAddress:             "127.0.0.1:8444",
-		G2SHostURL:              "https://127.0.0.1:8444/g2s",
-		G2SEndpointPath:         "/g2s",
-		G2SHostID:               "HOST-1",
-		TLSRequired:             true,
-		ClientCertRequired:      true,
-		WebLoginRequired:        true,
-		AdminClientCertRequired: true,
-		CAConfigured:            true,
-		ClientCertConfigured:    true,
-		ServerCertConfigured:    true,
-		DeliveryMode:            "DISABLED",
-		AllowDeliveryDefault:    false,
-		CaptureOnlyDefault:      false,
-		DeliveryTimeoutMS:       5000,
-		InputRuntimeEnabled:     true,
-		StartedAt:               time.Now().UTC().Add(-5 * time.Minute),
+		AppVersion:               "operator-console",
+		ControllerID:             "controller-test",
+		SiteName:                 "Site Alpha",
+		DatabasePath:             `C:\\data\\g2s.db`,
+		ConfigPath:               `C:\\configs\\g2s.json`,
+		BindAddress:              "127.0.0.1:8444",
+		G2SHostURL:               "https://127.0.0.1:8444/g2s",
+		G2SEndpointPath:          "/g2s",
+		G2SHostID:                "HOST-1",
+		TLSRequired:              true,
+		ClientCertRequired:       true,
+		WebLoginRequired:         true,
+		AdminClientCertRequired:  true,
+		CAConfigured:             true,
+		ClientCertConfigured:     true,
+		ServerCertConfigured:     true,
+		DeliveryMode:             "DISABLED",
+		AllowDeliveryDefault:     false,
+		CaptureOnlyDefault:       false,
+		DeliveryTimeoutMS:        5000,
+		DeliveryEndpointDefaults: g2stransport.EndpointDefaults{Scheme: "https", Port: 8444},
+		DeliveryClientConfig: g2stransport.HTTPClientConfig{
+			TLSRequired:      true,
+			RootCAPath:       "/certs/ca.crt",
+			ClientCertPath:   "/certs/client.crt",
+			ClientKeyPath:    "/certs/client.key",
+			DefaultTimeoutMS: 5000,
+		},
+		InputRuntimeEnabled: true,
+		StartedAt:           time.Now().UTC().Add(-5 * time.Minute),
 	}
 }
 
