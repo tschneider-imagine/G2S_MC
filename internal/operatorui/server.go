@@ -565,25 +565,26 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 func (s *Server) handleEGMs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.renderEGMsPage(w, r, "", "")
+		s.renderEGMsPage(w, r, "", "", nil)
 	case http.MethodPost:
 		if !s.authorizeMutation(w, r) {
 			return
 		}
 		if err := r.ParseForm(); err != nil {
-			s.renderEGMsPage(w, r, "", "invalid form payload")
+			s.renderEGMsPage(w, r, "", "invalid form payload", nil)
 			return
 		}
 		egmID := strings.TrimSpace(r.FormValue("egm_id"))
+		draft := buildEGMFormData(r, egmID)
 		if egmID == "" {
-			s.renderEGMsPage(w, r, "", "egm_id is required")
+			s.renderEGMsPage(w, r, "", "egm_id is required", &draft)
 			return
 		}
-		if err := s.upsertEGMFromForm(r.Context(), egmID, r); err != nil {
-			s.renderEGMsPage(w, r, "", err.Error())
+		if err := s.upsertEGMFromForm(r.Context(), draft); err != nil {
+			s.renderEGMsPage(w, r, "", err.Error(), &draft)
 			return
 		}
-		s.renderEGMsPage(w, r, "EGM upserted: "+egmID, "")
+		s.renderEGMsPage(w, r, "EGM upserted: "+egmID, "", nil)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -603,18 +604,56 @@ func (s *Server) handleEGMByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		s.renderEGMsPage(w, r, "", "invalid form payload")
+		s.renderEGMsPage(w, r, "", "invalid form payload", nil)
 		return
 	}
-	if err := s.upsertEGMFromForm(r.Context(), egmID, r); err != nil {
-		s.renderEGMsPage(w, r, "", err.Error())
+	draft := buildEGMFormData(r, egmID)
+	if err := s.upsertEGMFromForm(r.Context(), draft); err != nil {
+		s.renderEGMsPage(w, r, "", err.Error(), &draft)
 		return
 	}
-	s.renderEGMsPage(w, r, "EGM updated: "+egmID, "")
+	s.renderEGMsPage(w, r, "EGM updated: "+egmID, "", nil)
 }
 
-func (s *Server) upsertEGMFromForm(ctx context.Context, egmID string, r *http.Request) error {
-	existing, err := s.Store.GetEGMRecord(ctx, egmID)
+type egmFormData struct {
+	EGMID            string
+	DisplayName      string
+	IPAddress        string
+	EndpointPath     string
+	Vendor           string
+	CabinetFamily    string
+	GameTitle        string
+	SoftwareVersion  string
+	Zone             string
+	Enabled          bool
+	EmergencyEnabled bool
+	TemplateID       string
+	Notes            string
+}
+
+func buildEGMFormData(r *http.Request, egmID string) egmFormData {
+	return egmFormData{
+		EGMID:            strings.TrimSpace(egmID),
+		DisplayName:      strings.TrimSpace(r.FormValue("display_name")),
+		IPAddress:        strings.TrimSpace(r.FormValue("ip_address")),
+		EndpointPath:     strings.TrimSpace(r.FormValue("endpoint_path")),
+		Vendor:           strings.TrimSpace(r.FormValue("vendor")),
+		CabinetFamily:    strings.TrimSpace(r.FormValue("cabinet_family")),
+		GameTitle:        strings.TrimSpace(r.FormValue("game_title")),
+		SoftwareVersion:  strings.TrimSpace(r.FormValue("software_version")),
+		Zone:             strings.TrimSpace(r.FormValue("zone")),
+		Enabled:          parseFormBool(r.FormValue("enabled")),
+		EmergencyEnabled: parseFormBool(r.FormValue("emergency_enabled")),
+		TemplateID:       strings.TrimSpace(r.FormValue("template_id")),
+		Notes:            strings.TrimSpace(r.FormValue("notes")),
+	}
+}
+
+func (s *Server) upsertEGMFromForm(ctx context.Context, form egmFormData) error {
+	if form.EGMID == "" {
+		return fmt.Errorf("egm_id is required")
+	}
+	existing, err := s.Store.GetEGMRecord(ctx, form.EGMID)
 	if err != nil {
 		return err
 	}
@@ -623,74 +662,157 @@ func (s *Server) upsertEGMFromForm(ctx context.Context, egmID string, r *http.Re
 		state = existing.CurrentActionState
 	}
 	record := egms.EGMRecord{
-		EGMID:              egmID,
-		DisplayName:        strings.TrimSpace(r.FormValue("display_name")),
-		IPAddress:          strings.TrimSpace(r.FormValue("ip_address")),
-		EndpointPath:       strings.TrimSpace(r.FormValue("endpoint_path")),
-		Vendor:             strings.TrimSpace(r.FormValue("vendor")),
-		Zone:               strings.TrimSpace(r.FormValue("zone")),
-		Enabled:            parseFormBool(r.FormValue("enabled")),
-		EmergencyEnabled:   parseFormBool(r.FormValue("emergency_enabled")),
-		TemplateID:         strings.TrimSpace(r.FormValue("template_id")),
+		EGMID:              form.EGMID,
+		DisplayName:        form.DisplayName,
+		IPAddress:          form.IPAddress,
+		EndpointPath:       form.EndpointPath,
+		Vendor:             form.Vendor,
+		CabinetFamily:      form.CabinetFamily,
+		GameTitle:          form.GameTitle,
+		SoftwareVersion:    form.SoftwareVersion,
+		Zone:               form.Zone,
+		Enabled:            form.Enabled,
+		EmergencyEnabled:   form.EmergencyEnabled,
+		TemplateID:         form.TemplateID,
+		Notes:              form.Notes,
 		CurrentActionState: state,
 	}
 	if existing != nil {
-		record.CabinetFamily = existing.CabinetFamily
-		record.GameTitle = existing.GameTitle
-		record.SoftwareVersion = existing.SoftwareVersion
 		record.HeartbeatOverrideJSON = existing.HeartbeatOverrideJSON
 		record.LastSeenAt = existing.LastSeenAt
-		record.Notes = existing.Notes
 	}
 	return s.Store.UpsertEGMRecord(ctx, record)
 }
 
-func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message string, errText string) {
+func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message string, errText string, draft *egmFormData) {
 	records, err := s.Store.ListEGMRecords(r.Context())
 	if err != nil {
 		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
 		return
 	}
+	templatesList, err := s.Store.ListG2STemplates(r.Context())
+	if err != nil {
+		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
+		return
+	}
+	templateExists := make(map[string]bool, len(templatesList))
+	templateIDs := make([]string, 0, len(templatesList))
+	for _, tpl := range templatesList {
+		templateExists[tpl.ID] = true
+		templateIDs = append(templateIDs, tpl.ID)
+	}
+	sort.Strings(templateIDs)
+
+	groups, err := s.Store.ListEGMGroups(r.Context())
+	if err != nil {
+		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
+		return
+	}
+
+	formDefaults := egmFormData{Enabled: true, EmergencyEnabled: true}
+	if draft != nil {
+		formDefaults = *draft
+	}
+
 	body := strings.Builder{}
 	body.WriteString(`<div class="panel"><h2>EGM Registry</h2><table>`)
-	body.WriteString(`<tr><th>EGM ID</th><th>Name</th><th>IP</th><th>Endpoint</th><th>Vendor</th><th>Zone</th><th>Enabled</th><th>Emergency Enabled</th><th>Template ID</th><th>Current State</th><th>Edit</th></tr>`)
+	body.WriteString(`<tr><th>EGM ID</th><th>Cabinet</th><th>IP Address</th><th>Endpoint</th><th>Vendor</th><th>Cabinet Family</th><th>Game Title</th><th>Software Version</th><th>Zone</th><th>Enabled</th><th>Emergency Enabled</th><th>Template</th><th>Current Action State</th><th>Last Seen</th><th>Notes</th><th>Status</th><th>Edit</th></tr>`)
 	for _, record := range records {
+		warnings := make([]string, 0, 2)
+		if record.TemplateID != "" && !templateExists[record.TemplateID] {
+			warnings = append(warnings, "Template not found")
+		}
+		if !record.Enabled && record.EmergencyEnabled {
+			warnings = append(warnings, "Emergency participation requires Enabled.")
+		}
 		body.WriteString(`<tr>`)
 		body.WriteString(`<td class="mono">` + esc(record.EGMID) + `</td>`)
 		body.WriteString(`<td>` + esc(record.DisplayName) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(record.IPAddress) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(record.EndpointPath) + `</td>`)
 		body.WriteString(`<td>` + esc(record.Vendor) + `</td>`)
+		body.WriteString(`<td>` + esc(record.CabinetFamily) + `</td>`)
+		body.WriteString(`<td>` + esc(record.GameTitle) + `</td>`)
+		body.WriteString(`<td>` + esc(record.SoftwareVersion) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(record.Zone) + `</td>`)
 		body.WriteString(`<td>` + yesNo(record.Enabled) + `</td>`)
 		body.WriteString(`<td>` + yesNo(record.EmergencyEnabled) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(record.TemplateID) + `</td>`)
 		body.WriteString(`<td>` + esc(string(record.CurrentActionState)) + `</td>`)
+		body.WriteString(`<td>` + esc(fmtMaybeTime(record.LastSeenAt)) + `</td>`)
+		body.WriteString(`<td>` + esc(record.Notes) + `</td>`)
+		body.WriteString(`<td>`)
+		if len(warnings) == 0 {
+			body.WriteString(`<span class="status-ok">OK</span>`)
+		} else {
+			for i, warning := range warnings {
+				if i > 0 {
+					body.WriteString(`<br>`)
+				}
+				body.WriteString(`<span class="status-warn">` + esc(warning) + `</span>`)
+			}
+		}
+		body.WriteString(`</td>`)
 		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/egms/` + esc(record.EGMID) + `">`)
-		body.WriteString(`<label>Name <input type="text" name="display_name" value="` + esc(record.DisplayName) + `" style="width:130px"></label>`)
-		body.WriteString(`<label>IP <input type="text" name="ip_address" value="` + esc(record.IPAddress) + `" style="width:110px"></label>`)
-		body.WriteString(`<label>Endpoint <input type="text" name="endpoint_path" value="` + esc(record.EndpointPath) + `" style="width:110px"></label><br>`)
+		body.WriteString(`<label>Display Name <input type="text" name="display_name" value="` + esc(record.DisplayName) + `" style="width:130px"></label>`)
+		body.WriteString(`<label>IP Address <input type="text" name="ip_address" value="` + esc(record.IPAddress) + `" style="width:110px"></label>`)
+		body.WriteString(`<label>Endpoint Path <input type="text" name="endpoint_path" value="` + esc(record.EndpointPath) + `" style="width:110px"></label><br>`)
 		body.WriteString(`<label>Vendor <input type="text" name="vendor" value="` + esc(record.Vendor) + `" style="width:120px"></label>`)
+		body.WriteString(`<label>Cabinet Family <input type="text" name="cabinet_family" value="` + esc(record.CabinetFamily) + `" style="width:120px"></label>`)
+		body.WriteString(`<label>Game Title <input type="text" name="game_title" value="` + esc(record.GameTitle) + `" style="width:120px"></label>`)
+		body.WriteString(`<label>Software Version <input type="text" name="software_version" value="` + esc(record.SoftwareVersion) + `" style="width:100px"></label><br>`)
 		body.WriteString(`<label>Zone <input type="text" name="zone" value="` + esc(record.Zone) + `" style="width:90px"></label>`)
 		body.WriteString(`<label>Enabled <input type="checkbox" name="enabled" value="true"` + checked(record.Enabled) + `></label>`)
-		body.WriteString(`<label>Emergency <input type="checkbox" name="emergency_enabled" value="true"` + checked(record.EmergencyEnabled) + `></label>`)
-		body.WriteString(`<label>Template <input type="text" name="template_id" value="` + esc(record.TemplateID) + `" style="width:140px"></label>`)
+		body.WriteString(`<label>Emergency Enabled <input type="checkbox" name="emergency_enabled" value="true"` + checked(record.EmergencyEnabled) + `></label>`)
+		body.WriteString(`<label>Template ID <input type="text" name="template_id" value="` + esc(record.TemplateID) + `" style="width:140px"></label><br>`)
+		body.WriteString(`<label>Notes <input type="text" name="notes" value="` + esc(record.Notes) + `" style="width:280px"></label>`)
 		body.WriteString(`<button type="submit">Save</button></form></td>`)
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
 
+	body.WriteString(`<div class="panel"><h3>Available Template IDs</h3>`)
+	if len(templateIDs) == 0 {
+		body.WriteString(`<p>None</p>`)
+	} else {
+		body.WriteString(`<p class="mono">` + esc(strings.Join(templateIDs, ", ")) + `</p>`)
+	}
+	body.WriteString(`</div>`)
+
+	body.WriteString(`<div class="panel"><h3>EGM Groups</h3>`)
+	if len(groups) == 0 {
+		body.WriteString(`<p>No groups configured.</p>`)
+	} else {
+		body.WriteString(`<table><tr><th>Group ID</th><th>Name</th><th>Member Count</th><th>Members</th></tr>`)
+		for _, group := range groups {
+			members := append([]string(nil), group.EGMIDs...)
+			sort.Strings(members)
+			body.WriteString(`<tr>`)
+			body.WriteString(`<td class="mono">` + esc(group.ID) + `</td>`)
+			body.WriteString(`<td>` + esc(group.Name) + `</td>`)
+			body.WriteString(`<td>` + esc(strconv.Itoa(len(members))) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(strings.Join(members, ", ")) + `</td>`)
+			body.WriteString(`</tr>`)
+		}
+		body.WriteString(`</table>`)
+	}
+	body.WriteString(`</div>`)
+
 	body.WriteString(`<div class="panel"><h3>Add / Upsert EGM</h3>`)
 	body.WriteString(`<form method="post" action="/operator/egms">`)
-	body.WriteString(`<label>EGM ID <input type="text" name="egm_id"></label>`)
-	body.WriteString(`<label>Name <input type="text" name="display_name"></label>`)
-	body.WriteString(`<label>IP <input type="text" name="ip_address"></label>`)
-	body.WriteString(`<label>Endpoint <input type="text" name="endpoint_path"></label><br>`)
-	body.WriteString(`<label>Vendor <input type="text" name="vendor"></label>`)
-	body.WriteString(`<label>Zone <input type="text" name="zone"></label>`)
-	body.WriteString(`<label>Enabled <input type="checkbox" name="enabled" value="true" checked></label>`)
-	body.WriteString(`<label>Emergency Enabled <input type="checkbox" name="emergency_enabled" value="true" checked></label>`)
-	body.WriteString(`<label>Template ID <input type="text" name="template_id"></label>`)
+	body.WriteString(`<label>EGM ID <input type="text" name="egm_id" value="` + esc(formDefaults.EGMID) + `"></label>`)
+	body.WriteString(`<label>Display Name <input type="text" name="display_name" value="` + esc(formDefaults.DisplayName) + `"></label>`)
+	body.WriteString(`<label>IP Address <input type="text" name="ip_address" value="` + esc(formDefaults.IPAddress) + `"></label>`)
+	body.WriteString(`<label>Endpoint Path <input type="text" name="endpoint_path" value="` + esc(formDefaults.EndpointPath) + `"></label><br>`)
+	body.WriteString(`<label>Vendor <input type="text" name="vendor" value="` + esc(formDefaults.Vendor) + `"></label>`)
+	body.WriteString(`<label>Cabinet Family <input type="text" name="cabinet_family" value="` + esc(formDefaults.CabinetFamily) + `"></label>`)
+	body.WriteString(`<label>Game Title <input type="text" name="game_title" value="` + esc(formDefaults.GameTitle) + `"></label>`)
+	body.WriteString(`<label>Software Version <input type="text" name="software_version" value="` + esc(formDefaults.SoftwareVersion) + `"></label><br>`)
+	body.WriteString(`<label>Zone <input type="text" name="zone" value="` + esc(formDefaults.Zone) + `"></label>`)
+	body.WriteString(`<label>Enabled <input type="checkbox" name="enabled" value="true"` + checked(formDefaults.Enabled) + `></label>`)
+	body.WriteString(`<label>Emergency Enabled <input type="checkbox" name="emergency_enabled" value="true"` + checked(formDefaults.EmergencyEnabled) + `></label>`)
+	body.WriteString(`<label>Template ID <input type="text" name="template_id" value="` + esc(formDefaults.TemplateID) + `"></label><br>`)
+	body.WriteString(`<label>Notes <input type="text" name="notes" value="` + esc(formDefaults.Notes) + `" style="width:320px"></label>`)
 	body.WriteString(`<button type="submit">Upsert EGM</button></form></div>`)
 
 	s.renderPage(w, operatorRoute("/egms"), "Operator EGM Registry", body.String(), message, errText)
@@ -1339,6 +1461,13 @@ func fmtTime(value time.Time) string {
 		return "-"
 	}
 	return value.UTC().Format(time.RFC3339)
+}
+
+func fmtMaybeTime(value *time.Time) string {
+	if value == nil {
+		return "-"
+	}
+	return fmtTime(*value)
 }
 
 func esc(value string) string {

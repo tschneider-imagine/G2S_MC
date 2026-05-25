@@ -379,6 +379,193 @@ func TestPostActionsRejectsInvalidEscalationAttempts(t *testing.T) {
 	}
 }
 
+func TestEGMsPageRendersRegistryRowsAndTemplateID(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/egms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"EGM Registry",
+		"Cabinet 001",
+		"template-generic-g2s-action",
+		"Current Action State",
+		"Available Template IDs",
+		"EGM Groups",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/egms", expected)
+		}
+	}
+}
+
+func TestEGMsPageShowsTemplateAndEmergencyWarnings(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if err := st.UpsertEGMRecord(ctx, egms.EGMRecord{
+		EGMID:              "EGM-004",
+		DisplayName:        "Cabinet 004",
+		Enabled:            false,
+		EmergencyEnabled:   true,
+		TemplateID:         "template-missing",
+		CurrentActionState: egms.EGMActionStateNormal,
+	}); err != nil {
+		t.Fatalf("upsert egm: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/egms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Template not found",
+		"Emergency participation requires Enabled.",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/egms warnings", expected)
+		}
+	}
+}
+
+func TestPostEGMsCreatesOrUpsertsRecord(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	body := url.Values{
+		"egm_id":            {"EGM-010"},
+		"display_name":      {"Cabinet 010"},
+		"ip_address":        {"10.10.0.10"},
+		"endpoint_path":     {"/g2s"},
+		"vendor":            {"Generic"},
+		"cabinet_family":    {"Family A"},
+		"game_title":        {"Example Game"},
+		"software_version":  {"1.0.0"},
+		"zone":              {"Zone-A"},
+		"enabled":           {"true"},
+		"emergency_enabled": {"true"},
+		"template_id":       {"template-generic-g2s-action"},
+		"notes":             {"Primary floor cabinet"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/egms", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	record, err := st.GetEGMRecord(context.Background(), "EGM-010")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	if record == nil {
+		t.Fatal("expected EGM record to be created")
+	}
+	if record.DisplayName != "Cabinet 010" || record.TemplateID != "template-generic-g2s-action" {
+		t.Fatalf("unexpected record: %+v", *record)
+	}
+	if record.CabinetFamily != "Family A" || record.GameTitle != "Example Game" || record.SoftwareVersion != "1.0.0" || record.Notes != "Primary floor cabinet" {
+		t.Fatalf("expected cabinet/game/software/notes fields to persist, record=%+v", *record)
+	}
+}
+
+func TestPostEGMByIDUpdatesAndPreservesSystemFields(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := st.UpsertEGMRecord(ctx, egms.EGMRecord{
+		EGMID:                 "EGM-001",
+		DisplayName:           "Cabinet 001",
+		IPAddress:             "10.0.0.1",
+		EndpointPath:          "/g2s",
+		Vendor:                "Generic",
+		CabinetFamily:         "Family 1",
+		GameTitle:             "Title 1",
+		SoftwareVersion:       "2.0.0",
+		Zone:                  "Zone-1",
+		Enabled:               true,
+		EmergencyEnabled:      true,
+		TemplateID:            "template-generic-g2s-action",
+		CurrentActionState:    egms.EGMActionStatePending,
+		LastSeenAt:            &now,
+		HeartbeatOverrideJSON: `{"interval_ms":1000}`,
+		Notes:                 "Existing notes",
+	}); err != nil {
+		t.Fatalf("upsert setup egm: %v", err)
+	}
+
+	body := url.Values{
+		"display_name":      {"Cabinet 001 Updated"},
+		"ip_address":        {"10.0.0.11"},
+		"endpoint_path":     {"/g2s-updated"},
+		"vendor":            {"Generic"},
+		"cabinet_family":    {"Family 2"},
+		"game_title":        {"Title 2"},
+		"software_version":  {"2.1.0"},
+		"zone":              {"Zone-2"},
+		"enabled":           {"true"},
+		"emergency_enabled": {"true"},
+		"template_id":       {"template-generic-g2s-action"},
+		"notes":             {"Updated notes"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/egms/EGM-001", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	updated, err := st.GetEGMRecord(ctx, "EGM-001")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	if updated == nil {
+		t.Fatal("expected updated record")
+	}
+	if updated.DisplayName != "Cabinet 001 Updated" || updated.Zone != "Zone-2" || updated.CabinetFamily != "Family 2" {
+		t.Fatalf("expected mutable fields updated, got %+v", *updated)
+	}
+	if updated.CurrentActionState != egms.EGMActionStatePending {
+		t.Fatalf("expected current action state preserved, got %q", updated.CurrentActionState)
+	}
+	if updated.LastSeenAt == nil || !updated.LastSeenAt.Equal(now) {
+		t.Fatalf("expected last seen preserved, got %v want %s", updated.LastSeenAt, now)
+	}
+	if updated.HeartbeatOverrideJSON != `{"interval_ms":1000}` {
+		t.Fatalf("expected heartbeat override preserved, got %q", updated.HeartbeatOverrideJSON)
+	}
+}
+
+func TestEGMsFormIncludesExpectedFields(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/egms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		`name="enabled"`,
+		`name="emergency_enabled"`,
+		`name="zone"`,
+		`name="vendor"`,
+		`name="cabinet_family"`,
+		`name="game_title"`,
+		`name="software_version"`,
+		`name="notes"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected field %q in /operator/egms form", expected)
+		}
+	}
+}
+
 func setupOperatorServer(t *testing.T) *http.ServeMux {
 	mux, _ := setupOperatorServerWithStore(t)
 	return mux
