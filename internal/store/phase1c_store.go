@@ -163,6 +163,36 @@ func (s *SQLiteStore) ListInputTransitions(ctx context.Context, limit int) ([]in
 	return result, rows.Err()
 }
 
+func (s *SQLiteStore) GetInputTransition(ctx context.Context, id int64) (*inputs.InputTransition, error) {
+	if id <= 0 {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, input_channel_id, previous_derived_state, new_derived_state, transition_at,
+		        COALESCE(reason, ''), COALESCE(action_run_id, '')
+		   FROM input_transitions
+		  WHERE id = ?`,
+		id,
+	)
+	var transition inputs.InputTransition
+	if err := row.Scan(
+		&transition.ID,
+		&transition.InputChannelID,
+		&transition.PreviousDerived,
+		&transition.NewDerived,
+		&transition.TransitionAt,
+		&transition.Reason,
+		&transition.ActionRunID,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &transition, nil
+}
+
 func nullableNonZeroTime(value time.Time) any {
 	if value.IsZero() {
 		return nil

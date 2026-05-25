@@ -18,16 +18,19 @@ import (
 )
 
 type MessageJournalListQuery struct {
-	Limit       int
-	EGMID       string
-	ActionRunID string
-	Direction   g2sengine.MessageDirection
+	Limit             int
+	EGMID             string
+	ActionRunID       string
+	InputTransitionID int64
+	Direction         g2sengine.MessageDirection
 }
 
 type AuditTimelineListQuery struct {
-	Limit     int
-	EventType string
-	Severity  audit.AuditSeverity
+	Limit             int
+	EventType         string
+	Severity          audit.AuditSeverity
+	ActionRunID       string
+	InputTransitionID int64
 }
 
 type ActionRunListQuery struct {
@@ -1161,6 +1164,10 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 		where = append(where, "action_run_id = ?")
 		args = append(args, id)
 	}
+	if query.InputTransitionID > 0 {
+		where = append(where, "input_transition_id = ?")
+		args = append(args, query.InputTransitionID)
+	}
 	if query.Direction != "" {
 		where = append(where, "direction = ?")
 		args = append(args, query.Direction)
@@ -1272,6 +1279,14 @@ func (s *SQLiteStore) ListAuditTimelineEntries(ctx context.Context, query AuditT
 	if query.Severity != "" {
 		where = append(where, "severity = ?")
 		args = append(args, query.Severity)
+	}
+	if id := strings.TrimSpace(query.ActionRunID); id != "" {
+		where = append(where, "action_run_id = ?")
+		args = append(args, id)
+	}
+	if query.InputTransitionID > 0 {
+		where = append(where, "input_transition_id = ?")
+		args = append(args, query.InputTransitionID)
 	}
 	sqlBuilder := strings.Builder{}
 	sqlBuilder.WriteString(`SELECT id, occurred_at, severity, event_type, summary, COALESCE(detail_json, ''),

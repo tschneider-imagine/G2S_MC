@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,13 +46,16 @@ type Store interface {
 	GetInputRuntimeState(ctx context.Context, inputID string) (*inputruntime.InputRuntimeState, error)
 	UpsertInputRuntimeState(ctx context.Context, state inputruntime.InputRuntimeState) error
 	RecordInputTransition(ctx context.Context, transition inputs.InputTransition) (int64, error)
+	GetInputTransition(ctx context.Context, id int64) (*inputs.InputTransition, error)
 	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 	ListInputTransitions(ctx context.Context, limit int) ([]inputs.InputTransition, error)
 
 	GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error)
 	UpsertActionDefinition(ctx context.Context, definition actions.ActionDefinition) error
 	ListActionDefinitions(ctx context.Context) ([]actions.ActionDefinition, error)
+	GetActionRun(ctx context.Context, id string) (*actions.ActionRun, error)
 	ListActionRuns(ctx context.Context, query store.ActionRunListQuery) ([]actions.ActionRun, error)
+	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
 
 	GetG2STemplate(ctx context.Context, id string) (*templates.G2STemplate, error)
 	UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error
@@ -128,7 +132,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute("/comms"), s.handleComms)
 	mux.HandleFunc(operatorRoute("/comms/export"), s.handleCommsExport)
 	mux.HandleFunc(operatorRoute("/audit"), s.handleAudit)
+	mux.HandleFunc(operatorRoute("/audit/notes"), s.handleAuditNotes)
 	mux.HandleFunc(operatorRoute("/audit/export"), s.handleAuditExport)
+	mux.HandleFunc(operatorRoute("/audit/evidence-export"), s.handleAuditEvidenceExport)
 	mux.HandleFunc(operatorRoute("/settings"), s.handleSettings)
 	mux.HandleFunc(operatorCSSRoute, s.handleStyles)
 }
@@ -1792,34 +1798,8 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	rows, err := s.Store.ListAuditTimelineEntries(r.Context(), store.AuditTimelineListQuery{Limit: queryLimit(r, 120)})
-	if err != nil {
-		s.renderError(w, "/operator/audit", "Operator Console Audit Timeline", err)
-		return
-	}
-	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("export")), "json") {
-		s.writeAuditExport(w, rows)
-		return
-	}
-	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Audit Timeline</h2><p><a href="/operator/audit/export">Export JSON</a></p><table>`)
-	body.WriteString(`<tr><th>Timestamp</th><th>Severity</th><th>Event</th><th>Summary</th><th>Related Input</th><th>Related Action</th><th>Related Message</th><th>Related EGM</th><th>Operator</th><th>Details</th></tr>`)
-	for _, row := range rows {
-		body.WriteString(`<tr>`)
-		body.WriteString(`<td>` + esc(fmtTime(row.OccurredAt)) + `</td>`)
-		body.WriteString(`<td>` + esc(string(row.Severity)) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(row.EventType) + `</td>`)
-		body.WriteString(`<td>` + esc(row.Summary) + `</td>`)
-		body.WriteString(`<td>` + esc(zeroDash64(row.InputTransitionID)) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(row.ActionRunID) + `</td>`)
-		body.WriteString(`<td>` + esc(zeroDash64(row.MessageJournalID)) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(auditRelatedEGMID(row)) + `</td>`)
-		body.WriteString(`<td>` + esc(row.Operator) + `</td>`)
-		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(row.DetailJSON) + `</pre></details></td>`)
-		body.WriteString(`</tr>`)
-	}
-	body.WriteString(`</table></div>`)
-	s.renderPage(w, operatorRoute("/audit"), "Operator Audit Timeline", body.String(), "", "")
+	filters := parseAuditPageFilters(r, 120)
+	s.renderAuditPage(w, r, filters, "", "")
 }
 
 func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
@@ -1827,12 +1807,561 @@ func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	rows, err := s.Store.ListAuditTimelineEntries(r.Context(), store.AuditTimelineListQuery{Limit: queryLimit(r, 500)})
+	filters := parseAuditPageFilters(r, 500)
+	evidence, err := s.collectAuditEvidence(r.Context(), filters)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.writeAuditExport(w, rows)
+	s.writeAuditExport(w, evidence.AuditTimeline)
+}
+
+type auditPageFilters struct {
+	ActionRunID       string
+	InputTransitionID int64
+	EGMID             string
+	Limit             int
+}
+
+type auditEvidenceFilters struct {
+	ActionRunID       string `json:"action_run_id,omitempty"`
+	InputTransitionID int64  `json:"input_transition_id,omitempty"`
+	EGMID             string `json:"egm_id,omitempty"`
+	Limit             int    `json:"limit"`
+}
+
+type auditEvidencePackage struct {
+	GeneratedAt      time.Time                       `json:"generated_at"`
+	Filters          auditEvidenceFilters            `json:"filters"`
+	InputTransitions []inputs.InputTransition        `json:"input_transitions"`
+	ActionRuns       []actions.ActionRun             `json:"action_runs"`
+	TargetResults    []actions.ActionTargetResult    `json:"target_results"`
+	Messages         []g2sengine.MessageJournalEntry `json:"messages"`
+	AuditTimeline    []audit.AuditTimelineEntry      `json:"audit_timeline"`
+	EGMs             []egms.EGMRecord                `json:"egms"`
+	Templates        []templates.G2STemplate         `json:"templates"`
+}
+
+func parseAuditPageFilters(r *http.Request, defaultLimit int) auditPageFilters {
+	filters := auditPageFilters{
+		ActionRunID: strings.TrimSpace(r.URL.Query().Get("action_run_id")),
+		EGMID:       strings.TrimSpace(r.URL.Query().Get("egm_id")),
+		Limit:       queryLimit(r, defaultLimit),
+	}
+	if filters.Limit <= 0 {
+		filters.Limit = defaultLimit
+	}
+	if id, ok := parseOptionalInt64(r.URL.Query().Get("input_transition_id")); ok {
+		filters.InputTransitionID = id
+	}
+	return filters
+}
+
+func parseOptionalInt64(raw string) (int64, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func optionalInt64String(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
+}
+
+func parseAuditPostFilters(r *http.Request, defaultLimit int) auditPageFilters {
+	filters := auditPageFilters{
+		ActionRunID: strings.TrimSpace(r.FormValue("action_run_id")),
+		EGMID:       strings.TrimSpace(r.FormValue("egm_id")),
+		Limit:       defaultLimit,
+	}
+	if limit, ok := parseOptionalInt64(r.FormValue("limit")); ok && limit > 0 {
+		filters.Limit = int(limit)
+	}
+	if id, ok := parseOptionalInt64(r.FormValue("input_transition_id")); ok {
+		filters.InputTransitionID = id
+	}
+	return filters
+}
+
+func (s *Server) handleAuditNotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.renderAuditPage(w, r, auditPageFilters{Limit: 120}, "", "invalid form payload")
+		return
+	}
+	filters := parseAuditPostFilters(r, 120)
+	note := strings.TrimSpace(r.FormValue("note"))
+	if note == "" {
+		s.renderAuditPage(w, r, filters, "", "operator note is required")
+		return
+	}
+	actor := defaultString(strings.TrimSpace(r.FormValue("actor")), "operator")
+
+	var messageID int64
+	if id, ok := parseOptionalInt64(r.FormValue("message_id")); ok {
+		messageID = id
+	}
+
+	detail := map[string]any{
+		"note":                note,
+		"actor":               actor,
+		"action_run_id":       defaultString(filters.ActionRunID, ""),
+		"input_transition_id": filters.InputTransitionID,
+		"message_id":          messageID,
+		"egm_id":              defaultString(filters.EGMID, ""),
+	}
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		s.renderAuditPage(w, r, filters, "", "could not encode operator note")
+		return
+	}
+
+	entry := audit.AuditTimelineEntry{
+		OccurredAt:        time.Now().UTC(),
+		Severity:          audit.AuditSeverityInfo,
+		EventType:         audit.EventTypeOperatorAction,
+		Summary:           "Operator Note",
+		DetailJSON:        string(detailJSON),
+		ActionRunID:       filters.ActionRunID,
+		InputTransitionID: filters.InputTransitionID,
+		MessageJournalID:  messageID,
+		Operator:          actor,
+	}
+	if _, err := s.Store.RecordAuditTimelineEntry(r.Context(), entry); err != nil {
+		s.renderAuditPage(w, r, filters, "", err.Error())
+		return
+	}
+	s.renderAuditPage(w, r, filters, "Operator note recorded.", "")
+}
+
+func (s *Server) handleAuditEvidenceExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	filters := parseAuditPageFilters(r, 500)
+	evidence, err := s.collectAuditEvidence(r.Context(), filters)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeAuditEvidenceExport(w, evidence)
+}
+
+func auditFiltersToQuery(filters auditPageFilters) string {
+	values := url.Values{}
+	if strings.TrimSpace(filters.ActionRunID) != "" {
+		values.Set("action_run_id", strings.TrimSpace(filters.ActionRunID))
+	}
+	if filters.InputTransitionID > 0 {
+		values.Set("input_transition_id", strconv.FormatInt(filters.InputTransitionID, 10))
+	}
+	if strings.TrimSpace(filters.EGMID) != "" {
+		values.Set("egm_id", strings.TrimSpace(filters.EGMID))
+	}
+	if filters.Limit > 0 {
+		values.Set("limit", strconv.Itoa(filters.Limit))
+	}
+	return values.Encode()
+}
+
+func (s *Server) renderAuditPage(w http.ResponseWriter, r *http.Request, filters auditPageFilters, message string, errText string) {
+	evidence, err := s.collectAuditEvidence(r.Context(), filters)
+	if err != nil {
+		s.renderError(w, operatorRoute("/audit"), "Operator Audit", err)
+		return
+	}
+	query := auditFiltersToQuery(filters)
+	exportHref := operatorRoute("/audit/export")
+	evidenceHref := operatorRoute("/audit/evidence-export")
+	if query != "" {
+		exportHref += "?" + query
+		evidenceHref += "?" + query
+	}
+
+	showRelated := strings.TrimSpace(filters.ActionRunID) != "" || filters.InputTransitionID > 0
+	body := strings.Builder{}
+	body.WriteString(`<div class="panel"><h2>Audit Timeline</h2>`)
+	body.WriteString(`<form method="get" action="` + operatorRoute("/audit") + `">`)
+	body.WriteString(`<label>Action Run ID <input type="text" name="action_run_id" value="` + esc(filters.ActionRunID) + `" style="width:220px"></label>`)
+	body.WriteString(`<label>Input Transition ID <input type="number" name="input_transition_id" min="1" value="` + esc(optionalInt64String(filters.InputTransitionID)) + `" style="width:160px"></label>`)
+	body.WriteString(`<label>EGM ID <input type="text" name="egm_id" value="` + esc(filters.EGMID) + `" style="width:160px"></label>`)
+	body.WriteString(`<label>Limit <input type="number" name="limit" min="1" value="` + esc(strconv.Itoa(filters.Limit)) + `" style="width:100px"></label>`)
+	body.WriteString(`<button type="submit">Apply</button>`)
+	body.WriteString(`<a href="` + operatorRoute("/audit") + `" style="margin-left:10px;">Clear</a>`)
+	body.WriteString(`</form>`)
+	body.WriteString(`<p><a href="` + esc(exportHref) + `">Export Timeline</a> | <a href="` + esc(evidenceHref) + `">Export Evidence Package</a></p>`)
+	body.WriteString(`<table><tr><th>Timestamp</th><th>Severity</th><th>Event</th><th>Summary</th><th>Action Run</th><th>Input Transition</th><th>Message</th><th>Related EGM</th><th>Operator</th><th>Detail</th></tr>`)
+	for _, row := range evidence.AuditTimeline {
+		body.WriteString(`<tr>`)
+		body.WriteString(`<td>` + esc(fmtTime(row.OccurredAt)) + `</td>`)
+		body.WriteString(`<td>` + esc(string(row.Severity)) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(row.EventType) + `</td>`)
+		body.WriteString(`<td>` + esc(row.Summary) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(defaultString(row.ActionRunID, "-")) + `</td>`)
+		body.WriteString(`<td>` + esc(zeroDash64(row.InputTransitionID)) + `</td>`)
+		body.WriteString(`<td>` + esc(zeroDash64(row.MessageJournalID)) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(auditRelatedEGMID(row)) + `</td>`)
+		body.WriteString(`<td>` + esc(defaultString(row.Operator, "-")) + `</td>`)
+		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.DetailJSON, "-")) + `</pre></details></td>`)
+		body.WriteString(`</tr>`)
+	}
+	body.WriteString(`</table></div>`)
+
+	body.WriteString(`<div class="panel"><h3>Operator Note</h3>`)
+	body.WriteString(`<form method="post" action="` + operatorRoute("/audit/notes") + `">`)
+	body.WriteString(`<label>Action Run ID <input type="text" name="action_run_id" value="` + esc(filters.ActionRunID) + `" style="width:220px"></label>`)
+	body.WriteString(`<label>Input Transition ID <input type="number" name="input_transition_id" min="1" value="` + esc(optionalInt64String(filters.InputTransitionID)) + `" style="width:160px"></label>`)
+	body.WriteString(`<label>Message ID <input type="number" name="message_id" min="1" style="width:160px"></label>`)
+	body.WriteString(`<label>EGM ID <input type="text" name="egm_id" value="` + esc(filters.EGMID) + `" style="width:160px"></label>`)
+	body.WriteString(`<label>Actor <input type="text" name="actor" value="operator" style="width:160px"></label>`)
+	body.WriteString(`<input type="hidden" name="limit" value="` + esc(strconv.Itoa(filters.Limit)) + `">`)
+	body.WriteString(`<label style="display:block;">Note <textarea name="note"></textarea></label>`)
+	body.WriteString(`<button type="submit">Add Operator Note</button>`)
+	body.WriteString(`</form></div>`)
+
+	if showRelated {
+		if len(evidence.ActionRuns) > 0 {
+			body.WriteString(`<div class="panel"><h3>Related Action Runs</h3><table>`)
+			body.WriteString(`<tr><th>Run ID</th><th>Action ID</th><th>Status</th><th>Targets</th><th>Confirmed</th><th>Failed</th><th>Escalated</th><th>Trigger Reason</th></tr>`)
+			for _, run := range evidence.ActionRuns {
+				body.WriteString(`<tr>`)
+				body.WriteString(`<td class="mono">` + esc(run.ID) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(run.ActionDefinitionID) + `</td>`)
+				body.WriteString(`<td>` + esc(string(run.Status)) + `</td>`)
+				body.WriteString(`<td>` + esc(strconv.Itoa(run.TargetCount)) + `</td>`)
+				body.WriteString(`<td>` + esc(strconv.Itoa(run.ConfirmedCount)) + `</td>`)
+				body.WriteString(`<td>` + esc(strconv.Itoa(run.FailedCount)) + `</td>`)
+				body.WriteString(`<td>` + esc(strconv.Itoa(run.EscalatedCount)) + `</td>`)
+				body.WriteString(`<td>` + esc(defaultString(run.TriggerReason, "not recorded")) + `</td>`)
+				body.WriteString(`</tr>`)
+			}
+			body.WriteString(`</table></div>`)
+		} else {
+			body.WriteString(`<div class="panel"><h3>Related Action Runs</h3><p>not recorded</p></div>`)
+		}
+
+		if len(evidence.TargetResults) > 0 {
+			body.WriteString(`<div class="panel"><h3>Related Targets</h3><table>`)
+			body.WriteString(`<tr><th>Action Run</th><th>EGM ID</th><th>Status</th><th>Attempt Count</th><th>Last Error</th><th>Last Result Timestamp</th></tr>`)
+			for _, row := range evidence.TargetResults {
+				body.WriteString(`<tr>`)
+				body.WriteString(`<td class="mono">` + esc(row.ActionRunID) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(row.TargetEGMID) + `</td>`)
+				body.WriteString(`<td>` + esc(string(row.Status)) + `</td>`)
+				body.WriteString(`<td>` + esc(strconv.Itoa(row.AttemptCount)) + `</td>`)
+				body.WriteString(`<td>` + esc(defaultString(row.LastError, "not recorded")) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.LastResultAt)) + `</td>`)
+				body.WriteString(`</tr>`)
+			}
+			body.WriteString(`</table></div>`)
+		} else {
+			body.WriteString(`<div class="panel"><h3>Related Targets</h3><p>not recorded</p></div>`)
+		}
+
+		if len(evidence.Messages) > 0 {
+			body.WriteString(`<div class="panel"><h3>Related Messages</h3><table>`)
+			body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>EGM ID</th><th>Message Type</th><th>Result</th><th>Template</th><th>Action Run</th><th>Payload</th></tr>`)
+			for _, row := range evidence.Messages {
+				templateRef := row.TemplateID
+				if strings.TrimSpace(row.TemplateVersion) != "" {
+					templateRef += "@" + strings.TrimSpace(row.TemplateVersion)
+				}
+				body.WriteString(`<tr>`)
+				body.WriteString(`<td class="mono">` + esc(fmtTime(row.Timestamp)) + `</td>`)
+				body.WriteString(`<td>` + esc(string(row.Direction)) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(defaultString(row.EGMID, "not recorded")) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(defaultString(row.MessageType, "not recorded")) + `</td>`)
+				body.WriteString(`<td>` + esc(string(row.Result)) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(defaultString(templateRef, "not recorded")) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(defaultString(row.ActionRunID, "not recorded")) + `</td>`)
+				body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.RawPayload, "not recorded")) + `</pre></details></td>`)
+				body.WriteString(`</tr>`)
+			}
+			body.WriteString(`</table></div>`)
+		} else {
+			body.WriteString(`<div class="panel"><h3>Related Messages</h3><p>not recorded</p></div>`)
+		}
+
+		if len(evidence.InputTransitions) > 0 {
+			body.WriteString(`<div class="panel"><h3>Related Input Transition</h3><table>`)
+			body.WriteString(`<tr><th>Transition ID</th><th>Input ID</th><th>From</th><th>To</th><th>Timestamp</th><th>Queued Action</th></tr>`)
+			for _, row := range evidence.InputTransitions {
+				body.WriteString(`<tr>`)
+				body.WriteString(`<td>` + esc(zeroDash64(row.ID)) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(row.InputChannelID) + `</td>`)
+				body.WriteString(`<td>` + esc(string(row.PreviousDerived)) + `</td>`)
+				body.WriteString(`<td>` + esc(string(row.NewDerived)) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(fmtTime(row.TransitionAt)) + `</td>`)
+				body.WriteString(`<td class="mono">` + esc(defaultString(row.ActionRunID, "not recorded")) + `</td>`)
+				body.WriteString(`</tr>`)
+			}
+			body.WriteString(`</table></div>`)
+		} else {
+			body.WriteString(`<div class="panel"><h3>Related Input Transition</h3><p>not recorded</p></div>`)
+		}
+	}
+
+	s.renderPage(w, operatorRoute("/audit"), "Operator Audit", body.String(), message, errText)
+}
+
+func (s *Server) collectAuditEvidence(ctx context.Context, filters auditPageFilters) (auditEvidencePackage, error) {
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 120
+	}
+	result := auditEvidencePackage{
+		GeneratedAt: time.Now().UTC(),
+		Filters: auditEvidenceFilters{
+			ActionRunID:       strings.TrimSpace(filters.ActionRunID),
+			InputTransitionID: filters.InputTransitionID,
+			EGMID:             strings.TrimSpace(filters.EGMID),
+			Limit:             limit,
+		},
+	}
+
+	messages, err := s.Store.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+		Limit:             limit,
+		EGMID:             strings.TrimSpace(filters.EGMID),
+		ActionRunID:       strings.TrimSpace(filters.ActionRunID),
+		InputTransitionID: filters.InputTransitionID,
+	})
+	if err != nil {
+		return result, err
+	}
+	result.Messages = messages
+
+	auditRows, err := s.Store.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{
+		Limit:             limit,
+		ActionRunID:       strings.TrimSpace(filters.ActionRunID),
+		InputTransitionID: filters.InputTransitionID,
+	})
+	if err != nil {
+		return result, err
+	}
+
+	messageIDSet := map[int64]bool{}
+	actionRunSet := map[string]bool{}
+	transitionSet := map[int64]bool{}
+	egmSet := map[string]bool{}
+	templateSet := map[string]bool{}
+
+	for _, row := range messages {
+		if row.ID > 0 {
+			messageIDSet[row.ID] = true
+		}
+		if strings.TrimSpace(row.ActionRunID) != "" {
+			actionRunSet[strings.TrimSpace(row.ActionRunID)] = true
+		}
+		if row.InputTransitionID > 0 {
+			transitionSet[row.InputTransitionID] = true
+		}
+		if strings.TrimSpace(row.EGMID) != "" {
+			egmSet[strings.TrimSpace(row.EGMID)] = true
+		}
+		if strings.TrimSpace(row.TemplateID) != "" {
+			templateSet[strings.TrimSpace(row.TemplateID)] = true
+		}
+	}
+	if strings.TrimSpace(filters.ActionRunID) != "" {
+		actionRunSet[strings.TrimSpace(filters.ActionRunID)] = true
+	}
+	if filters.InputTransitionID > 0 {
+		transitionSet[filters.InputTransitionID] = true
+	}
+	if strings.TrimSpace(filters.EGMID) != "" {
+		egmSet[strings.TrimSpace(filters.EGMID)] = true
+	}
+
+	filteredAudit := make([]audit.AuditTimelineEntry, 0, len(auditRows))
+	if strings.TrimSpace(filters.EGMID) == "" {
+		filteredAudit = auditRows
+	} else {
+		targetEGM := strings.TrimSpace(filters.EGMID)
+		for _, row := range auditRows {
+			if strings.EqualFold(strings.TrimSpace(auditRelatedEGMID(row)), targetEGM) {
+				filteredAudit = append(filteredAudit, row)
+				continue
+			}
+			if row.MessageJournalID > 0 && messageIDSet[row.MessageJournalID] {
+				filteredAudit = append(filteredAudit, row)
+				continue
+			}
+			if strings.TrimSpace(row.ActionRunID) != "" && actionRunSet[strings.TrimSpace(row.ActionRunID)] {
+				filteredAudit = append(filteredAudit, row)
+				continue
+			}
+			if row.InputTransitionID > 0 && transitionSet[row.InputTransitionID] {
+				filteredAudit = append(filteredAudit, row)
+				continue
+			}
+		}
+	}
+	result.AuditTimeline = filteredAudit
+	for _, row := range filteredAudit {
+		if strings.TrimSpace(row.ActionRunID) != "" {
+			actionRunSet[strings.TrimSpace(row.ActionRunID)] = true
+		}
+		if row.InputTransitionID > 0 {
+			transitionSet[row.InputTransitionID] = true
+		}
+		if egmID := strings.TrimSpace(auditRelatedEGMID(row)); egmID != "" && egmID != "-" {
+			egmSet[egmID] = true
+		}
+	}
+
+	runsByID := map[string]actions.ActionRun{}
+	addRunByID := func(runID string) error {
+		trimmed := strings.TrimSpace(runID)
+		if trimmed == "" {
+			return nil
+		}
+		if _, exists := runsByID[trimmed]; exists {
+			return nil
+		}
+		row, err := s.Store.GetActionRun(ctx, trimmed)
+		if err != nil {
+			return err
+		}
+		if row == nil {
+			return nil
+		}
+		runsByID[trimmed] = *row
+		if row.InputTransitionID > 0 {
+			transitionSet[row.InputTransitionID] = true
+		}
+		return nil
+	}
+
+	runIDs := make([]string, 0, len(actionRunSet))
+	for id := range actionRunSet {
+		runIDs = append(runIDs, id)
+	}
+	sort.Strings(runIDs)
+	for _, runID := range runIDs {
+		if err := addRunByID(runID); err != nil {
+			return result, err
+		}
+	}
+
+	transitions := make([]inputs.InputTransition, 0, len(transitionSet))
+	transitionIDs := make([]int64, 0, len(transitionSet))
+	for id := range transitionSet {
+		transitionIDs = append(transitionIDs, id)
+	}
+	sort.SliceStable(transitionIDs, func(i, j int) bool {
+		return transitionIDs[i] > transitionIDs[j]
+	})
+	for _, id := range transitionIDs {
+		row, err := s.Store.GetInputTransition(ctx, id)
+		if err != nil {
+			return result, err
+		}
+		if row == nil {
+			continue
+		}
+		transitions = append(transitions, *row)
+		if strings.TrimSpace(row.ActionRunID) != "" {
+			actionRunID := strings.TrimSpace(row.ActionRunID)
+			actionRunSet[actionRunID] = true
+			if err := addRunByID(actionRunID); err != nil {
+				return result, err
+			}
+		}
+	}
+	sort.SliceStable(transitions, func(i, j int) bool {
+		return transitions[i].TransitionAt.After(transitions[j].TransitionAt)
+	})
+	result.InputTransitions = transitions
+
+	runs := make([]actions.ActionRun, 0, len(runsByID))
+	for _, row := range runsByID {
+		runs = append(runs, row)
+	}
+	sort.SliceStable(runs, func(i, j int) bool {
+		return runs[i].StartedAt.After(runs[j].StartedAt)
+	})
+	result.ActionRuns = runs
+
+	targetResults := []actions.ActionTargetResult{}
+	for _, run := range runs {
+		rows, err := s.Store.ListActionTargetResults(ctx, run.ID)
+		if err != nil {
+			return result, err
+		}
+		for _, row := range rows {
+			if strings.TrimSpace(filters.EGMID) != "" && !strings.EqualFold(strings.TrimSpace(row.TargetEGMID), strings.TrimSpace(filters.EGMID)) {
+				continue
+			}
+			targetResults = append(targetResults, row)
+			if strings.TrimSpace(row.TargetEGMID) != "" {
+				egmSet[strings.TrimSpace(row.TargetEGMID)] = true
+			}
+		}
+	}
+	result.TargetResults = targetResults
+
+	egmIDs := make([]string, 0, len(egmSet))
+	for id := range egmSet {
+		egmIDs = append(egmIDs, id)
+	}
+	sort.Strings(egmIDs)
+	egmRows := []egms.EGMRecord{}
+	for _, egmID := range egmIDs {
+		row, err := s.Store.GetEGMRecord(ctx, egmID)
+		if err != nil {
+			return result, err
+		}
+		if row == nil {
+			continue
+		}
+		egmRows = append(egmRows, *row)
+		if strings.TrimSpace(row.TemplateID) != "" {
+			templateSet[strings.TrimSpace(row.TemplateID)] = true
+		}
+	}
+	result.EGMs = egmRows
+
+	templateIDs := make([]string, 0, len(templateSet))
+	for id := range templateSet {
+		templateIDs = append(templateIDs, id)
+	}
+	sort.Strings(templateIDs)
+	templateRows := []templates.G2STemplate{}
+	for _, templateID := range templateIDs {
+		row, err := s.Store.GetG2STemplate(ctx, templateID)
+		if err != nil {
+			return result, err
+		}
+		if row == nil {
+			continue
+		}
+		templateRows = append(templateRows, *row)
+	}
+	result.Templates = templateRows
+
+	return result, nil
+}
+
+func (s *Server) writeAuditEvidenceExport(w http.ResponseWriter, evidence auditEvidencePackage) {
+	w.Header().Set("Content-Type", "application/json")
+	filename := "emergency-evidence-" + time.Now().UTC().Format("20060102T150405Z") + ".json"
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	_ = json.NewEncoder(w).Encode(evidence)
 }
 
 type commsExportPayload struct {

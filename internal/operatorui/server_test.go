@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +173,228 @@ func TestAuditExportStillWorks(t *testing.T) {
 	}
 	if len(payload.Rows) == 0 {
 		t.Fatal("expected audit rows")
+	}
+}
+
+func TestAuditPageRendersFilterAndEvidenceExportControls(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		`name="action_run_id"`,
+		`name="input_transition_id"`,
+		`name="egm_id"`,
+		`name="limit"`,
+		"/operator/audit/export",
+		"/operator/audit/evidence-export",
+		"Operator Note",
+		"Add Operator Note",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/audit", expected)
+		}
+	}
+}
+
+func TestAuditPageFilterActionRunShowsRelatedEvidence(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := st.CreateActionTargetResult(ctx, actions.ActionTargetResult{
+		ActionRunID:  "run-1",
+		TargetEGMID:  "EGM-001",
+		Status:       actions.TargetStatusConfirmed,
+		AttemptCount: 1,
+		LastResultAt: &now,
+	}); err != nil {
+		t.Fatalf("seed target result: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit?action_run_id=run-1", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Related Action Runs",
+		"Related Targets",
+		"Related Messages",
+		"run-1",
+		"emergency-broadcast-trigger",
+		"EGM-001",
+		"CONFIRMED",
+		"emergency_broadcast_silence",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/audit?action_run_id=run-1", expected)
+		}
+	}
+}
+
+func TestAuditPageFilterTransitionShowsRelatedTransition(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	transitions, err := st.ListInputTransitions(ctx, 10)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	if len(transitions) == 0 {
+		t.Fatal("expected seeded input transition")
+	}
+	transitionID := transitions[0].ID
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit?input_transition_id="+strconv.FormatInt(transitionID, 10), nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Related Input Transition",
+		"emergency-broadcast",
+		"TRIGGERED",
+		strconv.FormatInt(transitionID, 10),
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/audit?input_transition_id=...", expected)
+		}
+	}
+}
+
+func TestAuditNotesRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(w http.ResponseWriter, _ *http.Request) bool {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	})
+	server.RegisterRoutes(mux)
+
+	body := url.Values{
+		"note": {"operator note"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/audit/notes", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=401", res.Code)
+	}
+}
+
+func TestAuditNotesRecordsAuditEntry(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	transitions, err := st.ListInputTransitions(ctx, 10)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	if len(transitions) == 0 {
+		t.Fatal("expected seeded transition")
+	}
+	transitionID := transitions[0].ID
+
+	body := url.Values{
+		"action_run_id":       {"run-1"},
+		"input_transition_id": {strconv.FormatInt(transitionID, 10)},
+		"message_id":          {"1"},
+		"egm_id":              {"EGM-001"},
+		"actor":               {"operator"},
+		"note":                {"Confirmed operator note path"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/audit/notes", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Operator note recorded.") {
+		t.Fatalf("expected operator note confirmation, body=%s", res.Body.String())
+	}
+
+	rows, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{
+		Limit:     20,
+		EventType: audit.EventTypeOperatorAction,
+	})
+	if err != nil {
+		t.Fatalf("list audit timeline: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("expected operator note audit row")
+	}
+	if rows[0].Summary != "Operator Note" {
+		t.Fatalf("summary=%q want Operator Note", rows[0].Summary)
+	}
+	if !strings.Contains(rows[0].DetailJSON, "Confirmed operator note path") {
+		t.Fatalf("expected note detail text, row=%+v", rows[0])
+	}
+}
+
+func TestAuditEvidenceExportIncludesRelatedDataAndNoPrivateKeys(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := st.CreateActionTargetResult(ctx, actions.ActionTargetResult{
+		ActionRunID:  "run-1",
+		TargetEGMID:  "EGM-001",
+		Status:       actions.TargetStatusConfirmed,
+		AttemptCount: 1,
+		LastResultAt: &now,
+	}); err != nil {
+		t.Fatalf("seed target result: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit/evidence-export?action_run_id=run-1&limit=200", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	contentDisposition := res.Header().Get("Content-Disposition")
+	if !strings.Contains(contentDisposition, "emergency-evidence-") {
+		t.Fatalf("content-disposition=%q", contentDisposition)
+	}
+
+	var payload auditEvidencePackage
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.GeneratedAt.IsZero() {
+		t.Fatal("expected generated_at")
+	}
+	if payload.Filters.ActionRunID != "run-1" {
+		t.Fatalf("filters.action_run_id=%q", payload.Filters.ActionRunID)
+	}
+	if len(payload.AuditTimeline) == 0 {
+		t.Fatal("expected audit timeline rows")
+	}
+	if len(payload.Messages) == 0 {
+		t.Fatal("expected message rows")
+	}
+	if len(payload.ActionRuns) == 0 {
+		t.Fatal("expected action run rows")
+	}
+	if len(payload.TargetResults) == 0 {
+		t.Fatal("expected target results")
+	}
+	if len(payload.InputTransitions) == 0 {
+		t.Fatal("expected input transitions")
+	}
+	if strings.Contains(strings.ToUpper(res.Body.String()), "PRIVATE KEY") {
+		t.Fatalf("evidence export must not contain private key material")
 	}
 }
 
