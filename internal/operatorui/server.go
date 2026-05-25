@@ -119,6 +119,7 @@ func NewServer(store Store, options Options, authorizeMutation func(http.Respons
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute(""), s.handleHome)
+	mux.HandleFunc(operatorRoute("/live.json"), s.handleLiveJSON)
 	mux.HandleFunc(operatorRoute("/inputs"), s.handleInputs)
 	mux.HandleFunc(operatorRoute("/inputs/live.json"), s.handleInputLiveJSON)
 	mux.HandleFunc(operatorRoute("/inputs/fragments/transitions"), s.handleInputTransitionsFragment)
@@ -154,77 +155,29 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channels, err := s.Store.ListInputChannels(r.Context())
+	view, err := s.buildLiveView(r.Context())
 	if err != nil {
 		s.renderError(w, operatorRoute(""), "Operator Console", err)
 		return
 	}
-	triggered := 0
-	latches := []string{}
-	for _, channel := range channels {
-		runtimeState, err := s.Store.GetInputRuntimeState(r.Context(), channel.ID)
-		if err != nil {
-			s.renderError(w, operatorRoute(""), "Operator Console", err)
-			return
-		}
-		if runtimeState != nil && runtimeState.DerivedState == inputs.DerivedStateTriggered {
-			triggered++
-		}
-		if runtimeState != nil && runtimeState.LatchActive {
-			latches = append(latches, channel.ID)
-		}
-	}
-	sort.Strings(latches)
+	s.renderPage(w, operatorRoute(""), "Operator Console", s.renderLivePanels(view), "", "")
+}
 
-	actionRuns, err := s.Store.ListActionRuns(r.Context(), store.ActionRunListQuery{Limit: 8})
-	if err != nil {
-		s.renderError(w, operatorRoute(""), "Operator Console", err)
+func (s *Server) handleLiveJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	messages, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 8})
+	view, err := s.buildLiveView(r.Context())
 	if err != nil {
-		s.renderError(w, operatorRoute(""), "Operator Console", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Input Summary</h2>`)
-	body.WriteString(fmt.Sprintf(`<p>Configured inputs: <strong>%d</strong> | Triggered now: <strong>%d</strong></p>`, len(channels), triggered))
-	if len(latches) > 0 {
-		body.WriteString(`<p>Active manual latches: <span class="mono">` + esc(strings.Join(latches, ", ")) + `</span></p>`)
-	} else {
-		body.WriteString(`<p>Active manual latches: none</p>`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(view); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-	body.WriteString(`</div>`)
-
-	body.WriteString(`<div class="panel"><h2>Latest Action Runs</h2>`)
-	body.WriteString(`<table><tr><th>Started</th><th>Run ID</th><th>Action ID</th><th>Status</th><th>Targets</th></tr>`)
-	for _, run := range actionRuns {
-		body.WriteString(`<tr>`)
-		body.WriteString(`<td>` + esc(fmtTime(run.StartedAt)) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(run.ID) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(run.ActionDefinitionID) + `</td>`)
-		body.WriteString(`<td>` + esc(string(run.Status)) + `</td>`)
-		body.WriteString(`<td>` + esc(strconv.Itoa(run.TargetCount)) + `</td>`)
-		body.WriteString(`</tr>`)
-	}
-	body.WriteString(`</table></div>`)
-
-	body.WriteString(`<div class="panel"><h2>Latest Message Journal Entries</h2>`)
-	body.WriteString(`<table><tr><th>Timestamp</th><th>Direction</th><th>EGM</th><th>Run</th><th>Type</th><th>Result</th></tr>`)
-	for _, row := range messages {
-		body.WriteString(`<tr>`)
-		body.WriteString(`<td>` + esc(fmtTime(row.Timestamp)) + `</td>`)
-		body.WriteString(`<td>` + esc(string(row.Direction)) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(row.EGMID) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(row.ActionRunID) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(row.MessageType) + `</td>`)
-		body.WriteString(`<td>` + esc(string(row.Result)) + `</td>`)
-		body.WriteString(`</tr>`)
-	}
-	body.WriteString(`</table></div>`)
-
-	s.renderPage(w, operatorRoute(""), "Operator Console", body.String(), "", "")
 }
 
 func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {

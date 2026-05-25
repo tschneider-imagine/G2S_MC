@@ -107,6 +107,167 @@ func TestOperatorPagesExcludeForbiddenTerms(t *testing.T) {
 	}
 }
 
+func TestOperatorLivePageRendersOperationalPanels(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Current Operation",
+		"Active Inputs",
+		"Active Actions",
+		"EGM Attention",
+		"Recent Messages",
+		"Recent Audit Events",
+		"Last Updated",
+		"/operator/live.json",
+		"/operator/inputs",
+		"/operator/actions",
+		"/operator/egms",
+		"/operator/comms",
+		"/operator/audit",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator", expected)
+		}
+	}
+}
+
+func TestOperatorLiveJSONReturnsNoStoreAndSummaries(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/live.json", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control=%q", got)
+	}
+
+	var payload LiveView
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.GeneratedAt.IsZero() {
+		t.Fatal("expected generated_at")
+	}
+	if payload.CurrentOperation != "Emergency Broadcast" {
+		t.Fatalf("current_operation=%q", payload.CurrentOperation)
+	}
+	if payload.ActiveInputID != "emergency-broadcast" {
+		t.Fatalf("active_input_id=%q", payload.ActiveInputID)
+	}
+	if payload.ActiveLatchCount < 1 {
+		t.Fatalf("active_latch_count=%d", payload.ActiveLatchCount)
+	}
+	if len(payload.RecentMessages) == 0 {
+		t.Fatal("expected recent message rows")
+	}
+	if len(payload.RecentAuditEvents) == 0 {
+		t.Fatal("expected recent audit rows")
+	}
+}
+
+func TestOperatorLiveJSONMultipleActiveInputsDeterministicPrimary(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := st.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              "general-broadcast",
+		StableRawState:       inputs.InputStateLow,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          false,
+		StableSince:          now,
+		LastObservedRawState: inputs.InputStateLow,
+		LastObservedAt:       now,
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert runtime: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/live.json", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	var payload LiveView
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.ActiveInputCount < 2 {
+		t.Fatalf("active_input_count=%d", payload.ActiveInputCount)
+	}
+	if payload.CurrentOperation != "Multiple Active" {
+		t.Fatalf("current_operation=%q", payload.CurrentOperation)
+	}
+	if payload.ActiveInputID != "emergency-broadcast" {
+		t.Fatalf("active_input_id=%q want emergency-broadcast", payload.ActiveInputID)
+	}
+}
+
+func TestOperatorLiveShowsFailedAndEscalatedActionRuns(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := st.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-failed",
+		ActionDefinitionID: "general-broadcast-trigger",
+		StartedAt:          now,
+		Status:             actions.RunStatusFailed,
+		TargetCount:        2,
+		FailedCount:        1,
+	}); err != nil {
+		t.Fatalf("create failed run: %v", err)
+	}
+	if _, err := st.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-escalated",
+		ActionDefinitionID: "local-notice-trigger",
+		StartedAt:          now,
+		Status:             actions.RunStatusEscalated,
+		TargetCount:        2,
+		EscalatedCount:     1,
+	}); err != nil {
+		t.Fatalf("create escalated run: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"run-failed", "FAILED", "run-escalated", "ESCALATED"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in live page", expected)
+		}
+	}
+}
+
+func TestOperatorLiveShowsEGMAttentionForMissingTemplate(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "EGM-003") {
+		t.Fatalf("expected EGM-003 attention row, body=%s", body)
+	}
+	if !strings.Contains(body, "Template not assigned") {
+		t.Fatalf("expected missing template attention reason, body=%s", body)
+	}
+}
+
 func TestRemovedRoutesReturnNotFound(t *testing.T) {
 	mux := setupOperatorServer(t)
 	for _, path := range []string{
