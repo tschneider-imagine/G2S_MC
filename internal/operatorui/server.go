@@ -1006,7 +1006,24 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 			s.renderTemplatesPage(w, r, "", err.Error(), nil)
 			return
 		}
-		s.renderTemplatesPage(w, r, "Render preview complete", "", preview)
+		s.renderTemplatesPage(w, r, "Render preview complete", "", &templatePreviewState{Render: preview})
+		return
+	}
+	if path == "match-preview" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			s.renderTemplatesPage(w, r, "", "invalid form payload", nil)
+			return
+		}
+		preview, err := s.matchTemplatePreview(r.Context(), r)
+		if err != nil {
+			s.renderTemplatesPage(w, r, "", err.Error(), nil)
+			return
+		}
+		s.renderTemplatesPage(w, r, "Match preview complete", "", &templatePreviewState{Match: preview})
 		return
 	}
 
@@ -1145,6 +1162,19 @@ type renderPreviewResult struct {
 	Warnings    []string
 }
 
+type matchPreviewResult struct {
+	Outcome   string
+	RuleID    string
+	RuleLabel string
+	Reason    string
+	Warnings  []string
+}
+
+type templatePreviewState struct {
+	Render *renderPreviewResult
+	Match  *matchPreviewResult
+}
+
 func (s *Server) renderTemplatePreview(ctx context.Context, r *http.Request) (*renderPreviewResult, error) {
 	templateID := strings.TrimSpace(r.FormValue("template_id"))
 	actionKey := strings.TrimSpace(r.FormValue("template_action_key"))
@@ -1207,7 +1237,55 @@ func (s *Server) renderTemplatePreview(ctx context.Context, r *http.Request) (*r
 	}, nil
 }
 
-func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, message string, errText string, preview *renderPreviewResult) {
+func (s *Server) matchTemplatePreview(ctx context.Context, r *http.Request) (*matchPreviewResult, error) {
+	templateID := strings.TrimSpace(r.FormValue("template_id"))
+	if templateID == "" {
+		return nil, fmt.Errorf("template_id is required")
+	}
+	templateRow, err := s.Store.GetG2STemplate(ctx, templateID)
+	if err != nil {
+		return nil, err
+	}
+	if templateRow == nil {
+		return nil, fmt.Errorf("template not found")
+	}
+	versionRaw := strings.TrimSpace(r.FormValue("version"))
+	var versionRow *templates.G2STemplateVersion
+	if versionRaw == "" {
+		versionRow, err = s.Store.GetActiveG2STemplateVersion(ctx, templateID)
+	} else {
+		value, parseErr := strconv.Atoi(versionRaw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("version must be a number")
+		}
+		versionRow, err = s.Store.GetG2STemplateVersion(ctx, templateID, value)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if versionRow == nil {
+		return nil, fmt.Errorf("template version not found")
+	}
+	result, err := g2sengine.MatchMessage(
+		strings.TrimSpace(r.FormValue("raw_payload")),
+		strings.TrimSpace(r.FormValue("parsed_summary_json")),
+		strings.TrimSpace(r.FormValue("message_type")),
+		versionRow.ConfirmationRulesJSON,
+		versionRow.FailureRulesJSON,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &matchPreviewResult{
+		Outcome:   result.Outcome,
+		RuleID:    result.RuleID,
+		RuleLabel: result.RuleLabel,
+		Reason:    result.Reason,
+		Warnings:  result.Warnings,
+	}, nil
+}
+
+func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, message string, errText string, preview *templatePreviewState) {
 	templateRows, err := s.Store.ListG2STemplates(r.Context())
 	if err != nil {
 		s.renderError(w, "/operator/templates", "Operator Console Templates", err)
@@ -1313,20 +1391,41 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 	body.WriteString(`<label>IP Address <input type="text" name="ip_address"></label>`)
 	body.WriteString(`<label>Endpoint Path <input type="text" name="endpoint_path"></label>`)
 	body.WriteString(`<button type="submit">Render Preview</button></form>`)
-	if preview != nil {
+	if preview != nil && preview.Render != nil {
+		renderPreview := preview.Render
 		body.WriteString(`<h4>Preview Result</h4>`)
-		body.WriteString(`<p>Message Type: <span class="mono">` + esc(preview.MessageType) + `</span></p>`)
-		body.WriteString(`<p>Content Type: <span class="mono">` + esc(preview.ContentType) + `</span></p>`)
-		if len(preview.Headers) > 0 {
-			headersJSON, _ := json.Marshal(preview.Headers)
+		body.WriteString(`<p>Message Type: <span class="mono">` + esc(renderPreview.MessageType) + `</span></p>`)
+		body.WriteString(`<p>Content Type: <span class="mono">` + esc(renderPreview.ContentType) + `</span></p>`)
+		if len(renderPreview.Headers) > 0 {
+			headersJSON, _ := json.Marshal(renderPreview.Headers)
 			body.WriteString(`<details><summary>Headers</summary><pre>` + esc(string(headersJSON)) + `</pre></details>`)
 		}
-		body.WriteString(`<pre>` + esc(preview.RawPayload) + `</pre>`)
-		if preview.SummaryJSON != "" {
-			body.WriteString(`<details><summary>Summary JSON</summary><pre>` + esc(preview.SummaryJSON) + `</pre></details>`)
+		body.WriteString(`<pre>` + esc(renderPreview.RawPayload) + `</pre>`)
+		if renderPreview.SummaryJSON != "" {
+			body.WriteString(`<details><summary>Summary JSON</summary><pre>` + esc(renderPreview.SummaryJSON) + `</pre></details>`)
 		}
-		if len(preview.Warnings) > 0 {
-			body.WriteString(`<details><summary>Warnings</summary><pre>` + esc(strings.Join(preview.Warnings, "\n")) + `</pre></details>`)
+		if len(renderPreview.Warnings) > 0 {
+			body.WriteString(`<details><summary>Warnings</summary><pre>` + esc(strings.Join(renderPreview.Warnings, "\n")) + `</pre></details>`)
+		}
+	}
+	body.WriteString(`</div>`)
+
+	body.WriteString(`<div class="panel"><h3>Match Preview</h3>`)
+	body.WriteString(`<form method="post" action="/operator/templates/match-preview">`)
+	body.WriteString(`<label>Template ID <input type="text" name="template_id"></label>`)
+	body.WriteString(`<label>Version (optional) <input type="number" name="version" style="width:70px"></label>`)
+	body.WriteString(`<label>Message Type <input type="text" name="message_type"></label><br>`)
+	body.WriteString(`<label style="display:block;">Message Payload <textarea name="raw_payload"></textarea></label>`)
+	body.WriteString(`<label style="display:block;">Summary JSON <textarea name="parsed_summary_json"></textarea></label>`)
+	body.WriteString(`<button type="submit">Preview Match</button></form>`)
+	if preview != nil && preview.Match != nil {
+		match := preview.Match
+		body.WriteString(`<h4>Match Result</h4>`)
+		body.WriteString(`<p>Outcome: <span class="mono">` + esc(defaultString(match.Outcome, string(g2sengine.MatchOutcomeNoMatch))) + `</span></p>`)
+		body.WriteString(`<p>Rule: <span class="mono">` + esc(defaultString(strings.TrimSpace(match.RuleID+" "+match.RuleLabel), "-")) + `</span></p>`)
+		body.WriteString(`<p>Reason: ` + esc(defaultString(match.Reason, "-")) + `</p>`)
+		if len(match.Warnings) > 0 {
+			body.WriteString(`<details><summary>Warnings</summary><pre>` + esc(strings.Join(match.Warnings, "\n")) + `</pre></details>`)
 		}
 	}
 	body.WriteString(`</div>`)
@@ -1350,7 +1449,8 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 
 	body := strings.Builder{}
 	body.WriteString(`<div class="panel"><h2>Message Journal</h2><p><a href="/operator/comms/export">Export JSON</a></p><table>`)
-	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Input Transition</th><th>Template</th><th>Message</th><th>Result</th><th>Delivery</th><th>Error</th><th>Payload</th><th>Summary</th></tr>`)
+	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Input Transition</th><th>Template</th><th>Message</th><th>Result</th><th>Match</th><th>Delivery</th><th>Error</th><th>Payload</th><th>Summary</th></tr>`)
+	versionCache := map[string]*templates.G2STemplateVersion{}
 	for _, row := range rows {
 		templateRef := row.TemplateID
 		if row.TemplateVersion != "" {
@@ -1371,6 +1471,7 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		body.WriteString(`<td class="mono">` + esc(templateRef) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(row.MessageType) + `</td>`)
 		body.WriteString(`<td>` + esc(string(row.Result)) + `</td>`)
+		body.WriteString(`<td>` + esc(s.commsMatcherOutcome(r.Context(), row, versionCache)) + `</td>`)
 		body.WriteString(`<td>` + esc(deliverySummary(row)) + `</td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.Error, "-")) + `</pre></details></td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(payload) + `</pre></details></td>`)
@@ -1509,6 +1610,50 @@ func actionQueuedFromTransition(transition inputs.InputTransition, auditRow audi
 		return strings.TrimSpace(transition.ActionRunID)
 	}
 	return strings.TrimSpace(extractJSONValue(auditRow.DetailJSON, "action_queued_id"))
+}
+
+func (s *Server) commsMatcherOutcome(ctx context.Context, row g2sengine.MessageJournalEntry, cache map[string]*templates.G2STemplateVersion) string {
+	templateID := strings.TrimSpace(row.TemplateID)
+	if templateID == "" {
+		return "-"
+	}
+	key := templateID + "@" + strings.TrimSpace(row.TemplateVersion)
+	versionRow, ok := cache[key]
+	if !ok {
+		var err error
+		if strings.TrimSpace(row.TemplateVersion) != "" {
+			versionInt, parseErr := strconv.Atoi(strings.TrimSpace(row.TemplateVersion))
+			if parseErr != nil {
+				cache[key] = nil
+				return "-"
+			}
+			versionRow, err = s.Store.GetG2STemplateVersion(ctx, templateID, versionInt)
+		} else {
+			versionRow, err = s.Store.GetActiveG2STemplateVersion(ctx, templateID)
+		}
+		if err != nil {
+			cache[key] = nil
+			return "-"
+		}
+		cache[key] = versionRow
+	}
+	if versionRow == nil {
+		return "-"
+	}
+	result, err := g2sengine.MatchMessage(
+		row.RawPayload,
+		row.ParsedSummaryJSON,
+		row.MessageType,
+		versionRow.ConfirmationRulesJSON,
+		versionRow.FailureRulesJSON,
+	)
+	if err != nil {
+		return "-"
+	}
+	if strings.TrimSpace(result.RuleID) != "" {
+		return result.Outcome + ":" + strings.TrimSpace(result.RuleID)
+	}
+	return result.Outcome
 }
 
 func extractJSONValue(detail string, keys ...string) string {

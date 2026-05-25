@@ -203,6 +203,8 @@ func TestCommsPageRendersMessageEvidence(t *testing.T) {
 		"template-generic-g2s-action@1",
 		"emergency_broadcast_silence",
 		"SEND_BLOCKED",
+		"Match",
+		"EXPECTED:message_ok",
 		"dry-run rendered",
 		"emergency-broadcast-trigger",
 	} {
@@ -775,6 +777,106 @@ func TestTemplateRenderPreviewMissingActionKeyShowsError(t *testing.T) {
 	}
 }
 
+func TestTemplateMatcherPreviewExpectedOutcome(t *testing.T) {
+	mux := setupOperatorServer(t)
+	body := url.Values{
+		"template_id":         {"template-generic-g2s-action"},
+		"message_type":        {"NOTICE"},
+		"raw_payload":         {"<ack>ok</ack>"},
+		"parsed_summary_json": {`{"summary":"dry-run rendered"}`},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/match-preview", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Match Result") || !strings.Contains(res.Body.String(), "EXPECTED") {
+		t.Fatalf("expected matcher expected outcome, body=%s", res.Body.String())
+	}
+}
+
+func TestTemplateMatcherPreviewFailureOutcome(t *testing.T) {
+	mux := setupOperatorServer(t)
+	body := url.Values{
+		"template_id":  {"template-generic-g2s-action"},
+		"message_type": {"NOTICE"},
+		"raw_payload":  {"<ack>error</ack>"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/match-preview", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Match Result") || !strings.Contains(res.Body.String(), "FAILURE") {
+		t.Fatalf("expected matcher failure outcome, body=%s", res.Body.String())
+	}
+}
+
+func TestTemplateMatcherPreviewInvalidJSONShowsError(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if err := st.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{
+		ID:                    "template-generic-g2s-action-v4",
+		TemplateID:            "template-generic-g2s-action",
+		VersionLabel:          "4",
+		ActionsJSON:           `{"actions":{"emergency_broadcast_silence":{"message_type":"NOTICE","payload_template":"<x/>"}}}`,
+		ConfirmationRulesJSON: `{"rules":`,
+	}); err != nil {
+		t.Fatalf("upsert version: %v", err)
+	}
+	if err := st.SetActiveG2STemplateVersion(ctx, "template-generic-g2s-action", 4); err != nil {
+		t.Fatalf("set active version: %v", err)
+	}
+
+	body := url.Values{
+		"template_id": {"template-generic-g2s-action"},
+		"raw_payload": {"<ack>ok</ack>"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/match-preview", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "invalid matcher JSON") {
+		t.Fatalf("expected invalid matcher JSON error, body=%s", res.Body.String())
+	}
+}
+
+func TestTemplateMatcherPreviewDoesNotCreateMessageJournalEntries(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	beforeRows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 200})
+	if err != nil {
+		t.Fatalf("list before messages: %v", err)
+	}
+	body := url.Values{
+		"template_id":         {"template-generic-g2s-action"},
+		"message_type":        {"NOTICE"},
+		"raw_payload":         {"<ack>ok</ack>"},
+		"parsed_summary_json": {`{"summary":"dry-run rendered"}`},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/match-preview", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	afterRows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 200})
+	if err != nil {
+		t.Fatalf("list after messages: %v", err)
+	}
+	if len(afterRows) != len(beforeRows) {
+		t.Fatalf("match preview should not write message journal rows; before=%d after=%d", len(beforeRows), len(afterRows))
+	}
+}
+
 func TestSettingsPageReturnsOKAndRendersIdentity(t *testing.T) {
 	mux := setupOperatorServer(t)
 	res := httptest.NewRecorder()
@@ -1263,10 +1365,12 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 		t.Fatalf("upsert template: %v", err)
 	}
 	if err := st.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{
-		ID:           "template-generic-g2s-action-v1",
-		TemplateID:   "template-generic-g2s-action",
-		VersionLabel: "1",
-		ActionsJSON:  `{"actions":{"emergency_broadcast_silence":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"emergency_broadcast_restore":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"general_broadcast_notice":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"general_broadcast_restore":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"local_notice":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"local_notice_restore":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"regular_operation_notice":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"}}}`,
+		ID:                    "template-generic-g2s-action-v1",
+		TemplateID:            "template-generic-g2s-action",
+		VersionLabel:          "1",
+		ActionsJSON:           `{"actions":{"emergency_broadcast_silence":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"emergency_broadcast_restore":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"general_broadcast_notice":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"general_broadcast_restore":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"local_notice":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"local_notice_restore":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"},"regular_operation_notice":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"}}}`,
+		ConfirmationRulesJSON: `{"rules":[{"id":"message_ok","contains":["dry-run rendered"]}]}`,
+		FailureRulesJSON:      `{"rules":[{"id":"message_error","contains":["error"]}]}`,
 	}); err != nil {
 		t.Fatalf("upsert template version: %v", err)
 	}
