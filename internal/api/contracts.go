@@ -55,12 +55,13 @@ type ActionRunSendPreparedRequest struct {
 }
 
 type ActionRunExecuteRequest struct {
-	Actor         string `json:"actor,omitempty"`
-	MaxTargets    int    `json:"max_targets,omitempty"`
-	DeliveryMode  string `json:"delivery_mode,omitempty"`
-	AllowDelivery bool   `json:"allow_delivery"`
-	CaptureOnly   bool   `json:"capture_only"`
-	TimeoutMS     int    `json:"timeout_ms,omitempty"`
+	Actor            string `json:"actor,omitempty"`
+	MaxTargets       int    `json:"max_targets,omitempty"`
+	DeliveryMode     string `json:"delivery_mode,omitempty"`
+	DeliveryTopology string `json:"delivery_topology,omitempty"`
+	AllowDelivery    bool   `json:"allow_delivery"`
+	CaptureOnly      bool   `json:"capture_only"`
+	TimeoutMS        int    `json:"timeout_ms,omitempty"`
 }
 
 type MessageDeliveryCheckRequest struct {

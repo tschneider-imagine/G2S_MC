@@ -24,6 +24,8 @@ const (
 	MessageResultIgnored       MessageResult = "IGNORED"
 	MessageResultEscalated     MessageResult = "ESCALATED"
 	MessageResultDryRun        MessageResult = "DRY_RUN"
+	MessageResultPrepared      MessageResult = "PREPARED"
+	MessageResultPending       MessageResult = "PENDING_DELIVERY"
 	MessageResultSendBlocked   MessageResult = "SEND_BLOCKED"
 	MessageResultSendAttempted MessageResult = "SEND_ATTEMPTED"
 	MessageResultSendFailed    MessageResult = "SEND_FAILED"
@@ -67,7 +69,7 @@ func (m MessageJournalEntry) Validate() error {
 		return fmt.Errorf("raw_payload is required")
 	}
 	switch m.Result {
-	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun, MessageResultSendBlocked, MessageResultSendAttempted, MessageResultSendFailed, MessageResultSendSucceeded:
+	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun, MessageResultPrepared, MessageResultPending, MessageResultSendBlocked, MessageResultSendAttempted, MessageResultSendFailed, MessageResultSendSucceeded:
 	default:
 		return fmt.Errorf("result is invalid")
 	}

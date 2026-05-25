@@ -267,6 +267,7 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 						Actor:       "g2s-input-monitor",
 						RequestedAt: result.ObservedAt,
 						Delivery:    delivery,
+						Topology:    string(g2stransport.DeliveryTopologyHostListener),
 					})
 					if executeErr != nil {
 						fmt.Printf("action_execution_failed run_id=%s error=%s\n", queueResult.ActionRun.ID, sanitizeOutput(executeErr.Error()))
@@ -458,6 +459,7 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 			Actor:       "g2s-input-monitor",
 			RequestedAt: clearedAt,
 			Delivery:    delivery,
+			Topology:    string(g2stransport.DeliveryTopologyHostListener),
 		})
 		if executeErr != nil {
 			fmt.Printf("action_execution_failed run_id=%s error=%s\n", queueResult.ActionRun.ID, sanitizeOutput(executeErr.Error()))

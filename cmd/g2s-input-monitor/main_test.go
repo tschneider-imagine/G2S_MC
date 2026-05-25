@@ -453,7 +453,7 @@ func TestRunClearLatchExecutesOnlyCurrentProcessQueuedRun(t *testing.T) {
 	}
 }
 
-func TestRunClearLatchExecuteWithDisabledDeliveryRecordsFailureEvidence(t *testing.T) {
+func TestRunClearLatchExecuteHostListenerRecordsPreparedPendingEvidence(t *testing.T) {
 	ctx := context.Background()
 	st := newMonitorStore(t, ctx)
 	defer st.Close()
@@ -475,8 +475,8 @@ func TestRunClearLatchExecuteWithDisabledDeliveryRecordsFailureEvidence(t *testi
 	if len(runs) == 0 {
 		t.Fatal("expected action run")
 	}
-	if runs[0].Status == actions.RunStatusSucceeded {
-		t.Fatalf("unexpected succeeded run with disabled delivery: %+v", runs[0])
+	if runs[0].Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("expected waiting-confirmation status in host listener mode: %+v", runs[0])
 	}
 	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 20, ActionRunID: runs[0].ID})
 	if err != nil {
@@ -485,7 +485,7 @@ func TestRunClearLatchExecuteWithDisabledDeliveryRecordsFailureEvidence(t *testi
 	if len(rows) == 0 {
 		t.Fatal("expected message journal attempt row")
 	}
-	if rows[0].Result != g2sengine.MessageResultSendFailed && rows[0].Result != g2sengine.MessageResultSendBlocked {
+	if rows[0].Result != g2sengine.MessageResultPrepared {
 		t.Fatalf("unexpected message result: %q", rows[0].Result)
 	}
 	auditRows, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 50})
@@ -640,7 +640,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	return <-done
 }
 
-func TestRunClearLatchExecuteUsesConfiguredDeliveryAndCanSucceed(t *testing.T) {
+func TestRunClearLatchExecuteHostListenerDoesNotSendEvenWhenDeliveryConfigured(t *testing.T) {
 	ctx := context.Background()
 	st := newMonitorStore(t, ctx)
 	defer st.Close()
@@ -661,8 +661,8 @@ func TestRunClearLatchExecuteUsesConfiguredDeliveryAndCanSucceed(t *testing.T) {
 	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
-	if sender.calls == 0 {
-		t.Fatal("expected sender calls")
+	if sender.calls != 0 {
+		t.Fatalf("expected zero sender calls in host listener mode, got %d", sender.calls)
 	}
 	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})
 	if err != nil {
@@ -671,8 +671,8 @@ func TestRunClearLatchExecuteUsesConfiguredDeliveryAndCanSucceed(t *testing.T) {
 	if len(runs) == 0 {
 		t.Fatal("expected action run")
 	}
-	if runs[0].Status != actions.RunStatusSucceeded {
-		t.Fatalf("status=%q want SUCCEEDED", runs[0].Status)
+	if runs[0].Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("status=%q want WAITING_CONFIRMATION", runs[0].Status)
 	}
 	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 20, ActionRunID: runs[0].ID})
 	if err != nil {
@@ -681,8 +681,8 @@ func TestRunClearLatchExecuteUsesConfiguredDeliveryAndCanSucceed(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("expected message row")
 	}
-	if rows[0].Result != g2sengine.MessageResultSendSucceeded {
-		t.Fatalf("result=%q want SEND_SUCCEEDED", rows[0].Result)
+	if rows[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("result=%q want PREPARED", rows[0].Result)
 	}
 }
 

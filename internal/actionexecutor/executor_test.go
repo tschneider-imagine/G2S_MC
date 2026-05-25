@@ -229,6 +229,7 @@ func TestExecuteSuccessConfirmsTargetAndRunSucceeded(t *testing.T) {
 		ActionRunID: "run-1",
 		Actor:       "operator",
 		Delivery:    enabledDeliverySettings(),
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -271,6 +272,7 @@ func TestExecuteFailureMatcherMarksRunFailed(t *testing.T) {
 		ActionRunID: "run-1",
 		Actor:       "operator",
 		Delivery:    enabledDeliverySettings(),
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -311,6 +313,7 @@ func TestExecuteDeliveryFailureRetriesAndCreatesEvidence(t *testing.T) {
 	result, err := executor.Execute(context.Background(), ExecuteRequest{
 		ActionRunID: "run-1",
 		Delivery:    enabledDeliverySettings(),
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -379,6 +382,7 @@ func TestExecuteQueuesEscalationAfterFailure(t *testing.T) {
 		ActionRunID: "run-1",
 		Actor:       "operator",
 		Delivery:    enabledDeliverySettings(),
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -403,7 +407,10 @@ func TestExecuteNoSenderFailsWithoutPretendingSuccess(t *testing.T) {
 		Sleep: func(time.Duration) {},
 	}
 
-	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-1"})
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -412,6 +419,110 @@ func TestExecuteNoSenderFailsWithoutPretendingSuccess(t *testing.T) {
 	}
 	if len(result.Attempts) == 0 || !strings.Contains(strings.ToLower(result.Attempts[0].Error), "sender") {
 		t.Fatalf("expected sender configuration error in attempts: %+v", result.Attempts)
+	}
+}
+
+func TestExecuteHostListenerWithoutEndpointPreparesPendingAndDoesNotSend(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	record := st.egmsByID["EGM-001"]
+	record.EndpointPath = ""
+	st.egmsByID["EGM-001"] = record
+
+	sendCalls := 0
+	executor := Executor{
+		Store: st,
+		Sender: &fakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
+			sendCalls++
+			return g2stransport.SendResult{
+				MessageID:     req.MessageID,
+				EGMID:         req.EGMID,
+				TransportMode: req.TransportMode,
+				Sent:          true,
+				CompletedAt:   now,
+			}, nil
+		}},
+		Clock: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	}
+
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Topology:    string(g2stransport.DeliveryTopologyHostListener),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if sendCalls != 0 {
+		t.Fatalf("sender must not be called in host listener mode, calls=%d", sendCalls)
+	}
+	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
+	}
+	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusPending {
+		t.Fatalf("unexpected target rows: %+v", result.TargetResults)
+	}
+	if len(st.messages) != 1 || st.messages[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("expected prepared message journal row: %+v", st.messages)
+	}
+	if len(result.Attempts) == 0 || result.Attempts[0].DeliveryResult != string(g2sengine.MessageResultPrepared) {
+		t.Fatalf("expected prepared attempt summary: %+v", result.Attempts)
+	}
+	foundPreparedAudit := false
+	for _, row := range st.audits {
+		if row.EventType == audit.EventTypeMessagePrepared {
+			foundPreparedAudit = true
+			break
+		}
+	}
+	if !foundPreparedAudit {
+		t.Fatalf("expected %s audit entry", audit.EventTypeMessagePrepared)
+	}
+}
+
+func TestExecuteHostListenerMissingEndpointDoesNotQueueEscalation(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	record := st.egmsByID["EGM-001"]
+	record.EndpointPath = ""
+	st.egmsByID["EGM-001"] = record
+
+	def := st.defs["action-1"]
+	def.EscalationJSON = `{"escalation_action_id":"action-escalate","after_attempts":1}`
+	st.defs["action-1"] = def
+	st.defs["action-escalate"] = actions.ActionDefinition{
+		ID:               "action-escalate",
+		Name:             "Escalation Action",
+		Severity:         actions.SeverityEmergency,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-escalate",
+			Name:              "Escalate",
+			Sequence:          0,
+			TemplateActionKey: "emergency_broadcast_silence",
+		}},
+		Version: 1,
+	}
+
+	executor := Executor{
+		Store: st,
+		Clock: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	}
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Topology:    string(g2stransport.DeliveryTopologyHostListener),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
+	}
+	if result.EscalationRun != nil {
+		t.Fatalf("did not expect escalation run: %+v", result.EscalationRun)
 	}
 }
 
@@ -443,7 +554,10 @@ func TestExecuteDefaultDeliverySettingsDoNotSilentlySend(t *testing.T) {
 		Sleep: func(time.Duration) {},
 	}
 
-	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-1"})
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -486,6 +600,7 @@ func TestExecuteUsesConfiguredDeliverySettings(t *testing.T) {
 	_, err := executor.Execute(context.Background(), ExecuteRequest{
 		ActionRunID: "run-1",
 		Delivery:    settings,
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -517,6 +632,7 @@ func TestExecuteDoesNotUseFallbackEndpointWhenSchemeDefaultsMissing(t *testing.T
 	result, err := executor.Execute(context.Background(), ExecuteRequest{
 		ActionRunID: "run-1",
 		Delivery:    enabledDeliverySettings(),
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -561,6 +677,7 @@ func TestExecuteAppliesTemplateEndpointQuirks(t *testing.T) {
 	_, err := executor.Execute(context.Background(), ExecuteRequest{
 		ActionRunID: "run-1",
 		Delivery:    enabledDeliverySettings(),
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -631,12 +748,69 @@ func TestExecuteRestoreActionUsesSamePath(t *testing.T) {
 	result, err := executor.Execute(context.Background(), ExecuteRequest{
 		ActionRunID: "run-restore",
 		Delivery:    enabledDeliverySettings(),
+		Topology:    string(g2stransport.DeliveryTopologyOutboundEndpoint),
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	if result.ActionRun.Status != actions.RunStatusSucceeded {
 		t.Fatalf("restore run status=%q, want %q", result.ActionRun.Status, actions.RunStatusSucceeded)
+	}
+}
+
+func TestExecuteRestoreActionUsesHostListenerPendingPath(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	restoreRun := actions.ActionRun{
+		ID:                 "run-restore-host",
+		ActionDefinitionID: "action-restore-host",
+		StartedAt:          now,
+		Status:             actions.RunStatusPending,
+		TargetCount:        1,
+	}
+	st.runs[restoreRun.ID] = restoreRun
+	st.targetRows[restoreRun.ID] = []actions.ActionTargetResult{{
+		ID:          3,
+		ActionRunID: restoreRun.ID,
+		TargetEGMID: "EGM-001",
+		Status:      actions.TargetStatusPending,
+	}}
+	st.defs[restoreRun.ActionDefinitionID] = actions.ActionDefinition{
+		ID:               restoreRun.ActionDefinitionID,
+		Name:             "Emergency Broadcast Restore",
+		Severity:         actions.SeverityRestore,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "restore-step",
+			Name:              "Restore",
+			Sequence:          0,
+			TemplateActionKey: "emergency_broadcast_restore",
+		}},
+		Version: 1,
+	}
+	record := st.egmsByID["EGM-001"]
+	record.EndpointPath = ""
+	st.egmsByID["EGM-001"] = record
+
+	executor := Executor{
+		Store: st,
+		Clock: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	}
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: restoreRun.ID,
+		Topology:    string(g2stransport.DeliveryTopologyHostListener),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("restore run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
+	}
+	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusPending {
+		t.Fatalf("unexpected restore target rows: %+v", result.TargetResults)
 	}
 }
 

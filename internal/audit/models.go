@@ -25,6 +25,7 @@ const (
 	EventTypeMessageSendAttempted     = "MESSAGE_SEND_ATTEMPTED"
 	EventTypeMessageSendSucceeded     = "MESSAGE_SEND_SUCCEEDED"
 	EventTypeMessageSendFailed        = "MESSAGE_SEND_FAILED"
+	EventTypeMessagePrepared          = "MESSAGE_PREPARED"
 	EventTypeActionStarted            = "ACTION_STARTED"
 	EventTypeActionStep               = "ACTION_STEP"
 	EventTypeMessageSent              = "MESSAGE_SENT"

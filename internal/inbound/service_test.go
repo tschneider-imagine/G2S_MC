@@ -242,6 +242,60 @@ func TestInboundFailureMatcherMarksTargetFailed(t *testing.T) {
 	}
 }
 
+func TestInboundExpectedMatcherConfirmsWaitingTarget(t *testing.T) {
+	store := newInboundStoreFixture()
+	run := store.runs["run-1"]
+	run.Status = actions.RunStatusWaitingConfirmation
+	store.runs["run-1"] = run
+	// make this a single-target completion case for deterministic status assertion
+	store.targets["run-1"] = []actions.ActionTargetResult{
+		{ID: 1, ActionRunID: "run-1", TargetEGMID: "EGM-001", Status: actions.TargetStatusPending},
+	}
+	svc := &Service{Store: store, Clock: fixedClock()}
+
+	result, err := svc.Process(context.Background(), InboundMessage{
+		RawPayload:  `<ack status="accepted"/>`,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		MessageType: "ACK",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !result.TargetUpdated || result.TargetStatus != string(actions.TargetStatusConfirmed) {
+		t.Fatalf("expected confirmed target update, got %+v", result)
+	}
+	updatedRun := store.runs["run-1"]
+	if updatedRun.Status != actions.RunStatusSucceeded {
+		t.Fatalf("run status=%q want SUCCEEDED", updatedRun.Status)
+	}
+}
+
+func TestInboundFailureMatcherFailsWaitingTarget(t *testing.T) {
+	store := newInboundStoreFixture()
+	run := store.runs["run-1"]
+	run.Status = actions.RunStatusWaitingConfirmation
+	store.runs["run-1"] = run
+	svc := &Service{Store: store, Clock: fixedClock()}
+
+	result, err := svc.Process(context.Background(), InboundMessage{
+		RawPayload:  `<ack status="rejected"/>`,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		MessageType: "ACK",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !result.TargetUpdated || result.TargetStatus != string(actions.TargetStatusFailed) {
+		t.Fatalf("expected failed target update, got %+v", result)
+	}
+	updatedRun := store.runs["run-1"]
+	if updatedRun.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q want FAILED", updatedRun.Status)
+	}
+}
+
 func TestInboundNoMatchLeavesTargetUnchanged(t *testing.T) {
 	store := newInboundStoreFixture()
 	svc := &Service{Store: store, Clock: fixedClock()}

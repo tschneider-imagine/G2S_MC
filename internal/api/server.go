@@ -268,6 +268,10 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		delivery = delivery.Normalize()
+		topology := strings.TrimSpace(s.DeliveryTopology)
+		if override := strings.TrimSpace(req.DeliveryTopology); override != "" {
+			topology = override
+		}
 
 		executor := actionexecutor.Executor{
 			Store:            s.Store,
@@ -279,6 +283,7 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 			Actor:       strings.TrimSpace(req.Actor),
 			MaxTargets:  req.MaxTargets,
 			Delivery:    delivery,
+			Topology:    topology,
 		})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {

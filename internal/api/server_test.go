@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
+	"github.com/tschneider-imagine/G2S_MC/internal/actionexecutor"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
@@ -920,7 +921,7 @@ func TestPostActionRunExecuteExecutesSpecifiedRunOnly(t *testing.T) {
 	}
 }
 
-func TestPostActionRunExecuteWithoutDeliverySettingsDoesNotSilentlySend(t *testing.T) {
+func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsPreparesAndWaits(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
@@ -932,21 +933,14 @@ func TestPostActionRunExecuteWithoutDeliverySettingsDoesNotSilentlySend(t *testi
 	server := &Server{
 		Store:             db,
 		AuthorizeMutation: allowMutation,
+		DeliveryTopology:  string(g2stransport.DeliveryTopologyHostListener),
 		ActionSender: &apiFakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
 			sendCalls++
-			if req.AllowRealSend {
-				t.Fatalf("allow_real_send should be false by default")
-			}
-			if req.TransportMode != g2stransport.ModeDisabled {
-				t.Fatalf("transport mode should be disabled by default, got %q", req.TransportMode)
-			}
 			return g2stransport.SendResult{
 				MessageID:     req.MessageID,
 				EGMID:         req.EGMID,
 				TransportMode: req.TransportMode,
-				Blocked:       true,
-				Sent:          false,
-				Error:         "send blocked: allow_real_send is false",
+				Sent:          true,
 				CompletedAt:   time.Now().UTC(),
 			}, nil
 		}},
@@ -959,15 +953,22 @@ func TestPostActionRunExecuteWithoutDeliverySettingsDoesNotSilentlySend(t *testi
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
 	}
-	if sendCalls == 0 {
-		t.Fatal("expected sender to be called")
+	if sendCalls != 0 {
+		t.Fatalf("sender must not be called in host listener mode, got %d calls", sendCalls)
 	}
 	run, err := db.GetActionRun(ctx, "run-1")
 	if err != nil {
 		t.Fatalf("get run-1: %v", err)
 	}
-	if run == nil || run.Status == actions.RunStatusSucceeded {
-		t.Fatalf("run should not succeed without delivery settings, got %+v", run)
+	if run == nil || run.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run should wait for inbound confirmation in host listener mode, got %+v", run)
+	}
+	messages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 50, ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("list message journal: %v", err)
+	}
+	if len(messages) == 0 || messages[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("expected prepared message entry, got %+v", messages)
 	}
 }
 
@@ -1013,7 +1014,7 @@ func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
 	}
 	server.RegisterRoutes(mux)
 
-	body := `{"actor":"tester","delivery_mode":"HTTP","allow_delivery":true,"capture_only":false,"timeout_ms":5000}`
+	body := `{"actor":"tester","delivery_mode":"HTTP","delivery_topology":"OUTBOUND_ENDPOINT","allow_delivery":true,"capture_only":false,"timeout_ms":5000}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(body)))
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
@@ -1029,6 +1030,87 @@ func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
 	}
 	if run == nil || run.Status != actions.RunStatusSucceeded {
 		t.Fatalf("run should succeed with expected matcher confirmation, got %+v", run)
+	}
+}
+
+func TestPostActionRunExecuteHostListenerWithoutEndpointReturnsWaiting(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	egmRow, err := db.GetEGMRecord(ctx, "EGM-1")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	egmRow.EndpointPath = ""
+	if err := db.UpsertEGMRecord(ctx, *egmRow); err != nil {
+		t.Fatalf("upsert egm: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		DeliveryTopology:  string(g2stransport.DeliveryTopologyHostListener),
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var payload actionexecutor.ExecuteResult
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode execute result: %v", err)
+	}
+	if payload.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q, want WAITING_CONFIRMATION", payload.ActionRun.Status)
+	}
+}
+
+func TestPostActionRunExecuteOutboundWithoutEndpointReturnsError(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	egmRow, err := db.GetEGMRecord(ctx, "EGM-1")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	egmRow.EndpointPath = ""
+	if err := db.UpsertEGMRecord(ctx, *egmRow); err != nil {
+		t.Fatalf("upsert egm: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		DeliveryTopology:  string(g2stransport.DeliveryTopologyOutboundEndpoint),
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var payload actionexecutor.ExecuteResult
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode execute result: %v", err)
+	}
+	if payload.ActionRun.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q, want FAILED", payload.ActionRun.Status)
+	}
+	if len(payload.TargetResults) == 0 || !strings.Contains(strings.ToLower(payload.TargetResults[0].LastError), "missing endpoint") {
+		t.Fatalf("expected missing endpoint target failure, got %+v", payload.TargetResults)
 	}
 }
 

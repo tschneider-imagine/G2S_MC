@@ -18,6 +18,7 @@ type ExecuteRequest struct {
 	RequestedAt time.Time
 	MaxTargets  int
 	Delivery    g2stransport.DeliverySettings
+	Topology    string
 }
 
 type ExecutionAttemptSummary struct {

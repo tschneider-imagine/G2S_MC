@@ -38,6 +38,10 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 		now = e.now()
 	}
 	delivery := request.Delivery.Normalize()
+	topology, topologyOK := g2stransport.NormalizeDeliveryTopology(request.Topology)
+	if !topologyOK {
+		return ExecuteResult{}, fmt.Errorf("invalid delivery topology %q", strings.TrimSpace(request.Topology))
+	}
 
 	run, err := e.Store.GetActionRun(ctx, runID)
 	if err != nil {
@@ -80,15 +84,16 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 
 	auditIDs := make([]int64, 0, 8)
 	startAuditID, err := e.recordAudit(ctx, now, mapAuditSeverity(definition.Severity), audit.EventTypeActionStarted, fmt.Sprintf("Action run %s started", run.ID), map[string]any{
-		"action_run_id":    run.ID,
-		"action_id":        definition.ID,
-		"target_count":     len(targetRows),
-		"retry_count":      retryPolicy.Count,
-		"retry_delay":      retryPolicy.DelayMS,
-		"delivery_mode":    delivery.Mode,
-		"allow_delivery":   delivery.AllowDelivery,
-		"capture_only":     delivery.CaptureOnly,
-		"delivery_timeout": delivery.TimeoutMS,
+		"action_run_id":     run.ID,
+		"action_id":         definition.ID,
+		"target_count":      len(targetRows),
+		"retry_count":       retryPolicy.Count,
+		"retry_delay":       retryPolicy.DelayMS,
+		"delivery_mode":     delivery.Mode,
+		"delivery_topology": topology,
+		"allow_delivery":    delivery.AllowDelivery,
+		"capture_only":      delivery.CaptureOnly,
+		"delivery_timeout":  delivery.TimeoutMS,
 	}, run.ID, strings.TrimSpace(request.Actor), 0)
 	if err != nil {
 		return ExecuteResult{}, err
@@ -99,6 +104,7 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 	warnings := []string{}
 	totalConfirmed := 0
 	totalFailed := 0
+	totalWaiting := 0
 	maxAttemptsUsed := 0
 
 	for i := range targetRows {
@@ -167,6 +173,126 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 			targetRows[i] = target
 			totalFailed++
 			warnings = append(warnings, target.LastError)
+			continue
+		}
+		if topology == g2stransport.DeliveryTopologyHostListener {
+			waitingReason := "Awaiting inbound confirmation from EGM"
+			targetFailed := false
+			lastErr := ""
+			for _, step := range definition.Steps {
+				stepNow := e.now()
+				rendered, renderErr := g2sengine.RenderActionMessage(templateDoc, g2sengine.RenderRequest{
+					TemplateID:        templateID,
+					TemplateVersion:   parseTemplateVersionInt(activeVersion.VersionLabel),
+					TemplateActionKey: step.TemplateActionKey,
+					ActionID:          definition.ID,
+					ActionRunID:       run.ID,
+					ActionStepID:      step.ID,
+					EGMID:             target.TargetEGMID,
+					HostID:            strings.TrimSpace(request.Actor),
+					Timestamp:         stepNow,
+					IPAddress:         strings.TrimSpace(egmRecord.IPAddress),
+					EndpointPath:      strings.TrimSpace(egmRecord.EndpointPath),
+				})
+				if renderErr != nil {
+					lastErr = fmt.Sprintf("render failed: %v", renderErr)
+					targetFailed = true
+					attemptSummaries = append(attemptSummaries, ExecutionAttemptSummary{
+						EGMID:           target.TargetEGMID,
+						ActionStepID:    step.ID,
+						TemplateID:      templateID,
+						TemplateVersion: activeVersion.VersionLabel,
+						Attempt:         1,
+						DeliveryResult:  string(g2sengine.MessageResultFailed),
+						MatchOutcome:    string(g2sengine.MatchOutcomeNoMatch),
+						Error:           lastErr,
+					})
+					_, _ = e.recordAudit(ctx, stepNow, audit.AuditSeverityWarning, audit.EventTypeActionStep, fmt.Sprintf("Render failed for %s step %s", target.TargetEGMID, step.ID), map[string]any{
+						"action_run_id": run.ID,
+						"egm_id":        target.TargetEGMID,
+						"template_id":   templateID,
+						"step_id":       step.ID,
+						"error":         lastErr,
+					}, run.ID, strings.TrimSpace(request.Actor), 0)
+					break
+				}
+
+				summaryJSON, marshalErr := json.Marshal(map[string]any{
+					"action_id":           definition.ID,
+					"action_run_id":       run.ID,
+					"egm_id":              target.TargetEGMID,
+					"step_id":             step.ID,
+					"template_id":         templateID,
+					"template_version":    activeVersion.VersionLabel,
+					"template_action_key": step.TemplateActionKey,
+					"message_type":        rendered.MessageType,
+				})
+				if marshalErr != nil {
+					return ExecuteResult{}, fmt.Errorf("marshal message summary: %w", marshalErr)
+				}
+
+				messageID, recordErr := e.Store.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+					Timestamp:         stepNow,
+					Direction:         g2sengine.DirectionOutbound,
+					EGMID:             target.TargetEGMID,
+					ActionRunID:       run.ID,
+					ActionStepID:      step.ID,
+					InputTransitionID: run.InputTransitionID,
+					TemplateID:        templateID,
+					TemplateVersion:   activeVersion.VersionLabel,
+					MessageType:       rendered.MessageType,
+					RawPayload:        rendered.RawPayload,
+					ParsedSummaryJSON: string(summaryJSON),
+					Result:            g2sengine.MessageResultPrepared,
+				})
+				if recordErr != nil {
+					return ExecuteResult{}, recordErr
+				}
+
+				attemptSummaries = append(attemptSummaries, ExecutionAttemptSummary{
+					EGMID:           target.TargetEGMID,
+					ActionStepID:    step.ID,
+					TemplateID:      templateID,
+					TemplateVersion: activeVersion.VersionLabel,
+					MessageID:       messageID,
+					Attempt:         1,
+					DeliveryResult:  string(g2sengine.MessageResultPrepared),
+					MatchOutcome:    string(g2sengine.MatchOutcomeNoMatch),
+					Error:           waitingReason,
+				})
+
+				preparedAuditID, auditErr := e.recordAudit(ctx, stepNow, mapAuditSeverity(definition.Severity), audit.EventTypeMessagePrepared, fmt.Sprintf("Message prepared for host listener delivery to %s step %s", target.TargetEGMID, step.ID), map[string]any{
+					"action_run_id":    run.ID,
+					"egm_id":           target.TargetEGMID,
+					"template_id":      templateID,
+					"template_version": activeVersion.VersionLabel,
+					"step_id":          step.ID,
+					"delivery_result":  g2sengine.MessageResultPrepared,
+					"reason":           waitingReason,
+				}, run.ID, strings.TrimSpace(request.Actor), messageID)
+				if auditErr != nil {
+					return ExecuteResult{}, auditErr
+				}
+				auditIDs = append(auditIDs, preparedAuditID)
+			}
+
+			target.AttemptCount++
+			lastResultAt := e.now()
+			target.LastResultAt = &lastResultAt
+			if targetFailed {
+				target.Status = actions.TargetStatusFailed
+				target.LastError = lastErr
+				totalFailed++
+				warnings = append(warnings, lastErr)
+			} else {
+				target.Status = actions.TargetStatusPending
+				target.LastError = waitingReason
+				totalWaiting++
+			}
+			if err := e.Store.UpdateActionTargetResult(ctx, target); err != nil {
+				return ExecuteResult{}, err
+			}
+			targetRows[i] = target
 			continue
 		}
 
@@ -476,7 +602,10 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 	run.FailedCount = totalFailed
 	run.TargetCount = len(targetRows)
 	statusText := "completed"
-	if totalFailed == 0 && len(targetRows) > 0 {
+	if totalFailed == 0 && totalWaiting > 0 {
+		run.Status = actions.RunStatusWaitingConfirmation
+		statusText = string(actions.RunStatusWaitingConfirmation)
+	} else if totalFailed == 0 && len(targetRows) > 0 {
 		run.Status = actions.RunStatusSucceeded
 		statusText = string(actions.RunStatusSucceeded)
 	} else {
@@ -519,7 +648,11 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 	}
 
 	completedAt := e.now()
-	run.CompletedAt = &completedAt
+	if run.Status == actions.RunStatusWaitingConfirmation {
+		run.CompletedAt = nil
+	} else {
+		run.CompletedAt = &completedAt
+	}
 	if err := e.Store.UpdateActionRun(ctx, *run); err != nil {
 		return ExecuteResult{}, err
 	}

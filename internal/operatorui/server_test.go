@@ -897,6 +897,36 @@ func TestCommsPageRendersInboundRow(t *testing.T) {
 	}
 }
 
+func TestCommsPageRendersPreparedMessageResult(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:         time.Now().UTC(),
+		Direction:         g2sengine.DirectionOutbound,
+		EGMID:             "EGM-001",
+		ActionRunID:       "run-1",
+		ActionStepID:      "step-1",
+		TemplateID:        "template-generic-g2s-action",
+		TemplateVersion:   "1",
+		MessageType:       "emergency_broadcast_silence",
+		RawPayload:        `<prepared/>`,
+		ParsedSummaryJSON: `{"reason":"Awaiting inbound confirmation from EGM"}`,
+		Result:            g2sengine.MessageResultPrepared,
+	}); err != nil {
+		t.Fatalf("seed prepared row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "PREPARED") {
+		t.Fatalf("expected PREPARED in /operator/comms, body=%s", res.Body.String())
+	}
+}
+
 func TestAuditPageRendersInboundAuditRows(t *testing.T) {
 	mux, st := setupOperatorServerWithStore(t)
 	ctx := context.Background()
@@ -922,6 +952,62 @@ func TestAuditPageRendersInboundAuditRows(t *testing.T) {
 	for _, expected := range []string{"MESSAGE_RECEIVED", "Inbound message received"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in /operator/audit", expected)
+		}
+	}
+}
+
+func TestAuditPageRendersPreparedDeliveryAuditRows(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
+		OccurredAt:  time.Now().UTC(),
+		Severity:    audit.AuditSeverityInfo,
+		EventType:   audit.EventTypeMessagePrepared,
+		Summary:     "Message prepared for host listener delivery",
+		ActionRunID: "run-1",
+		Operator:    "operator",
+	}); err != nil {
+		t.Fatalf("seed prepared audit row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"MESSAGE_PREPARED", "Message prepared for host listener delivery"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/audit", expected)
+		}
+	}
+}
+
+func TestOperatorLiveRendersWaitingConfirmationAction(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := st.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-waiting-confirm",
+		ActionDefinitionID: "emergency-broadcast-trigger",
+		StartedAt:          now,
+		Status:             actions.RunStatusWaitingConfirmation,
+		TargetCount:        1,
+	}); err != nil {
+		t.Fatalf("create waiting run: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"run-waiting-confirm", "WAITING_CONFIRMATION"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator live page", expected)
 		}
 	}
 }

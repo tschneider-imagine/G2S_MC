@@ -235,6 +235,7 @@ func (r *Runtime) runOnce(ctx context.Context, options RuntimeOptions) error {
 			Actor:       options.Actor,
 			RequestedAt: result.ObservedAt,
 			Delivery:    options.DeliverySettings,
+			Topology:    string(g2stransport.DeliveryTopologyHostListener),
 		})
 		if executeErr != nil {
 			r.logf("action_execution_failed run_id=%s error=%s", runID, executeErr.Error())
