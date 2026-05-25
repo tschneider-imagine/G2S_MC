@@ -1,4 +1,4 @@
-package fieldtestui
+package operatorui
 
 import (
 	"context"
@@ -46,31 +46,31 @@ type ReadinessReport struct {
 	Sections    []ReadinessSection `json:"sections"`
 }
 
-type FieldTestInputSnapshot struct {
+type OperatorInputSnapshot struct {
 	Channel      inputs.InputChannel             `json:"channel"`
 	RuntimeState *inputruntime.InputRuntimeState `json:"runtime_state,omitempty"`
 }
 
-type FieldTestTemplateSnapshot struct {
+type OperatorTemplateSnapshot struct {
 	Template      templates.G2STemplate          `json:"template"`
 	ActiveVersion *templates.G2STemplateVersion  `json:"active_version,omitempty"`
 	Versions      []templates.G2STemplateVersion `json:"versions"`
 }
 
-type FieldTestActionPreview struct {
+type OperatorActionPreview struct {
 	ActionID string                    `json:"action_id"`
 	Plan     *actionplanner.ActionPlan `json:"plan,omitempty"`
 	Error    string                    `json:"error,omitempty"`
 }
 
-type FieldTestExportPackage struct {
+type OperatorExportPackage struct {
 	GeneratedAt     time.Time                       `json:"generated_at"`
 	SafetyGate      map[string]any                  `json:"safety_gate"`
-	Inputs          []FieldTestInputSnapshot        `json:"inputs"`
+	Inputs          []OperatorInputSnapshot         `json:"inputs"`
 	Actions         []actions.ActionDefinition      `json:"actions"`
-	ActionPreviews  []FieldTestActionPreview        `json:"action_previews"`
+	ActionPreviews  []OperatorActionPreview         `json:"action_previews"`
 	EGMs            []egms.EGMRecord                `json:"egms"`
-	Templates       []FieldTestTemplateSnapshot     `json:"templates"`
+	Templates       []OperatorTemplateSnapshot      `json:"templates"`
 	MessageJournal  []g2sengine.MessageJournalEntry `json:"message_journal"`
 	AuditTimeline   []audit.AuditTimelineEntry      `json:"audit_timeline"`
 	CertificateMeta []model.CertificateInventory    `json:"certificate_inventory"`
@@ -89,14 +89,14 @@ func (s *Server) buildReadinessReport(ctx context.Context) (ReadinessReport, err
 		return report, err
 	}
 	channelByID := map[string]inputs.InputChannel{}
-	inputSnapshots := []FieldTestInputSnapshot{}
+	inputSnapshots := []OperatorInputSnapshot{}
 	for _, channel := range channels {
 		channelByID[channel.ID] = channel
 		runtimeState, runtimeErr := s.Store.GetInputRuntimeState(ctx, channel.ID)
 		if runtimeErr != nil {
 			return report, runtimeErr
 		}
-		inputSnapshots = append(inputSnapshots, FieldTestInputSnapshot{Channel: channel, RuntimeState: runtimeState})
+		inputSnapshots = append(inputSnapshots, OperatorInputSnapshot{Channel: channel, RuntimeState: runtimeState})
 	}
 
 	definitions, err := s.Store.ListActionDefinitions(ctx)
@@ -151,7 +151,7 @@ func (s *Server) buildReadinessReport(ctx context.Context) (ReadinessReport, err
 	return report, nil
 }
 
-func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.InputChannel, snapshots []FieldTestInputSnapshot) ReadinessSection {
+func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.InputChannel, snapshots []OperatorInputSnapshot) ReadinessSection {
 	checks := []ReadinessCheck{}
 	required := []string{"regular-operation", "general-broadcast", "emergency-broadcast", "local-notice"}
 	missing := []string{}
@@ -164,14 +164,14 @@ func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.Input
 		checks = append(checks, ReadinessCheck{
 			Status:  ReadinessFail,
 			Code:    "INPUT_REQUIRED_CHANNELS",
-			Summary: "Required field-test input channels are missing",
+			Summary: "Required operator input channels are missing",
 			Detail:  strings.Join(missing, ", "),
 		})
 	} else {
 		checks = append(checks, ReadinessCheck{
 			Status:  ReadinessPass,
 			Code:    "INPUT_REQUIRED_CHANNELS",
-			Summary: "All required field-test input channels are present",
+			Summary: "All required operator input channels are present",
 			Detail:  strings.Join(required, ", "),
 		})
 	}
@@ -180,14 +180,14 @@ func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.Input
 		checks = append(checks, ReadinessCheck{
 			Status:  ReadinessWarn,
 			Code:    "INPUT_CHANNEL_COUNT",
-			Summary: "Input channel count differs from expected field-test set of 4",
+			Summary: "Input channel count differs from expected operator set of 4",
 			Detail:  fmt.Sprintf("configured=%d", len(channelByID)),
 		})
 	} else {
 		checks = append(checks, ReadinessCheck{
 			Status:  ReadinessPass,
 			Code:    "INPUT_CHANNEL_COUNT",
-			Summary: "Input channel count matches expected field-test set",
+			Summary: "Input channel count matches expected operator set",
 			Detail:  "configured=4",
 		})
 	}
@@ -238,7 +238,7 @@ func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.Input
 		checks = append(checks, ReadinessCheck{
 			Status:  ReadinessWarn,
 			Code:    "INPUT_BINDING_COMPLETENESS",
-			Summary: "One or more input channels have incomplete field-test configuration",
+			Summary: "One or more input channels have incomplete operator configuration",
 			Detail:  strings.Join(misconfigured, " | "),
 		})
 	} else {
@@ -313,7 +313,7 @@ func (s *Server) buildActionsReadinessSection(channels []inputs.InputChannel, de
 		checks = append(checks, ReadinessCheck{
 			Status:  ReadinessWarn,
 			Code:    "ACTION_FIELD_COMPLETENESS",
-			Summary: "One or more action definitions are incomplete for field-test review",
+			Summary: "One or more action definitions are incomplete for operator review",
 			Detail:  strings.Join(incomplete, " | "),
 		})
 	} else {
@@ -646,18 +646,18 @@ func summarizeCertStatuses(certs []model.CertificateInventory) string {
 	return strings.Join(parts, ", ")
 }
 
-func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport) (FieldTestExportPackage, error) {
+func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport) (OperatorExportPackage, error) {
 	channels, err := s.Store.ListInputChannels(ctx)
 	if err != nil {
-		return FieldTestExportPackage{}, err
+		return OperatorExportPackage{}, err
 	}
-	inputSnapshots := make([]FieldTestInputSnapshot, 0, len(channels))
+	inputSnapshots := make([]OperatorInputSnapshot, 0, len(channels))
 	for _, channel := range channels {
 		runtimeState, runtimeErr := s.Store.GetInputRuntimeState(ctx, channel.ID)
 		if runtimeErr != nil {
-			return FieldTestExportPackage{}, runtimeErr
+			return OperatorExportPackage{}, runtimeErr
 		}
-		inputSnapshots = append(inputSnapshots, FieldTestInputSnapshot{
+		inputSnapshots = append(inputSnapshots, OperatorInputSnapshot{
 			Channel:      channel,
 			RuntimeState: runtimeState,
 		})
@@ -665,13 +665,13 @@ func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport)
 
 	definitions, err := s.Store.ListActionDefinitions(ctx)
 	if err != nil {
-		return FieldTestExportPackage{}, err
+		return OperatorExportPackage{}, err
 	}
-	previews := make([]FieldTestActionPreview, 0, len(definitions))
+	previews := make([]OperatorActionPreview, 0, len(definitions))
 	planner := actionplanner.Planner{Store: s.Store}
 	for _, definition := range definitions {
 		plan, planErr := planner.BuildPlanForDefinition(ctx, definition)
-		preview := FieldTestActionPreview{ActionID: definition.ID}
+		preview := OperatorActionPreview{ActionID: definition.ID}
 		if planErr != nil {
 			preview.Error = planErr.Error()
 		} else {
@@ -682,24 +682,24 @@ func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport)
 
 	records, err := s.Store.ListEGMRecords(ctx)
 	if err != nil {
-		return FieldTestExportPackage{}, err
+		return OperatorExportPackage{}, err
 	}
 
 	templateRows, err := s.Store.ListG2STemplates(ctx)
 	if err != nil {
-		return FieldTestExportPackage{}, err
+		return OperatorExportPackage{}, err
 	}
-	templateSnapshots := make([]FieldTestTemplateSnapshot, 0, len(templateRows))
+	templateSnapshots := make([]OperatorTemplateSnapshot, 0, len(templateRows))
 	for _, tpl := range templateRows {
 		activeVersion, activeErr := s.Store.GetActiveG2STemplateVersion(ctx, tpl.ID)
 		if activeErr != nil {
-			return FieldTestExportPackage{}, activeErr
+			return OperatorExportPackage{}, activeErr
 		}
 		versions, versionsErr := s.Store.ListG2STemplateVersions(ctx, tpl.ID)
 		if versionsErr != nil {
-			return FieldTestExportPackage{}, versionsErr
+			return OperatorExportPackage{}, versionsErr
 		}
-		templateSnapshots = append(templateSnapshots, FieldTestTemplateSnapshot{
+		templateSnapshots = append(templateSnapshots, OperatorTemplateSnapshot{
 			Template:      tpl,
 			ActiveVersion: activeVersion,
 			Versions:      versions,
@@ -708,18 +708,18 @@ func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport)
 
 	messageRows, err := s.Store.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 500})
 	if err != nil {
-		return FieldTestExportPackage{}, err
+		return OperatorExportPackage{}, err
 	}
 	auditRows, err := s.Store.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 500})
 	if err != nil {
-		return FieldTestExportPackage{}, err
+		return OperatorExportPackage{}, err
 	}
 	certRows, err := s.Store.ListCertificateInventory(ctx)
 	if err != nil {
-		return FieldTestExportPackage{}, err
+		return OperatorExportPackage{}, err
 	}
 
-	exportPkg := FieldTestExportPackage{
+	exportPkg := OperatorExportPackage{
 		GeneratedAt:     time.Now().UTC(),
 		SafetyGate:      map[string]any{},
 		Inputs:          inputSnapshots,
@@ -735,7 +735,7 @@ func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport)
 	exportPkg.SafetyGate["real_send_default"] = "gated"
 	exportPkg.SafetyGate["transport_gate"] = s.Options.TransportGateSummary
 	exportPkg.SafetyGate["capture_policy"] = s.Options.CapturePolicySummary
-	exportPkg.SafetyGate["phase_send_policy"] = "no real EGM send approved from field-test UI"
+	exportPkg.SafetyGate["phase_send_policy"] = "no real EGM send approved from operator UI"
 	exportPkg.SafetyGate["bind_address"] = s.Options.BindAddress
 	exportPkg.SafetyGate["database_path"] = s.Options.DatabasePath
 	return exportPkg, nil

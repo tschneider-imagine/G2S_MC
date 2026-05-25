@@ -1,4 +1,4 @@
-package fieldtestui
+package operatorui
 
 import (
 	"context"
@@ -25,16 +25,16 @@ type seedOptions struct {
 	missingEGMTemplate   bool
 }
 
-func TestFieldTestReadinessPageRendersHTML(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/field-test/readiness", nil)
+func TestOperatorReadinessPageRendersHTML(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/readiness", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, "Field-Test Readiness Review") {
+	if !strings.Contains(body, "Readiness") {
 		t.Fatalf("missing readiness title")
 	}
 	if strings.Contains(body, "G2S_MC_REBUILD_PROJECT_DEFINITION_AND_GUARDRAILS") {
@@ -42,9 +42,9 @@ func TestFieldTestReadinessPageRendersHTML(t *testing.T) {
 	}
 }
 
-func TestFieldTestReadinessJSONIsValid(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/field-test/readiness.json", nil)
+func TestOperatorReadinessJSONIsValid(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/readiness.json", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -60,7 +60,7 @@ func TestFieldTestReadinessJSONIsValid(t *testing.T) {
 }
 
 func TestReadinessFlagsMissingEmergencyManualClearAsFail(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: false})
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: false})
 	report := getReadinessReport(t, mux)
 	check := findReadinessCheck(t, report, "INPUT_EMERGENCY_LATCH_MODE")
 	if check.Status != ReadinessFail {
@@ -69,7 +69,7 @@ func TestReadinessFlagsMissingEmergencyManualClearAsFail(t *testing.T) {
 }
 
 func TestReadinessFlagsMissingEGMTemplates(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true, missingEGMTemplate: true})
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true, missingEGMTemplate: true})
 	report := getReadinessReport(t, mux)
 	check := findReadinessCheck(t, report, "EGM_TEMPLATE_ASSIGNMENT")
 	if check.Status != ReadinessWarn {
@@ -81,7 +81,7 @@ func TestReadinessFlagsMissingEGMTemplates(t *testing.T) {
 }
 
 func TestReadinessIncludesRealSendGatedStatus(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
 	report := getReadinessReport(t, mux)
 	check := findReadinessCheck(t, report, "SETTINGS_REAL_SEND_GATED")
 	if check.Status != ReadinessPass {
@@ -92,9 +92,9 @@ func TestReadinessIncludesRealSendGatedStatus(t *testing.T) {
 	}
 }
 
-func TestFieldTestExportReturnsJSONWithoutPrivateKeyMaterial(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/field-test/export", nil)
+func TestOperatorExportReturnsJSONWithoutPrivateKeyMaterial(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/export", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -107,7 +107,7 @@ func TestFieldTestExportReturnsJSONWithoutPrivateKeyMaterial(t *testing.T) {
 	if strings.Contains(strings.ToUpper(body), "PRIVATE KEY") {
 		t.Fatalf("unexpected private key material in export")
 	}
-	var payload FieldTestExportPackage
+	var payload OperatorExportPackage
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal export: %v", err)
 	}
@@ -116,9 +116,9 @@ func TestFieldTestExportReturnsJSONWithoutPrivateKeyMaterial(t *testing.T) {
 	}
 }
 
-func TestFieldTestCommsExportReturnsRows(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/field-test/comms/export", nil)
+func TestOperatorCommsExportReturnsRows(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms/export", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -133,9 +133,9 @@ func TestFieldTestCommsExportReturnsRows(t *testing.T) {
 	}
 }
 
-func TestFieldTestAuditExportReturnsRows(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/field-test/audit/export", nil)
+func TestOperatorAuditExportReturnsRows(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit/export", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -150,9 +150,9 @@ func TestFieldTestAuditExportReturnsRows(t *testing.T) {
 	}
 }
 
-func TestFieldTestActionsPageIncludesRetryEscalationReturnFields(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/field-test/actions", nil)
+func TestOperatorActionsPageIncludesRetryEscalationReturnFields(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/actions", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -170,9 +170,9 @@ func TestFieldTestActionsPageIncludesRetryEscalationReturnFields(t *testing.T) {
 	}
 }
 
-func TestFieldTestTemplatesPageIncludesRenderPreviewAndMatcherFields(t *testing.T) {
-	mux := setupFieldTestServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/field-test/templates", nil)
+func TestOperatorTemplatesPageIncludesRenderPreviewAndMatcherFields(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/templates", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -190,11 +190,11 @@ func TestFieldTestTemplatesPageIncludesRenderPreviewAndMatcherFields(t *testing.
 	}
 }
 
-func TestFieldTestInputMutationRequiresAuth(t *testing.T) {
+func TestOperatorInputMutationRequiresAuth(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
-	seedFieldTestData(t, ctx, db, seedOptions{emergencyManualClear: true})
+	seedOperatorData(t, ctx, db, seedOptions{emergencyManualClear: true})
 
 	calls := 0
 	mux := http.NewServeMux()
@@ -205,7 +205,7 @@ func TestFieldTestInputMutationRequiresAuth(t *testing.T) {
 	server.RegisterRoutes(mux)
 
 	body := strings.NewReader("normal_state=LOW&debounce_ms=100")
-	req := httptest.NewRequest(http.MethodPost, "/field-test/inputs/emergency-broadcast", body)
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/emergency-broadcast", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
@@ -217,12 +217,12 @@ func TestFieldTestInputMutationRequiresAuth(t *testing.T) {
 	}
 }
 
-func setupFieldTestServer(t *testing.T, opts seedOptions) *http.ServeMux {
+func setupOperatorServer(t *testing.T, opts seedOptions) *http.ServeMux {
 	t.Helper()
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	t.Cleanup(func() { db.Close() })
-	seedFieldTestData(t, ctx, db, opts)
+	seedOperatorData(t, ctx, db, opts)
 	mux := http.NewServeMux()
 	server := NewServer(db, Options{RealSendDefaultDisabled: true}, allowMutation)
 	server.RegisterRoutes(mux)
@@ -231,7 +231,7 @@ func setupFieldTestServer(t *testing.T, opts seedOptions) *http.ServeMux {
 
 func getReadinessReport(t *testing.T, mux *http.ServeMux) ReadinessReport {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/field-test/readiness.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/operator/readiness.json", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
@@ -268,7 +268,7 @@ func newTestStore(t *testing.T, ctx context.Context) *store.SQLiteStore {
 	return s
 }
 
-func seedFieldTestData(t *testing.T, ctx context.Context, db *store.SQLiteStore, opts seedOptions) {
+func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, opts seedOptions) {
 	t.Helper()
 	now := time.Now().UTC()
 

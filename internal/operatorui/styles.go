@@ -1,6 +1,6 @@
-package fieldtestui
+package operatorui
 
-const fieldTestCSS = `
+const operatorCSS = `
 :root {
   color-scheme: light;
   font-family: "Segoe UI", Tahoma, sans-serif;

@@ -2,6 +2,8 @@
 
 Use this folder as the active planning entry point for G2S_MC rebuild work.
 
+Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
+
 ## Active Project Definition / Guardrails
 
 - `G2S_MC_REBUILD_PROJECT_DEFINITION_AND_GUARDRAILS.md`

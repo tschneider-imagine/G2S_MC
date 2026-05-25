@@ -1,4 +1,4 @@
-package fieldtestui
+package operatorui
 
 var renderPreviewSupportedVariables = []string{
 	"ActionID",

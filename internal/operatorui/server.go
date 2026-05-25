@@ -1,4 +1,4 @@
-package fieldtestui
+package operatorui
 
 import (
 	"context"
@@ -21,6 +21,21 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
+
+const (
+	operatorRouteBase = "/operator"
+	operatorCSSRoute  = operatorRouteBase + "/static/operator.css"
+)
+
+func operatorRoute(path string) string {
+	if path == "" {
+		return operatorRouteBase
+	}
+	if strings.HasPrefix(path, "/") {
+		return operatorRouteBase + path
+	}
+	return operatorRouteBase + "/" + path
+}
 
 type Store interface {
 	GetInputChannel(ctx context.Context, id string) (*inputs.InputChannel, error)
@@ -88,24 +103,24 @@ func NewServer(store Store, options Options, authorizeMutation func(http.Respons
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/field-test", s.handleHome)
-	mux.HandleFunc("/field-test/readiness", s.handleReadiness)
-	mux.HandleFunc("/field-test/readiness.json", s.handleReadinessJSON)
-	mux.HandleFunc("/field-test/export", s.handleExport)
-	mux.HandleFunc("/field-test/inputs", s.handleInputs)
-	mux.HandleFunc("/field-test/inputs/", s.handleInputByID)
-	mux.HandleFunc("/field-test/actions", s.handleActions)
-	mux.HandleFunc("/field-test/actions/", s.handleActionByID)
-	mux.HandleFunc("/field-test/egms", s.handleEGMs)
-	mux.HandleFunc("/field-test/egms/", s.handleEGMByID)
-	mux.HandleFunc("/field-test/templates", s.handleTemplates)
-	mux.HandleFunc("/field-test/templates/", s.handleTemplateByID)
-	mux.HandleFunc("/field-test/comms", s.handleComms)
-	mux.HandleFunc("/field-test/comms/export", s.handleCommsExport)
-	mux.HandleFunc("/field-test/audit", s.handleAudit)
-	mux.HandleFunc("/field-test/audit/export", s.handleAuditExport)
-	mux.HandleFunc("/field-test/settings", s.handleSettings)
-	mux.HandleFunc("/field-test/static/field-test.css", s.handleStyles)
+	mux.HandleFunc(operatorRoute(""), s.handleHome)
+	mux.HandleFunc(operatorRoute("/readiness"), s.handleReadiness)
+	mux.HandleFunc(operatorRoute("/readiness.json"), s.handleReadinessJSON)
+	mux.HandleFunc(operatorRoute("/export"), s.handleExport)
+	mux.HandleFunc(operatorRoute("/inputs"), s.handleInputs)
+	mux.HandleFunc(operatorRoute("/inputs/"), s.handleInputByID)
+	mux.HandleFunc(operatorRoute("/actions"), s.handleActions)
+	mux.HandleFunc(operatorRoute("/actions/"), s.handleActionByID)
+	mux.HandleFunc(operatorRoute("/egms"), s.handleEGMs)
+	mux.HandleFunc(operatorRoute("/egms/"), s.handleEGMByID)
+	mux.HandleFunc(operatorRoute("/templates"), s.handleTemplates)
+	mux.HandleFunc(operatorRoute("/templates/"), s.handleTemplateByID)
+	mux.HandleFunc(operatorRoute("/comms"), s.handleComms)
+	mux.HandleFunc(operatorRoute("/comms/export"), s.handleCommsExport)
+	mux.HandleFunc(operatorRoute("/audit"), s.handleAudit)
+	mux.HandleFunc(operatorRoute("/audit/export"), s.handleAuditExport)
+	mux.HandleFunc(operatorRoute("/settings"), s.handleSettings)
+	mux.HandleFunc(operatorCSSRoute, s.handleStyles)
 }
 
 func (s *Server) handleStyles(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +129,7 @@ func (s *Server) handleStyles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	_, _ = w.Write([]byte(fieldTestCSS))
+	_, _ = w.Write([]byte(operatorCSS))
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +140,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 
 	channels, err := s.Store.ListInputChannels(r.Context())
 	if err != nil {
-		s.renderError(w, "/field-test", "Field-Test Shell", err)
+		s.renderError(w, operatorRoute(""), "Operator Console", err)
 		return
 	}
 	triggered := 0
@@ -133,7 +148,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	for _, channel := range channels {
 		runtimeState, err := s.Store.GetInputRuntimeState(r.Context(), channel.ID)
 		if err != nil {
-			s.renderError(w, "/field-test", "Field-Test Shell", err)
+			s.renderError(w, operatorRoute(""), "Operator Console", err)
 			return
 		}
 		if runtimeState != nil && runtimeState.DerivedState == inputs.DerivedStateTriggered {
@@ -147,12 +162,12 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 
 	actionRuns, err := s.Store.ListActionRuns(r.Context(), store.ActionRunListQuery{Limit: 8})
 	if err != nil {
-		s.renderError(w, "/field-test", "Field-Test Shell", err)
+		s.renderError(w, operatorRoute(""), "Operator Console", err)
 		return
 	}
 	messages, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 8})
 	if err != nil {
-		s.renderError(w, "/field-test", "Field-Test Shell", err)
+		s.renderError(w, operatorRoute(""), "Operator Console", err)
 		return
 	}
 
@@ -161,7 +176,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<p><span class="badge">REAL SEND IS GATED / DISABLED</span></p>`)
 	body.WriteString(`<p>` + esc(s.Options.TransportGateSummary) + `</p>`)
 	body.WriteString(`<p>` + esc(s.Options.CapturePolicySummary) + `</p>`)
-	body.WriteString(`<p><a href="/field-test/readiness">Open Field-Test Readiness Review</a> | <a href="/field-test/export">Export Field-Test Evidence JSON</a></p>`)
+	body.WriteString(`<p><a href="` + operatorRoute("/readiness") + `">Readiness</a> | <a href="` + operatorRoute("/export") + `">Evidence Export (JSON)</a></p>`)
 	body.WriteString(`</div>`)
 
 	body.WriteString(`<div class="panel"><h2>Input Summary</h2>`)
@@ -200,7 +215,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 	body.WriteString(`</table></div>`)
 
-	s.renderPage(w, "/field-test", "Field-Test Configuration Shell", body.String(), "", "")
+	s.renderPage(w, operatorRoute(""), "Operator Console", body.String(), "", "")
 }
 
 func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +237,7 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeMutation(w, r) {
 		return
 	}
-	inputID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/field-test/inputs/"))
+	inputID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/inputs/")))
 	if inputID == "" || strings.Contains(inputID, "/") {
 		http.NotFound(w, r)
 		return
@@ -261,12 +276,12 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, message string, errText string) {
 	channels, err := s.Store.ListInputChannels(r.Context())
 	if err != nil {
-		s.renderError(w, "/field-test/inputs", "Field-Test Inputs", err)
+		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
 		return
 	}
 	transitions, err := s.Store.ListInputTransitions(r.Context(), 200)
 	if err != nil {
-		s.renderError(w, "/field-test/inputs", "Field-Test Inputs", err)
+		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
 		return
 	}
 	lastTransitionByInput := map[string]inputs.InputTransition{}
@@ -282,7 +297,7 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 	for _, channel := range channels {
 		runtimeState, err := s.Store.GetInputRuntimeState(r.Context(), channel.ID)
 		if err != nil {
-			s.renderError(w, "/field-test/inputs", "Field-Test Inputs", err)
+			s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
 			return
 		}
 		lastTransition := "-"
@@ -317,7 +332,7 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 		body.WriteString(`<td class="mono">` + esc(channel.OnTriggerActionID) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(channel.OnNormalActionID) + `</td>`)
 		body.WriteString(`<td>` + esc(lastTransition) + `</td>`)
-		body.WriteString(`<td><form class="inline-form" method="post" action="/field-test/inputs/` + esc(channel.ID) + `">`)
+		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/inputs/` + esc(channel.ID) + `">`)
 		body.WriteString(`normal <select name="normal_state"><option value="HIGH"` + selected(string(channel.NormalState), string(inputs.InputStateHigh)) + `>HIGH</option><option value="LOW"` + selected(string(channel.NormalState), string(inputs.InputStateLow)) + `>LOW</option></select> `)
 		body.WriteString(`debounce <input type="number" name="debounce_ms" value="` + esc(strconv.Itoa(channel.DebounceMS)) + `" style="width:76px"> `)
 		body.WriteString(`latch <select name="latching_mode"><option value="AUTO_CLEAR"` + selected(string(channel.LatchingMode), string(inputs.LatchingAutoClear)) + `>AUTO_CLEAR</option><option value="MANUAL_CLEAR"` + selected(string(channel.LatchingMode), string(inputs.LatchingManualClear)) + `>MANUAL_CLEAR</option></select> `)
@@ -328,7 +343,7 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
-	s.renderPage(w, "/field-test/inputs", "Field-Test Inputs", body.String(), message, errText)
+	s.renderPage(w, operatorRoute("/inputs"), "Operator Inputs", body.String(), message, errText)
 }
 
 func (s *Server) handleActions(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +381,7 @@ func (s *Server) handleActionByID(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeMutation(w, r) {
 		return
 	}
-	actionID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/field-test/actions/"))
+	actionID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/actions/")))
 	if actionID == "" || strings.Contains(actionID, "/") {
 		http.NotFound(w, r)
 		return
@@ -452,7 +467,7 @@ func (s *Server) upsertActionFromForm(ctx context.Context, actionID string, r *h
 func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, message string, errText string) {
 	definitions, err := s.Store.ListActionDefinitions(r.Context())
 	if err != nil {
-		s.renderError(w, "/field-test/actions", "Field-Test Actions", err)
+		s.renderError(w, "/operator/actions", "Operator Console Actions", err)
 		return
 	}
 	body := strings.Builder{}
@@ -479,7 +494,7 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		body.WriteString(`<td class="mono">` + esc(definition.RetryPolicyJSON) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(definition.EscalationJSON) + `</td>`)
 		body.WriteString(`<td><a href="/api/v2/actions/` + esc(definition.ID) + `/preview" target="_blank" rel="noreferrer">Preview Targets</a></td>`)
-		body.WriteString(`<td><form class="inline-form" method="post" action="/field-test/actions/` + esc(definition.ID) + `">`)
+		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/actions/` + esc(definition.ID) + `">`)
 		body.WriteString(`<input type="hidden" name="id" value="` + esc(definition.ID) + `">`)
 		body.WriteString(`name <input type="text" name="name" value="` + esc(definition.Name) + `" style="width:140px"> `)
 		body.WriteString(`severity <select name="severity">` + severityOptions(definition.Severity) + `</select> `)
@@ -497,7 +512,7 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 	body.WriteString(`<div class="panel"><p>Retry, escalation, and return fields are stored for configuration review; execution behavior is not implemented in this UI phase.</p></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert Action</h3>`)
-	body.WriteString(`<form method="post" action="/field-test/actions">`)
+	body.WriteString(`<form method="post" action="/operator/actions">`)
 	body.WriteString(`<label>ID <input type="text" name="id"></label>`)
 	body.WriteString(`<label>Name <input type="text" name="name"></label>`)
 	body.WriteString(`<label>Severity <select name="severity">` + severityOptions("") + `</select></label>`)
@@ -510,7 +525,7 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 	body.WriteString(`<label>Escalation Policy JSON <input type="text" name="escalation_policy_json" style="width:320px"></label><br>`)
 	body.WriteString(`<button type="submit">Upsert Action</button></form></div>`)
 
-	s.renderPage(w, "/field-test/actions", "Field-Test Actions", body.String(), message, errText)
+	s.renderPage(w, operatorRoute("/actions"), "Operator Actions", body.String(), message, errText)
 }
 
 func (s *Server) handleEGMs(w http.ResponseWriter, r *http.Request) {
@@ -548,7 +563,7 @@ func (s *Server) handleEGMByID(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeMutation(w, r) {
 		return
 	}
-	egmID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/field-test/egms/"))
+	egmID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/egms/")))
 	if egmID == "" || strings.Contains(egmID, "/") {
 		http.NotFound(w, r)
 		return
@@ -599,7 +614,7 @@ func (s *Server) upsertEGMFromForm(ctx context.Context, egmID string, r *http.Re
 func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message string, errText string) {
 	records, err := s.Store.ListEGMRecords(r.Context())
 	if err != nil {
-		s.renderError(w, "/field-test/egms", "Field-Test EGMs", err)
+		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
 		return
 	}
 	body := strings.Builder{}
@@ -617,7 +632,7 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 		body.WriteString(`<td>` + yesNo(record.EmergencyEnabled) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(record.TemplateID) + `</td>`)
 		body.WriteString(`<td>` + esc(string(record.CurrentActionState)) + `</td>`)
-		body.WriteString(`<td><form class="inline-form" method="post" action="/field-test/egms/` + esc(record.EGMID) + `">`)
+		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/egms/` + esc(record.EGMID) + `">`)
 		body.WriteString(`<label>Name <input type="text" name="display_name" value="` + esc(record.DisplayName) + `" style="width:130px"></label>`)
 		body.WriteString(`<label>IP <input type="text" name="ip_address" value="` + esc(record.IPAddress) + `" style="width:110px"></label>`)
 		body.WriteString(`<label>Endpoint <input type="text" name="endpoint_path" value="` + esc(record.EndpointPath) + `" style="width:110px"></label><br>`)
@@ -632,7 +647,7 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 	body.WriteString(`</table></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert EGM</h3>`)
-	body.WriteString(`<form method="post" action="/field-test/egms">`)
+	body.WriteString(`<form method="post" action="/operator/egms">`)
 	body.WriteString(`<label>EGM ID <input type="text" name="egm_id"></label>`)
 	body.WriteString(`<label>Name <input type="text" name="display_name"></label>`)
 	body.WriteString(`<label>IP <input type="text" name="ip_address"></label>`)
@@ -644,7 +659,7 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 	body.WriteString(`<label>Template ID <input type="text" name="template_id"></label>`)
 	body.WriteString(`<button type="submit">Upsert EGM</button></form></div>`)
 
-	s.renderPage(w, "/field-test/egms", "Field-Test EGM Registry", body.String(), message, errText)
+	s.renderPage(w, operatorRoute("/egms"), "Operator EGM Registry", body.String(), message, errText)
 }
 
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
@@ -690,7 +705,7 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/field-test/templates/"))
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/templates/")))
 	if path == "" {
 		http.NotFound(w, r)
 		return
@@ -892,14 +907,14 @@ func (s *Server) renderTemplatePreview(ctx context.Context, r *http.Request) (*r
 func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, message string, errText string, preview *renderPreviewResult) {
 	templateRows, err := s.Store.ListG2STemplates(r.Context())
 	if err != nil {
-		s.renderError(w, "/field-test/templates", "Field-Test Templates", err)
+		s.renderError(w, "/operator/templates", "Operator Console Templates", err)
 		return
 	}
 	versionsByTemplate := map[string][]templates.G2STemplateVersion{}
 	for _, tpl := range templateRows {
 		rows, err := s.Store.ListG2STemplateVersions(r.Context(), tpl.ID)
 		if err != nil {
-			s.renderError(w, "/field-test/templates", "Field-Test Templates", err)
+			s.renderError(w, "/operator/templates", "Operator Console Templates", err)
 			return
 		}
 		versionsByTemplate[tpl.ID] = rows
@@ -920,14 +935,14 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 		body.WriteString(`<td>` + esc(string(tpl.Status)) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(tpl.CurrentVersionID) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(strings.Join(versionLabels, ", ")) + `</td>`)
-		body.WriteString(`<td><form class="inline-form" method="post" action="/field-test/templates/` + esc(tpl.ID) + `">`)
+		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/templates/` + esc(tpl.ID) + `">`)
 		body.WriteString(`<label>Name <input type="text" name="name" value="` + esc(tpl.Name) + `" style="width:120px"></label>`)
 		body.WriteString(`<label>Vendor <input type="text" name="vendor" value="` + esc(tpl.Vendor) + `" style="width:100px"></label>`)
 		body.WriteString(`<label>Status <select name="status">` + templateStatusOptions(tpl.Status) + `</select></label>`)
 		body.WriteString(`<button type="submit">Save</button></form>`)
-		body.WriteString(`<form class="inline-form" method="post" action="/field-test/templates/` + esc(tpl.ID) + `/active-version">`)
+		body.WriteString(`<form class="inline-form" method="post" action="/operator/templates/` + esc(tpl.ID) + `/active-version">`)
 		body.WriteString(`<label>Set Active Version <input type="number" name="active_version" style="width:70px"></label> <button type="submit">Set</button></form>`)
-		body.WriteString(`<form class="inline-form" method="post" action="/field-test/templates/` + esc(tpl.ID) + `/versions">`)
+		body.WriteString(`<form class="inline-form" method="post" action="/operator/templates/` + esc(tpl.ID) + `/versions">`)
 		body.WriteString(`<label>Version Label <input type="text" name="version_label" style="width:90px"></label>`)
 		body.WriteString(`<label>Version ID <input type="text" name="version_id" style="width:150px"></label>`)
 		body.WriteString(`<label>Notes <input type="text" name="notes" style="width:150px"></label><br>`)
@@ -940,7 +955,7 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 	body.WriteString(`</table></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert Template</h3>`)
-	body.WriteString(`<form method="post" action="/field-test/templates">`)
+	body.WriteString(`<form method="post" action="/operator/templates">`)
 	body.WriteString(`<label>ID <input type="text" name="id"></label>`)
 	body.WriteString(`<label>Name <input type="text" name="name"></label>`)
 	body.WriteString(`<label>Vendor <input type="text" name="vendor"></label>`)
@@ -950,7 +965,7 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 	body.WriteString(`<div class="panel"><h3>Render Preview (No Send)</h3>`)
 	body.WriteString(`<p>Supported variables: ` + esc(strings.Join(renderPreviewSupportedVariables, ", ")) + `.</p>`)
 	body.WriteString(`<p>Restore/return guidance: configure return actions in Action Builder Lite with template action keys for normal-state restoration.</p>`)
-	body.WriteString(`<form method="post" action="/field-test/templates/render-preview">`)
+	body.WriteString(`<form method="post" action="/operator/templates/render-preview">`)
 	body.WriteString(`<label>Template ID <input type="text" name="template_id"></label>`)
 	body.WriteString(`<label>Version (optional) <input type="number" name="version" style="width:70px"></label>`)
 	body.WriteString(`<label>Action Key <input type="text" name="template_action_key"></label><br>`)
@@ -975,7 +990,7 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 		}
 	}
 	body.WriteString(`</div>`)
-	s.renderPage(w, "/field-test/templates", "Field-Test Templates", body.String(), message, errText)
+	s.renderPage(w, operatorRoute("/templates"), "Operator Templates", body.String(), message, errText)
 }
 
 func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
@@ -985,18 +1000,18 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: queryLimit(r, 120)})
 	if err != nil {
-		s.renderError(w, "/field-test/comms", "Field-Test Comms Journal", err)
+		s.renderError(w, "/operator/comms", "Operator Console Comms Journal", err)
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("export")), "json") {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", `attachment; filename="field-test-comms.json"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="operator-comms.json"`)
 		_ = json.NewEncoder(w).Encode(rows)
 		return
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Comms Journal</h2><p><a href="/field-test/comms/export">Export JSON</a></p><table>`)
+	body.WriteString(`<div class="panel"><h2>Comms Journal</h2><p><a href="/operator/comms/export">Export JSON</a></p><table>`)
 	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>EGM</th><th>Action Run</th><th>Template</th><th>Message Type</th><th>Result</th><th>Transport</th><th>HTTP</th><th>Latency(ms)</th><th>Payload</th></tr>`)
 	for _, row := range rows {
 		templateRef := row.TemplateID
@@ -1022,7 +1037,7 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
-	s.renderPage(w, "/field-test/comms", "Field-Test Comms Journal", body.String(), "", "")
+	s.renderPage(w, operatorRoute("/comms"), "Operator Comms Journal", body.String(), "", "")
 }
 
 func (s *Server) handleCommsExport(w http.ResponseWriter, r *http.Request) {
@@ -1036,7 +1051,7 @@ func (s *Server) handleCommsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Disposition", `attachment; filename="field-test-comms.json"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="operator-comms.json"`)
 	_ = json.NewEncoder(w).Encode(rows)
 }
 
@@ -1047,17 +1062,17 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.Store.ListAuditTimelineEntries(r.Context(), store.AuditTimelineListQuery{Limit: queryLimit(r, 120)})
 	if err != nil {
-		s.renderError(w, "/field-test/audit", "Field-Test Audit Timeline", err)
+		s.renderError(w, "/operator/audit", "Operator Console Audit Timeline", err)
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("export")), "json") {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", `attachment; filename="field-test-audit.json"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="operator-audit.json"`)
 		_ = json.NewEncoder(w).Encode(rows)
 		return
 	}
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Emergency Audit Timeline</h2><p><a href="/field-test/audit/export">Export JSON</a></p><table>`)
+	body.WriteString(`<div class="panel"><h2>Emergency Audit Timeline</h2><p><a href="/operator/audit/export">Export JSON</a></p><table>`)
 	body.WriteString(`<tr><th>Timestamp</th><th>Severity</th><th>Event</th><th>Summary</th><th>Input Transition</th><th>Action Run</th><th>Message</th><th>Operator</th><th>Details</th></tr>`)
 	for _, row := range rows {
 		body.WriteString(`<tr>`)
@@ -1073,7 +1088,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
-	s.renderPage(w, "/field-test/audit", "Field-Test Audit Timeline", body.String(), "", "")
+	s.renderPage(w, operatorRoute("/audit"), "Operator Audit Timeline", body.String(), "", "")
 }
 
 func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
@@ -1087,7 +1102,7 @@ func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Disposition", `attachment; filename="field-test-audit.json"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="operator-audit.json"`)
 	_ = json.NewEncoder(w).Encode(rows)
 }
 
@@ -1098,7 +1113,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	certs, err := s.Store.ListCertificateInventory(r.Context())
 	if err != nil {
-		s.renderError(w, "/field-test/settings", "Field-Test Settings", err)
+		s.renderError(w, "/operator/settings", "Operator Console Settings", err)
 		return
 	}
 	statusCounts := map[string]int{}
@@ -1129,7 +1144,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<tr><td>Real Send Default</td><td>disabled/gated</td></tr>`)
 	body.WriteString(`<tr><td>Transport Gate</td><td>` + esc(s.Options.TransportGateSummary) + `</td></tr>`)
 	body.WriteString(`<tr><td>Capture Safety</td><td>` + esc(s.Options.CapturePolicySummary) + `</td></tr>`)
-	body.WriteString(`<tr><td>Current Phase Safety</td><td>No real EGM send approved from field-test UI</td></tr>`)
+	body.WriteString(`<tr><td>Current Phase Safety</td><td>No real EGM send approved from operator UI</td></tr>`)
 	latestMessages, msgErr := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 1})
 	lastSend := "none"
 	if msgErr == nil && len(latestMessages) > 0 {
@@ -1139,7 +1154,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<tr><td>Certificate Status Summary</td><td>` + esc(certSummary) + `</td></tr>`)
 	body.WriteString(`<tr><td>Trust Material</td><td>placeholder/read-only in Phase 3A</td></tr>`)
 	body.WriteString(`</table></div>`)
-	s.renderPage(w, "/field-test/settings", "Field-Test Settings", body.String(), "", "")
+	s.renderPage(w, operatorRoute("/settings"), "Operator Settings", body.String(), "", "")
 }
 
 func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
@@ -1149,13 +1164,13 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := s.buildReadinessReport(r.Context())
 	if err != nil {
-		s.renderError(w, "/field-test/readiness", "Field-Test Readiness Review", err)
+		s.renderError(w, operatorRoute("/readiness"), "Readiness", err)
 		return
 	}
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Field-Test Readiness Review</h2>`)
+	body.WriteString(`<div class="panel"><h2>Readiness</h2>`)
 	body.WriteString(`<p>Generated: ` + esc(fmtTime(report.GeneratedAt)) + `</p>`)
-	body.WriteString(`<p><a href="/field-test/readiness.json">Readiness JSON</a> | <a href="/field-test/export">Export Field-Test Evidence JSON</a></p>`)
+	body.WriteString(`<p><a href="` + operatorRoute("/readiness.json") + `">Readiness JSON</a> | <a href="` + operatorRoute("/export") + `">Evidence Export (JSON)</a></p>`)
 	body.WriteString(`</div>`)
 	for _, section := range report.Sections {
 		body.WriteString(`<div class="panel"><h3>` + esc(section.Name) + `</h3><table>`)
@@ -1170,7 +1185,7 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		}
 		body.WriteString(`</table></div>`)
 	}
-	s.renderPage(w, "/field-test/readiness", "Field-Test Readiness Review", body.String(), "", "")
+	s.renderPage(w, operatorRoute("/readiness"), "Readiness", body.String(), "", "")
 }
 
 func (s *Server) handleReadinessJSON(w http.ResponseWriter, r *http.Request) {
@@ -1203,7 +1218,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	filename := "field-test-evidence-" + time.Now().UTC().Format("20060102T150405Z") + ".json"
+	filename := "operator-evidence-" + time.Now().UTC().Format("20060102T150405Z") + ".json"
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	_ = json.NewEncoder(w).Encode(pkg)
 }
@@ -1217,17 +1232,17 @@ func (s *Server) renderPage(w http.ResponseWriter, active string, title string, 
 	htmlText := strings.Builder{}
 	htmlText.WriteString(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>`)
 	htmlText.WriteString(esc(title))
-	htmlText.WriteString(`</title><link rel="stylesheet" href="/field-test/static/field-test.css"></head><body>`)
-	htmlText.WriteString(`<header><h1>Field-Test Operator Configuration Shell</h1><nav>`)
-	htmlText.WriteString(navLink("/field-test", "Home", active))
-	htmlText.WriteString(navLink("/field-test/readiness", "Readiness", active))
-	htmlText.WriteString(navLink("/field-test/inputs", "Inputs", active))
-	htmlText.WriteString(navLink("/field-test/actions", "Actions", active))
-	htmlText.WriteString(navLink("/field-test/egms", "EGMs", active))
-	htmlText.WriteString(navLink("/field-test/templates", "Templates", active))
-	htmlText.WriteString(navLink("/field-test/comms", "Comms", active))
-	htmlText.WriteString(navLink("/field-test/audit", "Audit", active))
-	htmlText.WriteString(navLink("/field-test/settings", "Settings", active))
+	htmlText.WriteString(`</title><link rel="stylesheet" href="` + operatorCSSRoute + `"></head><body>`)
+	htmlText.WriteString(`<header><h1>Operator Console</h1><nav>`)
+	htmlText.WriteString(navLink(operatorRoute(""), "Home", active))
+	htmlText.WriteString(navLink(operatorRoute("/readiness"), "Readiness", active))
+	htmlText.WriteString(navLink(operatorRoute("/inputs"), "Inputs", active))
+	htmlText.WriteString(navLink(operatorRoute("/actions"), "Actions", active))
+	htmlText.WriteString(navLink(operatorRoute("/egms"), "EGMs", active))
+	htmlText.WriteString(navLink(operatorRoute("/templates"), "Templates", active))
+	htmlText.WriteString(navLink(operatorRoute("/comms"), "Comms", active))
+	htmlText.WriteString(navLink(operatorRoute("/audit"), "Audit", active))
+	htmlText.WriteString(navLink(operatorRoute("/settings"), "Settings", active))
 	htmlText.WriteString(`</nav></header><main>`)
 	if message != "" {
 		htmlText.WriteString(`<div class="message">` + esc(message) + `</div>`)

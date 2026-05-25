@@ -1,8 +1,10 @@
 # Phase 3B: Field-Test Readiness Review + Export
 
+> Correction note: Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
+
 ## Scope
 
-Phase 3B extends the `/field-test` operator shell with a structured readiness review and evidence export flow.
+Phase 3B extends the `/operator` Operator Console shell with a structured readiness review and evidence export flow.
 
 This phase advances these field-test must-have sections:
 
@@ -14,7 +16,7 @@ This phase advances these field-test must-have sections:
 
 ## Field-Test Readiness Review Contents
 
-Readiness adds a checklist view (`/field-test/readiness`) and JSON representation (`/field-test/readiness.json`) that evaluates:
+Readiness adds a checklist view (`/operator/readiness`) and JSON representation (`/operator/readiness.json`) that evaluates:
 
 - Inputs: required channels, GPIO/normal/debounce/latch visibility, action bindings, emergency `MANUAL_CLEAR`.
 - Actions: definition presence, severity/selectors/steps, return action references, retry/escalation config visibility.
@@ -28,9 +30,9 @@ Readiness adds a checklist view (`/field-test/readiness`) and JSON representatio
 
 Phase 3B adds evidence/reporting exports only:
 
-- `GET /field-test/export`: full JSON evidence package with readiness report, config snapshots, action previews, comms, audit, and safety summary.
-- `GET /field-test/comms/export`: message journal JSON export.
-- `GET /field-test/audit/export`: audit timeline JSON export.
+- `GET /operator/export`: full JSON evidence package with readiness report, config snapshots, action previews, comms, audit, and safety summary.
+- `GET /operator/comms/export`: message journal JSON export.
+- `GET /operator/audit/export`: audit timeline JSON export.
 
 Export data is read-only evidence and must not include private key material.
 
@@ -46,10 +48,10 @@ Export data is read-only evidence and must not include private key material.
 
 ## Definition Of Done
 
-- `/field-test/readiness` exists and renders checklist output.
-- `/field-test/readiness.json` exists and returns structured JSON.
-- `/field-test/export` exists and returns evidence JSON.
-- `/field-test/comms/export` and `/field-test/audit/export` exist.
+- `/operator/readiness` exists and renders checklist output.
+- `/operator/readiness.json` exists and returns structured JSON.
+- `/operator/export` exists and returns evidence JSON.
+- `/operator/comms/export` and `/operator/audit/export` exist.
 - Readiness checks cover inputs/actions/EGMs/templates/comms/audit/settings safety.
 - Action Builder Lite pages show retry/escalation/return configuration fields.
 - Template Manager Lite pages show render preview and matcher placeholder fields.
