@@ -552,13 +552,13 @@ func inputsLiveScript() string {
         continue;
       }
       seen[inputID] = true;
-      var summary = normalize(row.getAttribute('data-transition-summary'), '-');
-      var inputRow = rowMap.get(inputID);
-      if (inputRow) {
-        setField(inputRow, 'last-transition', summary);
-      }
-    }
-  }
+	      var summary = normalize(row.getAttribute('data-transition-summary'), '-');
+	      var inputRow = rowMap.get(inputID);
+	      if (inputRow) {
+	        setField(inputRow, 'last_transition', summary);
+	      }
+	    }
+	  }
 
   function updateStateRows(payload) {
     if (!payload || !Array.isArray(payload.inputs)) {
