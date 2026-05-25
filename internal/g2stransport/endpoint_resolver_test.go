@@ -26,6 +26,24 @@ func TestResolveDeliveryTargetUsesFullEndpointURL(t *testing.T) {
 	}
 }
 
+func TestResolveDeliveryTargetUsesFullHTTPEndpointURL(t *testing.T) {
+	target, err := ResolveDeliveryTarget(DeliveryTargetResolveRequest{
+		EGMRecord: &egms.EGMRecord{
+			EGMID:        "EGM-001",
+			EndpointPath: "http://egm.local:8080/g2s",
+		},
+		FallbackMethod:      "POST",
+		FallbackContentType: "application/xml",
+		FallbackTimeoutMS:   4000,
+	})
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	if target.EndpointURL != "http://egm.local:8080/g2s" {
+		t.Fatalf("endpoint=%q", target.EndpointURL)
+	}
+}
+
 func TestResolveDeliveryTargetRequiresDefaultsForIPAndPath(t *testing.T) {
 	record := &egms.EGMRecord{
 		EGMID:        "EGM-001",
@@ -88,6 +106,31 @@ func TestResolveDeliveryTargetAppliesTemplateEndpointQuirks(t *testing.T) {
 	}
 }
 
+func TestResolveDeliveryTargetAppliesTemplateEndpointPathOverride(t *testing.T) {
+	target, err := ResolveDeliveryTarget(DeliveryTargetResolveRequest{
+		EGMRecord: &egms.EGMRecord{
+			EGMID:        "EGM-001",
+			IPAddress:    "10.1.2.3",
+			EndpointPath: "/g2s",
+		},
+		TemplateVersion: &templates.G2STemplateVersion{
+			EndpointQuirksJSON: `{"endpoint_path":"/vendor-g2s","method":"POST","content_type":"application/xml"}`,
+		},
+		FallbackMethod:    "POST",
+		FallbackTimeoutMS: 4000,
+		Defaults: EndpointDefaults{
+			Scheme: "https",
+			Port:   8443,
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	if target.EndpointURL != "https://10.1.2.3:8443/vendor-g2s" {
+		t.Fatalf("endpoint=%q", target.EndpointURL)
+	}
+}
+
 func TestResolveDeliveryTargetInvalidEndpointQuirksFailsClearly(t *testing.T) {
 	_, err := ResolveDeliveryTarget(DeliveryTargetResolveRequest{
 		EGMRecord: &egms.EGMRecord{
@@ -100,6 +143,37 @@ func TestResolveDeliveryTargetInvalidEndpointQuirksFailsClearly(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "endpoint quirks") {
 		t.Fatalf("expected endpoint quirks error, got %v", err)
+	}
+}
+
+func TestResolveDeliveryTargetInvalidEndpointURLFailsClearly(t *testing.T) {
+	_, err := ResolveDeliveryTarget(DeliveryTargetResolveRequest{
+		EGMRecord: &egms.EGMRecord{
+			EGMID:        "EGM-001",
+			EndpointPath: "http://example.com/%zz",
+		},
+		FallbackMethod: "POST",
+	})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "invalid endpoint url") {
+		t.Fatalf("expected invalid endpoint url error, got %v", err)
+	}
+}
+
+func TestResolveDeliveryTargetDoesNotUseFallbackEndpoint(t *testing.T) {
+	_, err := ResolveDeliveryTarget(DeliveryTargetResolveRequest{
+		EGMRecord: &egms.EGMRecord{
+			EGMID:        "EGM-001",
+			IPAddress:    "10.1.2.3",
+			EndpointPath: "",
+		},
+		FallbackMethod: "POST",
+		Defaults: EndpointDefaults{
+			Scheme: "https",
+			Port:   8443,
+		},
+	})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "missing endpoint url") {
+		t.Fatalf("expected missing endpoint url error, got %v", err)
 	}
 }
 

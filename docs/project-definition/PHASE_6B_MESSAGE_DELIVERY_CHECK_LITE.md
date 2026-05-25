@@ -24,3 +24,6 @@
 
 - Network/TLS checks are auth-gated because they initiate outbound connections.
 - Missing endpoint/certificate configuration is reported as clear Error output.
+- The check runs from the appliance service context using injected Store/Options; operator shell access to `/etc/g2s-mute/config.json` or `/var/lib/g2s-mute/controller.db` is not required.
+- The check never sends a G2S payload and does not mutate action runs, message journal rows, or audit rows in read-only mode.
+- Runtime output and error text are sanitized so private key material is never exposed.

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -370,9 +371,12 @@ func sanitizeDetail(detail string) string {
 	if text == "" {
 		return ""
 	}
-	// Never leak key material in runtime output.
-	text = strings.ReplaceAll(text, "BEGIN PRIVATE KEY", "[REDACTED]")
-	text = strings.ReplaceAll(text, "END PRIVATE KEY", "[REDACTED]")
+	upper := strings.ToUpper(text)
+	if strings.Contains(upper, "BEGIN PRIVATE KEY") || strings.Contains(upper, "END PRIVATE KEY") || strings.Contains(upper, "PRIVATE KEY-----") {
+		return "private key material redacted"
+	}
+	sensitivePair := regexp.MustCompile(`(?i)\b(password|token|secret)\b\s*[:=]\s*([^\s,;]+)`)
+	text = sensitivePair.ReplaceAllString(text, "$1=[REDACTED]")
 	return text
 }
 

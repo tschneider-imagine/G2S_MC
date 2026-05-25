@@ -107,6 +107,22 @@ func TestCheckFullEndpointResolves(t *testing.T) {
 	}
 }
 
+func TestCheckFullHTTPSEndpointResolves(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.EndpointPath = "https://egm.local:9443/g2s"
+	st.egms["EGM-001"] = row
+
+	service := Service{Store: st, Options: seedOptions()}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.EndpointURL != "https://egm.local:9443/g2s" {
+		t.Fatalf("endpoint=%q", result.EndpointURL)
+	}
+}
+
 func TestCheckTemplateEndpointQuirksApplied(t *testing.T) {
 	st := seedStore(t)
 	version := st.versions["template-generic-g2s-action"]
@@ -120,6 +136,97 @@ func TestCheckTemplateEndpointQuirksApplied(t *testing.T) {
 	}
 	if result.Method != "PUT" || result.ContentType != "application/soap+xml" || result.Headers["SOAPAction"] != "urn:test" {
 		t.Fatalf("quirks not applied: %+v", result)
+	}
+}
+
+func TestCheckTemplateEndpointPathQuirksApplied(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.IPAddress = "10.1.2.3"
+	row.EndpointPath = "/g2s"
+	st.egms["EGM-001"] = row
+
+	version := st.versions["template-generic-g2s-action"]
+	version.EndpointQuirksJSON = `{"endpoint_path":"/vendor-g2s","method":"POST","content_type":"application/xml"}`
+	st.versions["template-generic-g2s-action"] = version
+
+	service := Service{Store: st, Options: seedOptions()}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.EndpointURL != "http://10.1.2.3:8444/vendor-g2s" {
+		t.Fatalf("expected endpoint override, got %q", result.EndpointURL)
+	}
+}
+
+func TestCheckInvalidEndpointURLReturnsError(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.EndpointPath = "http://example.com/%zz"
+	st.egms["EGM-001"] = row
+
+	service := Service{Store: st, Options: seedOptions()}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "invalid endpoint url") {
+		t.Fatalf("expected invalid endpoint error: %+v", result)
+	}
+}
+
+func TestCheckEndpointPathWithoutDefaultsReturnsError(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.IPAddress = "10.1.2.3"
+	row.EndpointPath = "/g2s"
+	st.egms["EGM-001"] = row
+
+	service := Service{
+		Store: st,
+		Options: Options{
+			EndpointDefaults: g2stransport.EndpointDefaults{},
+			ClientConfig: g2stransport.HTTPClientConfig{
+				DefaultTimeoutMS: 3000,
+			},
+			DeliveryMode:     "DISABLED",
+			DefaultTimeoutMS: 3000,
+		},
+	}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "missing configured delivery scheme") {
+		t.Fatalf("expected missing scheme error: %+v", result)
+	}
+}
+
+func TestCheckDoesNotUseFallbackEndpointWhenEndpointMissing(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.IPAddress = "10.1.2.3"
+	row.EndpointPath = ""
+	st.egms["EGM-001"] = row
+
+	service := Service{
+		Store: st,
+		Options: Options{
+			EndpointDefaults: g2stransport.EndpointDefaultsFromHostURL("https://controller.local:9443/g2s"),
+			ClientConfig: g2stransport.HTTPClientConfig{
+				DefaultTimeoutMS: 3000,
+			},
+			DeliveryMode:     "DISABLED",
+			DefaultTimeoutMS: 3000,
+		},
+	}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "missing endpoint") {
+		t.Fatalf("expected missing endpoint error: %+v", result)
 	}
 }
 
@@ -151,6 +258,30 @@ func TestCheckIncludesCertificateSummaryAndNoPrivateKeyLeak(t *testing.T) {
 	serialized := stringifyResult(result)
 	if strings.Contains(serialized, "BEGIN PRIVATE KEY") {
 		t.Fatalf("result leaked private key material: %s", serialized)
+	}
+}
+
+func TestCheckSanitizesPrivateKeyMaterialFromCertificateErrors(t *testing.T) {
+	st := seedStore(t)
+	now := time.Now().UTC()
+	st.certs = []model.CertificateInventory{
+		{
+			Role:          "g2s_client_key",
+			Path:          "/certs/client.key",
+			Status:        "INVALID",
+			Error:         "failed parse: -----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+			LastCheckedAt: now,
+		},
+	}
+
+	service := Service{Store: st, Options: seedOptions()}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	serialized := stringifyResult(result)
+	if strings.Contains(serialized, "PRIVATE KEY") || strings.Contains(serialized, "abc123") {
+		t.Fatalf("expected key material to be redacted: %s", serialized)
 	}
 }
 
@@ -260,6 +391,67 @@ func TestCheckTLSCheckTrustFailure(t *testing.T) {
 	if result.TLSCheck.Status != "ERROR" {
 		t.Fatalf("expected tls error: %+v", result.TLSCheck)
 	}
+	if strings.TrimSpace(result.TLSCheck.Detail) == "" {
+		t.Fatalf("expected non-empty TLS error detail: %+v", result.TLSCheck)
+	}
+	if strings.Contains(strings.ToUpper(result.TLSCheck.Detail), "PRIVATE KEY") {
+		t.Fatalf("tls error leaked key material: %+v", result.TLSCheck)
+	}
+}
+
+func TestCheckTLSCheckSkippedForHTTPEndpoint(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.EndpointPath = "http://127.0.0.1:18080/g2s"
+	st.egms["EGM-001"] = row
+
+	service := Service{
+		Store: st,
+		Options: Options{
+			EndpointDefaults: seedOptions().EndpointDefaults,
+			ClientConfig: g2stransport.HTTPClientConfig{
+				TLSRequired:      true,
+				DefaultTimeoutMS: 2000,
+			},
+			DeliveryMode:     "HTTP",
+			DefaultTimeoutMS: 2000,
+		},
+	}
+	result, err := service.Check(context.Background(), CheckRequest{
+		EGMID:           "EGM-001",
+		IncludeTLSCheck: true,
+	})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.TLSCheck.Status != "SKIPPED" || !strings.Contains(strings.ToLower(result.TLSCheck.Detail), "non-https") {
+		t.Fatalf("expected TLS check skipped, got %+v", result.TLSCheck)
+	}
+}
+
+func TestCheckReadOnlyDoesNotRequireClientCertFiles(t *testing.T) {
+	service := Service{
+		Store: seedStore(t),
+		Options: Options{
+			EndpointDefaults: seedOptions().EndpointDefaults,
+			ClientConfig: g2stransport.HTTPClientConfig{
+				TLSRequired:      true,
+				RootCAPath:       "/path/does/not/exist/ca.crt",
+				ClientCertPath:   "/path/does/not/exist/client.crt",
+				ClientKeyPath:    "/path/does/not/exist/client.key",
+				DefaultTimeoutMS: 3000,
+			},
+			DeliveryMode:     "DISABLED",
+			DefaultTimeoutMS: 3000,
+		},
+	}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("read-only check should not require local cert file access: %v", err)
+	}
+	if result.OverallStatus == "" {
+		t.Fatalf("expected populated result, got %+v", result)
+	}
 }
 
 func seedStore(t *testing.T) *fakeStore {
@@ -331,7 +523,11 @@ func containsJoined(rows []string, fragment string) bool {
 }
 
 func stringifyResult(result CheckResult) string {
-	return result.EndpointURL + " " + strings.Join(result.Errors, " ") + " " + strings.Join(result.Warnings, " ")
+	certDetails := make([]string, 0, len(result.CertificateSummary))
+	for _, row := range result.CertificateSummary {
+		certDetails = append(certDetails, row.Detail)
+	}
+	return result.EndpointURL + " " + strings.Join(result.Errors, " ") + " " + strings.Join(result.Warnings, " ") + " " + strings.Join(certDetails, " ")
 }
 
 func generateCerts(t *testing.T) certs.DevCertPaths {

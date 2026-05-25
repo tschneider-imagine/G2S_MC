@@ -1882,6 +1882,190 @@ func TestPostSettingsMessageDeliveryCheckNetworkRequiresAuth(t *testing.T) {
 	}
 }
 
+func TestPostSettingsMessageDeliveryCheckTLSRequiresAuth(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(http.ResponseWriter, *http.Request) bool { return false })
+	server.RegisterRoutes(mux)
+
+	form := url.Values{
+		"egm_id":            {"EGM-001"},
+		"include_tls_check": {"true"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+}
+
+func TestPostSettingsMessageDeliveryCheckUnauthorizedNetworkIsNonMutating(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	beforeMessages, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list message journal before: %v", err)
+	}
+	beforeRuns, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list runs before: %v", err)
+	}
+	beforeAudit, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list audit before: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(http.ResponseWriter, *http.Request) bool { return false })
+	server.RegisterRoutes(mux)
+
+	form := url.Values{
+		"egm_id":                {"EGM-001"},
+		"include_network_check": {"true"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+
+	afterMessages, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list message journal after: %v", err)
+	}
+	afterRuns, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list runs after: %v", err)
+	}
+	afterAudit, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list audit after: %v", err)
+	}
+
+	if len(afterMessages) != len(beforeMessages) {
+		t.Fatalf("message journal mutated on unauthorized check: before=%d after=%d", len(beforeMessages), len(afterMessages))
+	}
+	if len(afterRuns) != len(beforeRuns) {
+		t.Fatalf("action runs mutated on unauthorized check: before=%d after=%d", len(beforeRuns), len(afterRuns))
+	}
+	if len(afterAudit) != len(beforeAudit) {
+		t.Fatalf("audit timeline mutated on unauthorized check: before=%d after=%d", len(beforeAudit), len(afterAudit))
+	}
+}
+
+func TestPostSettingsMessageDeliveryCheckReadOnlyIsNonMutating(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	beforeMessages, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list message journal before: %v", err)
+	}
+	beforeRuns, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list runs before: %v", err)
+	}
+	beforeAudit, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list audit before: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), allowMutation)
+	server.RegisterRoutes(mux)
+
+	form := url.Values{
+		"egm_id": {"EGM-001"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	afterMessages, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list message journal after: %v", err)
+	}
+	afterRuns, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list runs after: %v", err)
+	}
+	afterAudit, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list audit after: %v", err)
+	}
+
+	if len(afterMessages) != len(beforeMessages) {
+		t.Fatalf("message journal mutated by read-only check: before=%d after=%d", len(beforeMessages), len(afterMessages))
+	}
+	if len(afterRuns) != len(beforeRuns) {
+		t.Fatalf("action runs mutated by read-only check: before=%d after=%d", len(beforeRuns), len(afterRuns))
+	}
+	if len(afterAudit) != len(beforeAudit) {
+		t.Fatalf("audit timeline mutated by read-only check: before=%d after=%d", len(beforeAudit), len(afterAudit))
+	}
+}
+
+func TestPostSettingsMessageDeliveryCheckRendersSelectedFieldsAndTLSResult(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	row, err := st.GetEGMRecord(ctx, "EGM-001")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	if row == nil {
+		t.Fatal("missing EGM-001")
+	}
+	row.EndpointPath = "http://127.0.0.1:18080/g2s"
+	if err := st.UpsertEGMRecord(ctx, *row); err != nil {
+		t.Fatalf("upsert egm: %v", err)
+	}
+
+	form := url.Values{
+		"egm_id":              {"EGM-001"},
+		"template_id":         {"template-generic-g2s-action"},
+		"template_action_key": {"emergency_broadcast_silence"},
+		"include_tls_check":   {"true"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Template Action Key",
+		"emergency_broadcast_silence",
+		"Template",
+		"template-generic-g2s-action",
+		"Endpoint",
+		"TLS Check",
+		"TLS check skipped for non-HTTPS endpoint",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in response body", expected)
+		}
+	}
+}
+
 func TestPostSettingsMessageDeliveryCheckDoesNotExposePrivateKeyMaterial(t *testing.T) {
 	mux := setupOperatorServer(t)
 	form := url.Values{
@@ -1981,6 +2165,42 @@ func TestSettingsPageDoesNotExposePrivateKeyMaterial(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("settings page must not expose private key material: found %q", forbidden)
 		}
+	}
+}
+
+func TestSettingsPageSanitizesCertificateRuntimeNotePrivateKeyMaterial(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	now := time.Now().UTC()
+	if err := st.ReplaceCertificateInventory(context.Background(), []model.CertificateInventory{
+		{
+			Role:          "g2s_client_key",
+			Path:          "/certs/client.key",
+			Status:        "INVALID",
+			Error:         "load failed: -----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+			LastCheckedAt: now,
+		},
+	}); err != nil {
+		t.Fatalf("replace cert inventory: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, forbidden := range []string{
+		"BEGIN PRIVATE KEY",
+		"END PRIVATE KEY",
+		"abc123",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("settings page leaked key material %q body=%s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, "private key material redacted") {
+		t.Fatalf("expected redaction text in settings page, body=%s", body)
 	}
 }
 

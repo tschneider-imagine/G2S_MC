@@ -3375,13 +3375,13 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 			body.WriteString(`<td>` + esc(configuredFromPathText(row.Path)) + `</td>`)
 			body.WriteString(`<td>` + esc(fileExistsFromStatusText(row.Status)) + `</td>`)
 			body.WriteString(`<td>` + esc(parseStatusText(row.Status)) + `</td>`)
-			body.WriteString(`<td>` + esc(defaultString(row.Status, "-")) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(sanitizeSensitiveText(row.Status), "-")) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(defaultString(row.SHA256Fingerprint, "-")) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.NotBefore)) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.NotAfter)) + `</td>`)
 			body.WriteString(`<td>` + esc(daysUntilExpiryText(row.NotAfter)) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(fmtTime(row.LastCheckedAt)) + `</td>`)
-			body.WriteString(`<td>` + esc(defaultString(row.Error, "-")) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(sanitizeSensitiveText(row.Error), "-")) + `</td>`)
 			body.WriteString(`</tr>`)
 		}
 		body.WriteString(`</table>`)
@@ -3451,14 +3451,14 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 		if len(checkResult.Errors) > 0 {
 			body.WriteString(`<p>Error</p><ul>`)
 			for _, row := range checkResult.Errors {
-				body.WriteString(`<li>` + esc(row) + `</li>`)
+				body.WriteString(`<li>` + esc(sanitizeSensitiveText(row)) + `</li>`)
 			}
 			body.WriteString(`</ul>`)
 		}
 		if len(checkResult.Warnings) > 0 {
 			body.WriteString(`<p>Warning</p><ul>`)
 			for _, row := range checkResult.Warnings {
-				body.WriteString(`<li>` + esc(row) + `</li>`)
+				body.WriteString(`<li>` + esc(sanitizeSensitiveText(row)) + `</li>`)
 			}
 			body.WriteString(`</ul>`)
 		}
@@ -3473,7 +3473,7 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 				body.WriteString(`<td>` + esc(defaultString(row.ParseStatus, "-")) + `</td>`)
 				body.WriteString(`<td>` + esc(defaultString(row.Status, "-")) + `</td>`)
 				body.WriteString(`<td class="mono">` + esc(defaultString(row.Fingerprint, "-")) + `</td>`)
-				body.WriteString(`<td>` + esc(defaultString(row.Detail, "-")) + `</td>`)
+				body.WriteString(`<td>` + esc(defaultString(sanitizeSensitiveText(row.Detail), "-")) + `</td>`)
 				body.WriteString(`</tr>`)
 			}
 			body.WriteString(`</table>`)
@@ -3571,6 +3571,18 @@ func fmtMaybeTime(value *time.Time) string {
 
 func esc(value string) string {
 	return html.EscapeString(value)
+}
+
+func sanitizeSensitiveText(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	upper := strings.ToUpper(text)
+	if strings.Contains(upper, "BEGIN PRIVATE KEY") || strings.Contains(upper, "END PRIVATE KEY") || strings.Contains(upper, "PRIVATE KEY-----") {
+		return "private key material redacted"
+	}
+	return text
 }
 
 func yesNo(value bool) string {
