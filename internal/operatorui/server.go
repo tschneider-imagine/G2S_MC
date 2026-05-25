@@ -982,15 +982,13 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("export")), "json") {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", `attachment; filename="operator-comms.json"`)
-		_ = json.NewEncoder(w).Encode(rows)
+		s.writeCommsExport(w, rows)
 		return
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Comms Journal</h2><p><a href="/operator/comms/export">Export JSON</a></p><table>`)
-	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>EGM</th><th>Action Run</th><th>Template</th><th>Message Type</th><th>Result</th><th>Transport</th><th>HTTP</th><th>Latency(ms)</th><th>Payload</th></tr>`)
+	body.WriteString(`<div class="panel"><h2>Message Journal</h2><p><a href="/operator/comms/export">Export JSON</a></p><table>`)
+	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Input Transition</th><th>Template</th><th>Message</th><th>Result</th><th>Delivery</th><th>Error</th><th>Payload</th><th>Summary</th></tr>`)
 	for _, row := range rows {
 		templateRef := row.TemplateID
 		if row.TemplateVersion != "" {
@@ -1003,19 +1001,22 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		body.WriteString(`<tr>`)
 		body.WriteString(`<td>` + esc(fmtTime(row.Timestamp)) + `</td>`)
 		body.WriteString(`<td>` + esc(string(row.Direction)) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(defaultString(row.FromEndpoint, "-")) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(defaultString(row.ToEndpoint, "-")) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(row.EGMID) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(row.ActionRunID) + `</td>`)
+		body.WriteString(`<td>` + esc(zeroDash64(row.InputTransitionID)) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(templateRef) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(row.MessageType) + `</td>`)
 		body.WriteString(`<td>` + esc(string(row.Result)) + `</td>`)
-		body.WriteString(`<td>` + esc(row.TransportMode) + `</td>`)
-		body.WriteString(`<td>` + esc(zeroDash(row.HTTPStatusCode)) + `</td>`)
-		body.WriteString(`<td>` + esc(zeroDash(row.LatencyMS)) + `</td>`)
+		body.WriteString(`<td>` + esc(deliverySummary(row)) + `</td>`)
+		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.Error, "-")) + `</pre></details></td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(payload) + `</pre></details></td>`)
+		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.ParsedSummaryJSON, "-")) + `</pre></details></td>`)
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
-	s.renderPage(w, operatorRoute("/comms"), "Operator Comms Journal", body.String(), "", "")
+	s.renderPage(w, operatorRoute("/comms"), "Operator Message Journal", body.String(), "", "")
 }
 
 func (s *Server) handleCommsExport(w http.ResponseWriter, r *http.Request) {
@@ -1028,9 +1029,7 @@ func (s *Server) handleCommsExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Disposition", `attachment; filename="operator-comms.json"`)
-	_ = json.NewEncoder(w).Encode(rows)
+	s.writeCommsExport(w, rows)
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
@@ -1044,14 +1043,12 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("export")), "json") {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", `attachment; filename="operator-audit.json"`)
-		_ = json.NewEncoder(w).Encode(rows)
+		s.writeAuditExport(w, rows)
 		return
 	}
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Emergency Audit Timeline</h2><p><a href="/operator/audit/export">Export JSON</a></p><table>`)
-	body.WriteString(`<tr><th>Timestamp</th><th>Severity</th><th>Event</th><th>Summary</th><th>Input Transition</th><th>Action Run</th><th>Message</th><th>Operator</th><th>Details</th></tr>`)
+	body.WriteString(`<div class="panel"><h2>Audit Timeline</h2><p><a href="/operator/audit/export">Export JSON</a></p><table>`)
+	body.WriteString(`<tr><th>Timestamp</th><th>Severity</th><th>Event</th><th>Summary</th><th>Related Input</th><th>Related Action</th><th>Related Message</th><th>Related EGM</th><th>Operator</th><th>Details</th></tr>`)
 	for _, row := range rows {
 		body.WriteString(`<tr>`)
 		body.WriteString(`<td>` + esc(fmtTime(row.OccurredAt)) + `</td>`)
@@ -1061,6 +1058,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		body.WriteString(`<td>` + esc(zeroDash64(row.InputTransitionID)) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(row.ActionRunID) + `</td>`)
 		body.WriteString(`<td>` + esc(zeroDash64(row.MessageJournalID)) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(auditRelatedEGMID(row)) + `</td>`)
 		body.WriteString(`<td>` + esc(row.Operator) + `</td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(row.DetailJSON) + `</pre></details></td>`)
 		body.WriteString(`</tr>`)
@@ -1079,9 +1077,86 @@ func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.writeAuditExport(w, rows)
+}
+
+type commsExportPayload struct {
+	GeneratedAt time.Time                       `json:"generated_at"`
+	Count       int                             `json:"count"`
+	Rows        []g2sengine.MessageJournalEntry `json:"rows"`
+}
+
+func (s *Server) writeCommsExport(w http.ResponseWriter, rows []g2sengine.MessageJournalEntry) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="operator-comms.json"`)
+	_ = json.NewEncoder(w).Encode(commsExportPayload{
+		GeneratedAt: time.Now().UTC(),
+		Count:       len(rows),
+		Rows:        rows,
+	})
+}
+
+type auditExportPayload struct {
+	GeneratedAt time.Time                  `json:"generated_at"`
+	Count       int                        `json:"count"`
+	Rows        []audit.AuditTimelineEntry `json:"rows"`
+}
+
+func (s *Server) writeAuditExport(w http.ResponseWriter, rows []audit.AuditTimelineEntry) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", `attachment; filename="operator-audit.json"`)
-	_ = json.NewEncoder(w).Encode(rows)
+	_ = json.NewEncoder(w).Encode(auditExportPayload{
+		GeneratedAt: time.Now().UTC(),
+		Count:       len(rows),
+		Rows:        rows,
+	})
+}
+
+func deliverySummary(row g2sengine.MessageJournalEntry) string {
+	parts := []string{}
+	if strings.TrimSpace(row.TransportMode) != "" {
+		parts = append(parts, "transport="+row.TransportMode)
+	}
+	if row.HTTPStatusCode > 0 {
+		parts = append(parts, "http="+strconv.Itoa(row.HTTPStatusCode))
+	}
+	if row.LatencyMS > 0 {
+		parts = append(parts, "latency_ms="+strconv.Itoa(row.LatencyMS))
+	}
+	if row.SentAt != nil {
+		parts = append(parts, "sent_at="+row.SentAt.UTC().Format(time.RFC3339))
+	}
+	if row.CompletedAt != nil {
+		parts = append(parts, "completed_at="+row.CompletedAt.UTC().Format(time.RFC3339))
+	}
+	if strings.TrimSpace(row.ResponseExcerpt) != "" {
+		parts = append(parts, "response_excerpt="+row.ResponseExcerpt)
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func auditRelatedEGMID(row audit.AuditTimelineEntry) string {
+	detail := strings.TrimSpace(row.DetailJSON)
+	if detail == "" {
+		return "-"
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		return "-"
+	}
+	for _, key := range []string{"egm_id", "egm", "target_egm_id"} {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return "-"
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {

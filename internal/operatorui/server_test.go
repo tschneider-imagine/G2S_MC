@@ -134,11 +134,17 @@ func TestCommsExportStillWorks(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
-	var rows []g2sengine.MessageJournalEntry
-	if err := json.Unmarshal(res.Body.Bytes(), &rows); err != nil {
+	var payload commsExportPayload
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(rows) == 0 {
+	if payload.GeneratedAt.IsZero() {
+		t.Fatal("expected generated_at")
+	}
+	if payload.Count != len(payload.Rows) {
+		t.Fatalf("count=%d rows=%d", payload.Count, len(payload.Rows))
+	}
+	if len(payload.Rows) == 0 {
 		t.Fatal("expected comms rows")
 	}
 }
@@ -152,11 +158,17 @@ func TestAuditExportStillWorks(t *testing.T) {
 	if auditRes.Code != http.StatusOK {
 		t.Fatalf("audit export status=%d body=%s", auditRes.Code, auditRes.Body.String())
 	}
-	var auditRows []audit.AuditTimelineEntry
-	if err := json.Unmarshal(auditRes.Body.Bytes(), &auditRows); err != nil {
+	var payload auditExportPayload
+	if err := json.Unmarshal(auditRes.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("audit unmarshal: %v", err)
 	}
-	if len(auditRows) == 0 {
+	if payload.GeneratedAt.IsZero() {
+		t.Fatal("expected generated_at")
+	}
+	if payload.Count != len(payload.Rows) {
+		t.Fatalf("count=%d rows=%d", payload.Count, len(payload.Rows))
+	}
+	if len(payload.Rows) == 0 {
 		t.Fatal("expected audit rows")
 	}
 }
@@ -168,6 +180,57 @@ func TestOperatorExportRouteRemoved(t *testing.T) {
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want=404", res.Code)
+	}
+}
+
+func TestCommsPageRendersMessageEvidence(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Message Journal",
+		"/operator/comms/export",
+		"from://controller",
+		"to://cabinet/EGM-001",
+		"run-1",
+		"template-generic-g2s-action@1",
+		"emergency_broadcast_silence",
+		"SEND_BLOCKED",
+		"dry-run rendered",
+		"emergency-broadcast-trigger",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in comms page", expected)
+		}
+	}
+}
+
+func TestAuditPageRendersTimelineEvidence(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Audit Timeline",
+		"/operator/audit/export",
+		"INPUT_TRANSITION",
+		"Input transition recorded",
+		"run-1",
+		"EGM-001",
+		"operator",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in audit page", expected)
+		}
 	}
 }
 
@@ -300,19 +363,27 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 		}
 	}
 
-	if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
-		Timestamp:       now,
-		Direction:       g2sengine.DirectionOutbound,
-		EGMID:           "EGM-001",
-		ActionRunID:     "run-1",
-		TemplateID:      "template-generic-g2s-action",
-		TemplateVersion: "1",
-		MessageType:     "emergency_broadcast_silence",
-		RawPayload:      `<message action="emergency-broadcast-trigger" egm="EGM-001"/>`,
-		Result:          g2sengine.MessageResultSendBlocked,
-		TransportMode:   "HTTP",
-		Error:           "send_disabled",
-	}); err != nil {
+	messageID, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:         now,
+		Direction:         g2sengine.DirectionOutbound,
+		FromEndpoint:      "from://controller",
+		ToEndpoint:        "to://cabinet/EGM-001",
+		EGMID:             "EGM-001",
+		ActionRunID:       "run-1",
+		InputTransitionID: transitionID,
+		TemplateID:        "template-generic-g2s-action",
+		TemplateVersion:   "1",
+		MessageType:       "emergency_broadcast_silence",
+		RawPayload:        `<message action="emergency-broadcast-trigger" egm="EGM-001"/>`,
+		ParsedSummaryJSON: `{"summary":"dry-run rendered","egm_id":"EGM-001"}`,
+		Result:            g2sengine.MessageResultSendBlocked,
+		TransportMode:     "HTTP",
+		Error:             "send_disabled",
+		HTTPStatusCode:    403,
+		LatencyMS:         17,
+		ResponseExcerpt:   "blocked",
+	})
+	if err != nil {
 		t.Fatalf("record message: %v", err)
 	}
 
@@ -321,8 +392,10 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 		Severity:          audit.AuditSeverityEmergency,
 		EventType:         audit.EventTypeInputTransition,
 		Summary:           "Input transition recorded",
+		DetailJSON:        `{"egm_id":"EGM-001","note":"transition detail"}`,
 		InputTransitionID: transitionID,
 		ActionRunID:       "run-1",
+		MessageJournalID:  messageID,
 		Operator:          "operator",
 	}); err != nil {
 		t.Fatalf("record audit: %v", err)
