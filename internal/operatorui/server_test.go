@@ -1146,18 +1146,77 @@ func TestInputsPageIncludesLiveStateMarkers(t *testing.T) {
 		`id="inputs-live-status"`,
 		`id="inputs-live-updated"`,
 		`id="inputs-live-latches"`,
-		`data-live-input-id="emergency-broadcast"`,
-		`data-live-field="raw"`,
-		`data-live-field="derived"`,
-		`data-live-field="latch-active"`,
-		`data-live-field="last-observed"`,
-		`data-live-field="last-transition"`,
-		`/api/v2/inputs/state`,
+		`data-input-id="emergency-broadcast"`,
+		`data-field="raw_state"`,
+		`data-field="derived_state"`,
+		`data-field="latch_active"`,
+		`data-field="last_observed_at"`,
+		`data-field="last_transition"`,
+		`/operator/inputs/live.json`,
 		`/operator/inputs/fragments/transitions`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in inputs page", expected)
 		}
+	}
+}
+
+func TestInputsLiveJSONReturnsNoStoreAndFields(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/inputs/live.json", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control=%q", got)
+	}
+	var payload struct {
+		GeneratedAt string `json:"generated_at"`
+		Inputs      []struct {
+			ID             string `json:"id"`
+			RawState       string `json:"raw_state"`
+			DerivedState   string `json:"derived_state"`
+			LatchActive    bool   `json:"latch_active"`
+			LastObservedAt string `json:"last_observed_at"`
+			LastTransition string `json:"last_transition"`
+		} `json:"inputs"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.GeneratedAt == "" {
+		t.Fatal("expected generated_at")
+	}
+	if len(payload.Inputs) == 0 {
+		t.Fatal("expected input rows")
+	}
+	var emergency *struct {
+		ID             string `json:"id"`
+		RawState       string `json:"raw_state"`
+		DerivedState   string `json:"derived_state"`
+		LatchActive    bool   `json:"latch_active"`
+		LastObservedAt string `json:"last_observed_at"`
+		LastTransition string `json:"last_transition"`
+	}
+	for i := range payload.Inputs {
+		if payload.Inputs[i].ID == "emergency-broadcast" {
+			emergency = &payload.Inputs[i]
+			break
+		}
+	}
+	if emergency == nil {
+		t.Fatal("missing emergency-broadcast in live payload")
+	}
+	if emergency.RawState == "" || emergency.DerivedState == "" {
+		t.Fatalf("expected raw/derived fields, row=%+v", *emergency)
+	}
+	if emergency.LastObservedAt == "" {
+		t.Fatalf("expected last_observed_at, row=%+v", *emergency)
+	}
+	if emergency.LastTransition == "" {
+		t.Fatalf("expected last_transition, row=%+v", *emergency)
 	}
 }
 
@@ -1168,6 +1227,9 @@ func TestInputsTransitionsFragmentRendersRows(t *testing.T) {
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control=%q", got)
 	}
 	body := res.Body.String()
 	for _, expected := range []string{
