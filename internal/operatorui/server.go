@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actionexecutor"
 	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
+	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/deliverycheck"
@@ -60,7 +62,10 @@ type Store interface {
 	GetActionRun(ctx context.Context, id string) (*actions.ActionRun, error)
 	UpdateActionRun(ctx context.Context, run actions.ActionRun) error
 	ListActionRuns(ctx context.Context, query store.ActionRunListQuery) ([]actions.ActionRun, error)
+	CreateActionRun(ctx context.Context, run actions.ActionRun) (actions.ActionRun, error)
 	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
+	CreateActionTargetResult(ctx context.Context, result actions.ActionTargetResult) (actions.ActionTargetResult, error)
+	UpdateActionTargetResult(ctx context.Context, row actions.ActionTargetResult) error
 
 	GetG2STemplate(ctx context.Context, id string) (*templates.G2STemplate, error)
 	UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error
@@ -80,6 +85,8 @@ type Store interface {
 
 	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
 	GetMessageJournalEntry(ctx context.Context, id int64) (*g2sengine.MessageJournalEntry, error)
+	RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error)
+	UpdateMessageJournalResult(ctx context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error
 	UpdateMessageJournalHandlerRule(ctx context.Context, id int64, handlerRuleID string) error
 	UpsertHandlerRule(ctx context.Context, rule g2sengine.HandlerRule) error
 	GetHandlerRule(ctx context.Context, id string) (*g2sengine.HandlerRule, error)
@@ -99,36 +106,37 @@ type Store interface {
 }
 
 type Options struct {
-	AppVersion               string
-	RuntimeVersion           string
-	BuildRevision            string
-	BuildTime                string
-	GoVersion                string
-	ControllerID             string
-	SiteName                 string
-	DatabasePath             string
-	ConfigPath               string
-	BindAddress              string
-	G2SHostURL               string
-	G2SEndpointPath          string
-	G2SHostID                string
-	TLSRequired              bool
-	ClientCertRequired       bool
-	WebLoginRequired         bool
-	AdminClientCertRequired  bool
-	CAConfigured             bool
-	ClientCertConfigured     bool
-	ServerCertConfigured     bool
-	DeliveryMode             string
-	DeliveryTopology         string
-	DeliveryCaptureEndpoint  string
-	AllowDeliveryDefault     bool
-	CaptureOnlyDefault       bool
-	DeliveryTimeoutMS        int
-	DeliveryEndpointDefaults g2stransport.EndpointDefaults
-	DeliveryClientConfig     g2stransport.HTTPClientConfig
-	InputRuntimeEnabled      bool
-	StartedAt                time.Time
+	AppVersion                 string
+	RuntimeVersion             string
+	BuildRevision              string
+	BuildTime                  string
+	GoVersion                  string
+	ControllerID               string
+	SiteName                   string
+	DatabasePath               string
+	ConfigPath                 string
+	BindAddress                string
+	G2SHostURL                 string
+	G2SEndpointPath            string
+	G2SHostID                  string
+	TLSRequired                bool
+	ClientCertRequired         bool
+	WebLoginRequired           bool
+	AdminClientCertRequired    bool
+	CAConfigured               bool
+	ClientCertConfigured       bool
+	ServerCertConfigured       bool
+	DeliveryMode               string
+	DeliveryTopology           string
+	DeliveryCaptureEndpoint    string
+	AllowDeliveryDefault       bool
+	CaptureOnlyDefault         bool
+	DeliveryTimeoutMS          int
+	DeliveryEndpointDefaults   g2stransport.EndpointDefaults
+	DeliveryClientConfig       g2stransport.HTTPClientConfig
+	InputRuntimeEnabled        bool
+	InputRuntimeExecuteActions bool
+	StartedAt                  time.Time
 }
 
 type Server struct {
@@ -248,22 +256,96 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action == "clear-latch" {
+		actor := "operator-console"
+		clearedAt := time.Now().UTC()
 		evaluator := inputruntime.Evaluator{Store: s.Store}
-		result, err := evaluator.ClearLatchedInput(r.Context(), inputID, "operator-console", "operator clear latch")
+		result, err := evaluator.ClearLatchedInput(r.Context(), inputID, actor, "operator clear latch")
 		if err != nil {
 			s.renderInputsPage(w, r, "", err.Error())
 			return
 		}
+		var incidentService incidents.Service
+		incidentService = incidents.Service{Store: s.Store}
+		incidentID := ""
 		if result.Transition != nil {
-			incidentService := incidents.Service{Store: s.Store}
-			if _, incidentErr := incidentService.HandleTransition(r.Context(), result.Transition.ID, "operator-console", time.Now().UTC()); incidentErr != nil {
+			incidentResult, incidentErr := incidentService.HandleTransition(r.Context(), result.Transition.ID, actor, clearedAt)
+			if incidentErr != nil {
 				s.renderInputsPage(w, r, "", incidentErr.Error())
 				return
 			}
+			if incidentResult.Incident != nil {
+				incidentID = strconv.FormatInt(incidentResult.Incident.ID, 10)
+			}
+		}
+
+		queuedRunID := ""
+		executedRunStatus := ""
+		actionQueuedID := strings.TrimSpace(result.ActionQueuedID)
+		if result.Transition != nil && actionQueuedID != "" {
+			existingRunID, findErr := s.findRunForTransitionAction(r.Context(), result.Transition.ID, actionQueuedID)
+			if findErr != nil {
+				s.renderInputsPage(w, r, "", findErr.Error())
+				return
+			}
+			if existingRunID != "" {
+				queuedRunID = existingRunID
+			} else {
+				queuer := actionruntime.Queuer{Store: s.Store}
+				queueResult, queueErr := queuer.QueueActionRun(r.Context(), actionruntime.QueueRequest{
+					InputTransition: *result.Transition,
+					ActionID:        actionQueuedID,
+					IncidentID:      incidentID,
+					TriggerReason:   fmt.Sprintf("manual clear transition %d", result.Transition.ID),
+					Actor:           actor,
+					QueuedAt:        clearedAt,
+				})
+				if queueErr != nil {
+					s.renderInputsPage(w, r, "", queueErr.Error())
+					return
+				}
+				if queueResult.Queued && queueResult.ActionRun != nil {
+					queuedRunID = strings.TrimSpace(queueResult.ActionRun.ID)
+					if queuedRunID != "" {
+						if _, linkErr := incidentService.LinkActionRun(r.Context(), queuedRunID, result.Transition.ID, result.InputID, actor, clearedAt); linkErr != nil {
+							s.renderInputsPage(w, r, "", linkErr.Error())
+							return
+						}
+						if s.Options.InputRuntimeExecuteActions {
+							executor := actionexecutor.Executor{
+								Store:            s.Store,
+								EndpointDefaults: s.Options.DeliveryEndpointDefaults,
+							}
+							executeResult, executeErr := executor.Execute(r.Context(), actionexecutor.ExecuteRequest{
+								ActionRunID: queuedRunID,
+								Actor:       actor,
+								RequestedAt: clearedAt,
+								Delivery: g2stransport.DeliverySettings{
+									Mode:          g2stransport.DeliveryMode(strings.ToUpper(strings.TrimSpace(s.Options.DeliveryMode))),
+									AllowDelivery: s.Options.AllowDeliveryDefault,
+									CaptureOnly:   s.Options.CaptureOnlyDefault,
+									TimeoutMS:     s.Options.DeliveryTimeoutMS,
+								},
+								Topology: s.Options.DeliveryTopology,
+							})
+							if executeErr != nil {
+								s.renderInputsPage(w, r, "", executeErr.Error())
+								return
+							}
+							executedRunStatus = string(executeResult.ActionRun.Status)
+						}
+					}
+				}
+			}
 		}
 		msg := "Latch clear: " + inputID + " " + defaultString(strings.TrimSpace(result.Reason), "updated")
-		if strings.TrimSpace(result.ActionQueuedID) != "" {
-			msg += " action queued: " + strings.TrimSpace(result.ActionQueuedID)
+		if actionQueuedID != "" {
+			msg += " action queued: " + actionQueuedID
+		}
+		if queuedRunID != "" {
+			msg += " run queued: " + queuedRunID
+		}
+		if executedRunStatus != "" {
+			msg += " run status: " + executedRunStatus
 		}
 		s.renderInputsPage(w, r, msg, "")
 		return
@@ -318,6 +400,26 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.renderInputsPage(w, r, "Input updated: "+updated.ID, "")
+}
+
+func (s *Server) findRunForTransitionAction(ctx context.Context, transitionID int64, actionID string) (string, error) {
+	if transitionID <= 0 || strings.TrimSpace(actionID) == "" {
+		return "", nil
+	}
+	rows, err := s.Store.ListActionRuns(ctx, store.ActionRunListQuery{
+		Limit:             200,
+		InputTransitionID: transitionID,
+	})
+	if err != nil {
+		return "", err
+	}
+	trimmedActionID := strings.TrimSpace(actionID)
+	for _, row := range rows {
+		if strings.TrimSpace(row.ActionDefinitionID) == trimmedActionID {
+			return strings.TrimSpace(row.ID), nil
+		}
+	}
+	return "", nil
 }
 
 func (s *Server) handleInputTransitionsFragment(w http.ResponseWriter, r *http.Request) {

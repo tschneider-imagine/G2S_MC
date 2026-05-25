@@ -269,8 +269,9 @@ func main() {
 				ClientKeyPath:    strings.TrimSpace(cfg.Crypto.G2SClientKeyPath),
 				DefaultTimeoutMS: cfg.Timeouts.G2SRequestTimeoutMS,
 			},
-			InputRuntimeEnabled: runtimeOptions.Enabled,
-			StartedAt:           startedAt,
+			InputRuntimeEnabled:        runtimeOptions.Enabled,
+			InputRuntimeExecuteActions: runtimeOptions.ExecuteActions,
+			StartedAt:                  startedAt,
 		},
 		func(w http.ResponseWriter, r *http.Request) bool {
 			return requireMutationAuth(w, r, cfg)

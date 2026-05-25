@@ -2702,9 +2702,289 @@ func TestClearLatchRouteWorksWhenPhysicalStateNormal(t *testing.T) {
 	}
 }
 
+func TestClearLatchRouteQueuesReturnActionRun(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	channel, err := st.GetInputChannel(ctx, "emergency-broadcast")
+	if err != nil || channel == nil {
+		t.Fatalf("get input channel: %v", err)
+	}
+	channel.OnNormalActionID = "emergency-broadcast-normal"
+	if err := st.UpsertInputChannel(ctx, *channel); err != nil {
+		t.Fatalf("upsert channel: %v", err)
+	}
+	if err := st.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "emergency-broadcast-normal",
+		Name:             "Emergency Broadcast Normal",
+		Severity:         actions.SeverityRestore,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary Step", Sequence: 0, TemplateActionKey: "emergency_broadcast_restore"}},
+		Version:          1,
+	}); err != nil {
+		t.Fatalf("upsert action definition: %v", err)
+	}
+	if err := st.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              "emergency-broadcast",
+		StableRawState:       inputs.InputStateHigh,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          now,
+		LastObservedRawState: inputs.InputStateHigh,
+		LastObservedAt:       now,
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert runtime: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/emergency-broadcast/clear-latch", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	transition := latestManualClearTransition(t, st, "emergency-broadcast")
+	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{
+		Limit:             20,
+		InputTransitionID: transition.ID,
+	})
+	if err != nil {
+		t.Fatalf("list action runs: %v", err)
+	}
+	var matched *actions.ActionRun
+	for i := range runs {
+		if runs[i].ActionDefinitionID == "emergency-broadcast-normal" {
+			row := runs[i]
+			matched = &row
+			break
+		}
+	}
+	if matched == nil {
+		t.Fatalf("expected queued return action run for transition_id=%d", transition.ID)
+	}
+	if matched.InputTransitionID != transition.ID {
+		t.Fatalf("run transition=%d want %d", matched.InputTransitionID, transition.ID)
+	}
+	if matched.Status != actions.RunStatusPending {
+		t.Fatalf("run status=%q want PENDING", matched.Status)
+	}
+	if !strings.Contains(res.Body.String(), "run queued: "+matched.ID) {
+		t.Fatalf("expected queued run id in response body, body=%s", res.Body.String())
+	}
+}
+
+func TestClearLatchRouteExecutesQueuedRunWhenInputRuntimeExecutionEnabled(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	options := defaultOperatorOptions()
+	options.InputRuntimeExecuteActions = true
+
+	mux := http.NewServeMux()
+	server := NewServer(st, options, allowMutation)
+	server.RegisterRoutes(mux)
+
+	now := time.Now().UTC()
+	channel, err := st.GetInputChannel(ctx, "emergency-broadcast")
+	if err != nil || channel == nil {
+		t.Fatalf("get input channel: %v", err)
+	}
+	channel.OnNormalActionID = "emergency-broadcast-normal"
+	if err := st.UpsertInputChannel(ctx, *channel); err != nil {
+		t.Fatalf("upsert channel: %v", err)
+	}
+	if err := st.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "emergency-broadcast-normal",
+		Name:             "Emergency Broadcast Normal",
+		Severity:         actions.SeverityRestore,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary Step", Sequence: 0, TemplateActionKey: "emergency_broadcast_restore"}},
+		Version:          1,
+	}); err != nil {
+		t.Fatalf("upsert action definition: %v", err)
+	}
+	if err := st.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              "emergency-broadcast",
+		StableRawState:       inputs.InputStateHigh,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          now,
+		LastObservedRawState: inputs.InputStateHigh,
+		LastObservedAt:       now,
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert runtime: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/emergency-broadcast/clear-latch", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	transition := latestManualClearTransition(t, st, "emergency-broadcast")
+	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{
+		Limit:             20,
+		InputTransitionID: transition.ID,
+	})
+	if err != nil {
+		t.Fatalf("list action runs: %v", err)
+	}
+	var matched *actions.ActionRun
+	for i := range runs {
+		if runs[i].ActionDefinitionID == "emergency-broadcast-normal" {
+			row := runs[i]
+			matched = &row
+			break
+		}
+	}
+	if matched == nil {
+		t.Fatalf("expected queued return action run for transition_id=%d", transition.ID)
+	}
+	if matched.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q want WAITING_CONFIRMATION", matched.Status)
+	}
+	if !strings.Contains(res.Body.String(), "run status: WAITING_CONFIRMATION") {
+		t.Fatalf("expected executed run status in response, body=%s", res.Body.String())
+	}
+
+	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+		Limit:       50,
+		ActionRunID: matched.ID,
+	})
+	if err != nil {
+		t.Fatalf("list message journal: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("expected prepared message rows for action run %s", matched.ID)
+	}
+	foundPrepared := false
+	for _, row := range rows {
+		if row.Result == g2sengine.MessageResultPrepared {
+			foundPrepared = true
+		}
+		if row.Result == g2sengine.MessageResultSendFailed {
+			t.Fatalf("unexpected SEND_FAILED row in host listener execution: %+v", row)
+		}
+	}
+	if !foundPrepared {
+		t.Fatalf("expected PREPARED message result for action run %s", matched.ID)
+	}
+}
+
+func TestClearLatchRouteSecondClearDoesNotCreateDuplicateRun(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	channel, err := st.GetInputChannel(ctx, "emergency-broadcast")
+	if err != nil || channel == nil {
+		t.Fatalf("get input channel: %v", err)
+	}
+	channel.OnNormalActionID = "emergency-broadcast-normal"
+	if err := st.UpsertInputChannel(ctx, *channel); err != nil {
+		t.Fatalf("upsert channel: %v", err)
+	}
+	if err := st.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "emergency-broadcast-normal",
+		Name:             "Emergency Broadcast Normal",
+		Severity:         actions.SeverityRestore,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary Step", Sequence: 0, TemplateActionKey: "emergency_broadcast_restore"}},
+		Version:          1,
+	}); err != nil {
+		t.Fatalf("upsert action definition: %v", err)
+	}
+	if err := st.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              "emergency-broadcast",
+		StableRawState:       inputs.InputStateHigh,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          now,
+		LastObservedRawState: inputs.InputStateHigh,
+		LastObservedAt:       now,
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert runtime: %v", err)
+	}
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/operator/inputs/emergency-broadcast/clear-latch", nil)
+	firstRes := httptest.NewRecorder()
+	mux.ServeHTTP(firstRes, firstReq)
+	if firstRes.Code != http.StatusOK {
+		t.Fatalf("first clear status=%d body=%s", firstRes.Code, firstRes.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/operator/inputs/emergency-broadcast/clear-latch", nil)
+	secondRes := httptest.NewRecorder()
+	mux.ServeHTTP(secondRes, secondReq)
+	if secondRes.Code != http.StatusOK {
+		t.Fatalf("second clear status=%d body=%s", secondRes.Code, secondRes.Body.String())
+	}
+
+	transitions, err := st.ListInputTransitions(ctx, 100)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	clearTransitionCount := 0
+	clearTransitionID := int64(0)
+	for _, row := range transitions {
+		if row.InputChannelID == "emergency-broadcast" && row.NewDerived == inputs.DerivedStateNormal && strings.Contains(strings.ToLower(row.Reason), "manual clear") {
+			clearTransitionCount++
+			clearTransitionID = row.ID
+		}
+	}
+	if clearTransitionCount != 1 {
+		t.Fatalf("manual clear transitions=%d want 1", clearTransitionCount)
+	}
+
+	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{
+		Limit:             50,
+		InputTransitionID: clearTransitionID,
+	})
+	if err != nil {
+		t.Fatalf("list action runs: %v", err)
+	}
+	matchCount := 0
+	for _, row := range runs {
+		if row.ActionDefinitionID == "emergency-broadcast-normal" {
+			matchCount++
+		}
+	}
+	if matchCount != 1 {
+		t.Fatalf("queued return action runs=%d want 1", matchCount)
+	}
+}
+
 func setupOperatorServer(t *testing.T) *http.ServeMux {
 	mux, _ := setupOperatorServerWithStore(t)
 	return mux
+}
+
+func latestManualClearTransition(t *testing.T, st *store.SQLiteStore, inputID string) inputs.InputTransition {
+	t.Helper()
+	rows, err := st.ListInputTransitions(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	for _, row := range rows {
+		if row.InputChannelID == inputID && row.NewDerived == inputs.DerivedStateNormal && strings.Contains(strings.ToLower(row.Reason), "manual clear") {
+			return row
+		}
+	}
+	t.Fatalf("manual clear transition not found for input %s", inputID)
+	return inputs.InputTransition{}
 }
 
 func setupOperatorServerWithStore(t *testing.T) (*http.ServeMux, *store.SQLiteStore) {
@@ -2755,8 +3035,9 @@ func defaultOperatorOptions() Options {
 			ClientKeyPath:    "/certs/client.key",
 			DefaultTimeoutMS: 5000,
 		},
-		InputRuntimeEnabled: true,
-		StartedAt:           time.Now().UTC().Add(-5 * time.Minute),
+		InputRuntimeEnabled:        true,
+		InputRuntimeExecuteActions: false,
+		StartedAt:                  time.Now().UTC().Add(-5 * time.Minute),
 	}
 }
 
