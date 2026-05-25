@@ -34,11 +34,11 @@ func main() {
 	sendPrepared := flag.Bool("send-prepared", false, "send prepared outbound messages for newly queued runs")
 	transportModeRaw := flag.String("transport", "disabled", "transport mode: disabled|dry-run|http")
 	allowRealSend := flag.Bool("allow-real-send", false, "allow real network sends (requires -transport http)")
-	captureEndpoint := flag.String("capture-endpoint", "", "explicit HTTP capture endpoint URL (used for demo seed/send proof)")
-	captureOnlySend := flag.Bool("capture-only-send", false, "require localhost capture endpoint safety gate for HTTP send proof")
+	captureEndpoint := flag.String("capture-endpoint", "", "explicit HTTP capture endpoint URL for send-gate validated payload capture")
+	captureOnlySend := flag.Bool("capture-only-send", false, "require localhost capture endpoint safety gate for HTTP send attempts")
 	clearLatchInputID := flag.String("clear-latch", "", "manually clear a MANUAL_CLEAR latched input by input ID")
-	seedDemoActions := flag.Bool("seed-demo-actions", false, "seed queue-only demo action definitions and bind default channels")
-	seedDemoEGMs := flag.Bool("seed-demo-egms", false, "seed no-send smoke EGM registry records and template")
+	seedLabActions := flag.Bool("seed-lab-actions", false, "seed operator action definitions and bind default channels")
+	seedLabEGMs := flag.Bool("seed-lab-egms", false, "seed product-neutral lab EGM registry records and template")
 	flag.Parse()
 
 	if *interval <= 0 {
@@ -86,15 +86,15 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if *seedDemoActions {
-		if err := seedDemoActionDefinitionsAndBindings(ctx, st); err != nil {
-			fmt.Fprintf(os.Stderr, "seed demo actions: %v\n", err)
+	if *seedLabActions {
+		if err := seedLabActionDefinitionsAndBindings(ctx, st); err != nil {
+			fmt.Fprintf(os.Stderr, "seed lab actions: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	if *seedDemoEGMs {
-		if err := seedDemoEGMRegistry(ctx, st, strings.TrimSpace(*captureEndpoint)); err != nil {
-			fmt.Fprintf(os.Stderr, "seed demo egms: %v\n", err)
+	if *seedLabEGMs {
+		if err := seedLabEGMRegistry(ctx, st, strings.TrimSpace(*captureEndpoint)); err != nil {
+			fmt.Fprintf(os.Stderr, "seed lab egms: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -276,11 +276,11 @@ func validateCaptureSendConfig(transportMode g2stransport.Mode, allowRealSend bo
 		return fmt.Errorf("-allow-real-send requires -transport http")
 	}
 	if !captureOnlySend {
-		return fmt.Errorf("-allow-real-send in Phase 2G requires -capture-only-send")
+		return fmt.Errorf("-allow-real-send requires -capture-only-send")
 	}
 	allowed, reason := g2stransport.CaptureEndpointAllowed(captureEndpoint)
 	if !allowed {
-		return fmt.Errorf("capture endpoint is required and must be localhost/loopback for Phase 2G: %s", reason)
+		return fmt.Errorf("capture endpoint is required and must be localhost/loopback for send gate policy: %s", reason)
 	}
 	return nil
 }
@@ -365,65 +365,67 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 	return nil
 }
 
-func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore, captureEndpoint string) error {
+func seedLabEGMRegistry(ctx context.Context, st *store.SQLiteStore, captureEndpoint string) error {
 	template := templates.G2STemplate{
-		ID:     "template-smoke-no-send",
-		Name:   "Template Smoke No Send",
-		Vendor: "SMOKE",
+		ID:     "template-generic-g2s-action",
+		Name:   "Generic G2S Action Template",
+		Vendor: "Generic",
 		Status: templates.TemplateStatusActive,
-		Notes:  "No-send dry-run smoke template seed",
+		Notes:  "Product-neutral lab template seed",
 	}
 	if err := st.UpsertG2STemplate(ctx, template); err != nil {
-		return fmt.Errorf("upsert demo template: %w", err)
+		return fmt.Errorf("upsert lab template: %w", err)
 	}
 	templateVersion := templates.G2STemplateVersion{
-		ID:           "template-smoke-no-send-v1",
+		ID:           "template-generic-g2s-action-v1",
 		TemplateID:   template.ID,
 		VersionLabel: "1",
-		ActionsJSON:  `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"No-send dry-run smoke template action"}}}`,
-		Notes:        "No-send dry-run template version seed",
+		ActionsJSON:  `{"actions":{"emergency_broadcast_silence":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"Safety-gated template action"},"emergency_broadcast_restore":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"Safety-gated template action"},"general_broadcast_notice":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"Safety-gated template action"},"general_broadcast_restore":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"Safety-gated template action"},"local_notice":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"Safety-gated template action"},"local_notice_restore":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"Safety-gated template action"},"regular_operation_notice":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>","notes":"Safety-gated template action"}}}`,
+		Notes:        "Safety-gated template version seed",
 	}
 	if err := st.UpsertG2STemplateVersion(ctx, templateVersion); err != nil {
-		return fmt.Errorf("upsert demo template version: %w", err)
+		return fmt.Errorf("upsert lab template version: %w", err)
 	}
 	if err := st.SetActiveG2STemplateVersion(ctx, template.ID, 1); err != nil {
-		return fmt.Errorf("set active demo template version: %w", err)
+		return fmt.Errorf("set active lab template version: %w", err)
 	}
 
 	egmRows := []egms.EGMRecord{
 		{
-			EGMID:              "EGM-SMOKE-001",
-			DisplayName:        "Smoke EGM 001",
+			EGMID:              "EGM-001",
+			DisplayName:        "Cabinet 001",
 			Enabled:            true,
 			EmergencyEnabled:   true,
 			TemplateID:         template.ID,
 			CurrentActionState: egms.EGMActionStateNormal,
-			Notes:              "No-send dry-run registry seed",
+			Notes:              "Lab seed registry record",
+			Vendor:             "Generic",
 			EndpointPath:       strings.TrimSpace(captureEndpoint),
 		},
 		{
-			EGMID:              "EGM-SMOKE-002",
-			DisplayName:        "Smoke EGM 002",
+			EGMID:              "EGM-002",
+			DisplayName:        "Cabinet 002",
 			Enabled:            true,
 			EmergencyEnabled:   true,
 			TemplateID:         template.ID,
 			CurrentActionState: egms.EGMActionStateNormal,
-			Notes:              "No-send dry-run registry seed",
+			Notes:              "Lab seed registry record",
+			Vendor:             "Generic",
 			EndpointPath:       strings.TrimSpace(captureEndpoint),
 		},
 	}
 	for _, row := range egmRows {
 		if err := st.UpsertEGMRecord(ctx, row); err != nil {
-			return fmt.Errorf("upsert demo egm %s: %w", row.EGMID, err)
+			return fmt.Errorf("upsert lab egm %s: %w", row.EGMID, err)
 		}
 	}
 	return nil
 }
 
-func seedDemoActionDefinitionsAndBindings(ctx context.Context, st *store.SQLiteStore) error {
-	for _, row := range demoActionDefinitions() {
+func seedLabActionDefinitionsAndBindings(ctx context.Context, st *store.SQLiteStore) error {
+	for _, row := range labActionDefinitions() {
 		if err := st.UpsertActionDefinition(ctx, row); err != nil {
-			return fmt.Errorf("upsert demo action %s: %w", row.ID, err)
+			return fmt.Errorf("upsert lab action %s: %w", row.ID, err)
 		}
 	}
 
@@ -441,9 +443,9 @@ func seedDemoActionDefinitionsAndBindings(ctx context.Context, st *store.SQLiteS
 		normal  string
 	}{
 		"regular-operation":   {trigger: "regular-operation-trigger", normal: ""},
-		"general-broadcast":   {trigger: "general-broadcast-trigger", normal: "general-broadcast-normal"},
-		"emergency-broadcast": {trigger: "emergency-broadcast-trigger", normal: "emergency-broadcast-normal"},
-		"local-notice":        {trigger: "local-notice-trigger", normal: "local-notice-normal"},
+		"general-broadcast":   {trigger: "general-broadcast-trigger", normal: "general-broadcast-restore"},
+		"emergency-broadcast": {trigger: "emergency-broadcast-trigger", normal: "emergency-broadcast-restore"},
+		"local-notice":        {trigger: "local-notice-trigger", normal: "local-notice-restore"},
 	}
 
 	for id, pair := range bindings {
@@ -460,8 +462,8 @@ func seedDemoActionDefinitionsAndBindings(ctx context.Context, st *store.SQLiteS
 	return nil
 }
 
-func demoActionDefinitions() []actions.ActionDefinition {
-	def := func(id string, name string, severity actions.ActionSeverity) actions.ActionDefinition {
+func labActionDefinitions() []actions.ActionDefinition {
+	def := func(id string, name string, severity actions.ActionSeverity, templateActionKey string) actions.ActionDefinition {
 		return actions.ActionDefinition{
 			ID:               id,
 			Name:             name,
@@ -471,21 +473,21 @@ func demoActionDefinitions() []actions.ActionDefinition {
 			TemplateSelector: "template-by-egm",
 			Steps: []actions.ActionStep{{
 				ID:                "step-1",
-				Name:              "Queue only no send",
+				Name:              "Primary message",
 				Sequence:          0,
-				TemplateActionKey: "queue_only_no_send",
+				TemplateActionKey: templateActionKey,
 			}},
 			Version: 1,
 		}
 	}
 
 	return []actions.ActionDefinition{
-		def("regular-operation-trigger", "Regular Operation Trigger (Queue Only)", actions.SeverityNotice),
-		def("general-broadcast-trigger", "General Broadcast Trigger (Queue Only)", actions.SeverityBroadcast),
-		def("emergency-broadcast-trigger", "Emergency Broadcast Trigger (Queue Only)", actions.SeverityEmergency),
-		def("local-notice-trigger", "Local Notice Trigger (Queue Only)", actions.SeverityNotice),
-		def("emergency-broadcast-normal", "Emergency Broadcast Normal (Queue Only)", actions.SeverityRestore),
-		def("general-broadcast-normal", "General Broadcast Normal (Queue Only)", actions.SeverityRestore),
-		def("local-notice-normal", "Local Notice Normal (Queue Only)", actions.SeverityRestore),
+		def("regular-operation-trigger", "Regular Operation Trigger", actions.SeverityNotice, "regular_operation_notice"),
+		def("general-broadcast-trigger", "General Broadcast Trigger", actions.SeverityBroadcast, "general_broadcast_notice"),
+		def("emergency-broadcast-trigger", "Emergency Broadcast Trigger", actions.SeverityEmergency, "emergency_broadcast_silence"),
+		def("local-notice-trigger", "Local Notice Trigger", actions.SeverityNotice, "local_notice"),
+		def("emergency-broadcast-restore", "Emergency Broadcast Restore", actions.SeverityRestore, "emergency_broadcast_restore"),
+		def("general-broadcast-restore", "General Broadcast Restore", actions.SeverityRestore, "general_broadcast_restore"),
+		def("local-notice-restore", "Local Notice Restore", actions.SeverityRestore, "local_notice_restore"),
 	}
 }

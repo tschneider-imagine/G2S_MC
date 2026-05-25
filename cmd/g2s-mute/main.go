@@ -124,7 +124,7 @@ func main() {
 	operatorServer := operatorui.NewServer(
 		auditStore,
 		operatorui.Options{
-			AppVersion:              "phase-3a-shell",
+			AppVersion:              "operator-console-shell",
 			DatabasePath:            cfg.Database.Path,
 			BindAddress:             cfg.WebUI.BindAddress,
 			RealSendDefaultDisabled: true,

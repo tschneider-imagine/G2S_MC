@@ -17,7 +17,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
-func TestSeedDemoActionDefinitionsAndBindings(t *testing.T) {
+func TestSeedLabActionDefinitionsAndBindings(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -28,8 +28,8 @@ func TestSeedDemoActionDefinitionsAndBindings(t *testing.T) {
 	if err := inputpoller.EnsureDefaultPi4InputChannels(ctx, st, true); err != nil {
 		t.Fatalf("seed default channels: %v", err)
 	}
-	if err := seedDemoActionDefinitionsAndBindings(ctx, st); err != nil {
-		t.Fatalf("seed demo definitions and bindings: %v", err)
+	if err := seedLabActionDefinitionsAndBindings(ctx, st); err != nil {
+		t.Fatalf("seed lab definitions and bindings: %v", err)
 	}
 
 	emergency, err := st.GetInputChannel(ctx, "emergency-broadcast")
@@ -42,7 +42,7 @@ func TestSeedDemoActionDefinitionsAndBindings(t *testing.T) {
 	if emergency.OnTriggerActionID != "emergency-broadcast-trigger" {
 		t.Fatalf("emergency trigger action id=%q", emergency.OnTriggerActionID)
 	}
-	if emergency.OnNormalActionID != "emergency-broadcast-normal" {
+	if emergency.OnNormalActionID != "emergency-broadcast-restore" {
 		t.Fatalf("emergency normal action id=%q", emergency.OnNormalActionID)
 	}
 
@@ -51,9 +51,9 @@ func TestSeedDemoActionDefinitionsAndBindings(t *testing.T) {
 		"general-broadcast-trigger",
 		"emergency-broadcast-trigger",
 		"local-notice-trigger",
-		"emergency-broadcast-normal",
-		"general-broadcast-normal",
-		"local-notice-normal",
+		"emergency-broadcast-restore",
+		"general-broadcast-restore",
+		"local-notice-restore",
 	}
 	for _, id := range actionIDs {
 		row, getErr := st.GetActionDefinition(ctx, id)
@@ -66,7 +66,7 @@ func TestSeedDemoActionDefinitionsAndBindings(t *testing.T) {
 	}
 }
 
-func TestSeedDemoEGMRegistry(t *testing.T) {
+func TestSeedLabEGMRegistry(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -74,48 +74,48 @@ func TestSeedDemoEGMRegistry(t *testing.T) {
 	}
 	defer st.Close()
 
-	if err := seedDemoEGMRegistry(ctx, st, "http://127.0.0.1:18080/capture"); err != nil {
-		t.Fatalf("seed demo egm registry: %v", err)
+	if err := seedLabEGMRegistry(ctx, st, "http://127.0.0.1:18080/capture"); err != nil {
+		t.Fatalf("seed lab egm registry: %v", err)
 	}
 
-	tpl, err := st.GetG2STemplate(ctx, "template-smoke-no-send")
+	tpl, err := st.GetG2STemplate(ctx, "template-generic-g2s-action")
 	if err != nil {
-		t.Fatalf("get smoke template: %v", err)
+		t.Fatalf("get generic template: %v", err)
 	}
 	if tpl == nil {
-		t.Fatal("expected smoke template")
+		t.Fatal("expected generic template")
 	}
 	if tpl.CurrentVersionID != "1" {
 		t.Fatalf("current version id=%q, want 1", tpl.CurrentVersionID)
 	}
-	active, err := st.GetActiveG2STemplateVersion(ctx, "template-smoke-no-send")
+	active, err := st.GetActiveG2STemplateVersion(ctx, "template-generic-g2s-action")
 	if err != nil {
-		t.Fatalf("get active smoke template version: %v", err)
+		t.Fatalf("get active generic template version: %v", err)
 	}
 	if active == nil {
-		t.Fatal("expected active smoke template version")
+		t.Fatal("expected active generic template version")
 	}
 	doc, err := g2sengine.ParseActionTemplateDocument(active.ActionsJSON)
 	if err != nil {
 		t.Fatalf("parse seeded actions json: %v", err)
 	}
 	rendered, err := g2sengine.RenderActionMessage(doc, g2sengine.RenderRequest{
-		TemplateID:        "template-smoke-no-send",
+		TemplateID:        "template-generic-g2s-action",
 		TemplateVersion:   1,
-		TemplateActionKey: "queue_only_no_send",
+		TemplateActionKey: "emergency_broadcast_silence",
 		ActionID:          "emergency-broadcast-trigger",
 		ActionRunID:       "run-seed-test",
-		EGMID:             "EGM-SMOKE-001",
+		EGMID:             "EGM-001",
 		Timestamp:         time.Date(2026, 5, 24, 13, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("render seeded action: %v", err)
 	}
-	if !strings.Contains(rendered.RawPayload, `egm="EGM-SMOKE-001"`) {
+	if !strings.Contains(rendered.RawPayload, `egm="EGM-001"`) {
 		t.Fatalf("rendered payload missing egm id: %s", rendered.RawPayload)
 	}
 
-	for _, id := range []string{"EGM-SMOKE-001", "EGM-SMOKE-002"} {
+	for _, id := range []string{"EGM-001", "EGM-002"} {
 		row, getErr := st.GetEGMRecord(ctx, id)
 		if getErr != nil {
 			t.Fatalf("get %s: %v", id, getErr)
@@ -126,7 +126,7 @@ func TestSeedDemoEGMRegistry(t *testing.T) {
 		if !row.Enabled || !row.EmergencyEnabled {
 			t.Fatalf("expected enabled emergency-enabled %s: %+v", id, row)
 		}
-		if row.TemplateID != "template-smoke-no-send" {
+		if row.TemplateID != "template-generic-g2s-action" {
 			t.Fatalf("template_id=%q for %s", row.TemplateID, id)
 		}
 		if row.EndpointPath != "http://127.0.0.1:18080/capture" {
@@ -242,7 +242,7 @@ func TestRunClearLatchPath(t *testing.T) {
 		DebounceMS:        30,
 		Priority:          400,
 		OnTriggerActionID: "emergency-broadcast-trigger",
-		OnNormalActionID:  "emergency-broadcast-normal",
+		OnNormalActionID:  "emergency-broadcast-restore",
 		LatchingMode:      inputs.LatchingManualClear,
 	}
 	if err := st.UpsertInputChannel(ctx, channel); err != nil {
@@ -262,17 +262,17 @@ func TestRunClearLatchPath(t *testing.T) {
 		t.Fatalf("upsert input runtime state: %v", err)
 	}
 	if err := st.UpsertActionDefinition(ctx, actions.ActionDefinition{
-		ID:               "emergency-broadcast-normal",
-		Name:             "Emergency Broadcast Normal (Queue Only)",
+		ID:               "emergency-broadcast-restore",
+		Name:             "Emergency Broadcast Restore",
 		Severity:         actions.SeverityRestore,
 		Enabled:          true,
 		TargetSelector:   "ALL_EMERGENCY_ENABLED",
 		TemplateSelector: "template-by-egm",
 		Steps: []actions.ActionStep{{
 			ID:                "step-1",
-			Name:              "Queue only no send",
+			Name:              "Primary message",
 			Sequence:          0,
-			TemplateActionKey: "queue_only_no_send",
+			TemplateActionKey: "emergency_broadcast_restore",
 		}},
 		Version: 1,
 	}); err != nil {

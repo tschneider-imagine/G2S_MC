@@ -25,66 +25,66 @@ type seedOptions struct {
 	missingEGMTemplate   bool
 }
 
-func TestOperatorReadinessPageRendersHTML(t *testing.T) {
+func TestOperatorSystemCheckPageRendersHTML(t *testing.T) {
 	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/operator/readiness", nil)
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings/system-check", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, "Readiness") {
-		t.Fatalf("missing readiness title")
+	if !strings.Contains(body, "System Check") {
+		t.Fatalf("missing system check title")
 	}
 	if strings.Contains(body, "G2S_MC_REBUILD_PROJECT_DEFINITION_AND_GUARDRAILS") {
 		t.Fatalf("project-definition markdown text should not be embedded")
 	}
 }
 
-func TestOperatorReadinessJSONIsValid(t *testing.T) {
+func TestOperatorSystemCheckJSONIsValid(t *testing.T) {
 	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
-	req := httptest.NewRequest(http.MethodGet, "/operator/readiness.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings/system-check.json", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
-	var report ReadinessReport
+	var report SystemCheckReport
 	if err := json.Unmarshal(res.Body.Bytes(), &report); err != nil {
-		t.Fatalf("unmarshal readiness json: %v", err)
+		t.Fatalf("unmarshal system check json: %v", err)
 	}
 	if report.GeneratedAt.IsZero() || len(report.Sections) == 0 {
-		t.Fatalf("unexpected readiness report: %+v", report)
+		t.Fatalf("unexpected system check report: %+v", report)
 	}
 }
 
-func TestReadinessFlagsMissingEmergencyManualClearAsFail(t *testing.T) {
+func TestSystemCheckFlagsMissingEmergencyManualClearAsFail(t *testing.T) {
 	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: false})
-	report := getReadinessReport(t, mux)
-	check := findReadinessCheck(t, report, "INPUT_EMERGENCY_LATCH_MODE")
-	if check.Status != ReadinessFail {
+	report := getSystemCheckReport(t, mux)
+	check := findSystemCheckItem(t, report, "INPUT_EMERGENCY_LATCH_MODE")
+	if check.Status != SystemCheckFail {
 		t.Fatalf("status=%s detail=%s", check.Status, check.Detail)
 	}
 }
 
-func TestReadinessFlagsMissingEGMTemplates(t *testing.T) {
+func TestSystemCheckFlagsMissingEGMTemplates(t *testing.T) {
 	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true, missingEGMTemplate: true})
-	report := getReadinessReport(t, mux)
-	check := findReadinessCheck(t, report, "EGM_TEMPLATE_ASSIGNMENT")
-	if check.Status != ReadinessWarn {
+	report := getSystemCheckReport(t, mux)
+	check := findSystemCheckItem(t, report, "EGM_TEMPLATE_ASSIGNMENT")
+	if check.Status != SystemCheckWarn {
 		t.Fatalf("status=%s detail=%s", check.Status, check.Detail)
 	}
-	if !strings.Contains(check.Detail, "EGM-SMOKE-002") {
+	if !strings.Contains(check.Detail, "EGM-002") {
 		t.Fatalf("missing egm detail: %s", check.Detail)
 	}
 }
 
-func TestReadinessIncludesRealSendGatedStatus(t *testing.T) {
+func TestSystemCheckIncludesRealSendGatedStatus(t *testing.T) {
 	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
-	report := getReadinessReport(t, mux)
-	check := findReadinessCheck(t, report, "SETTINGS_REAL_SEND_GATED")
-	if check.Status != ReadinessPass {
+	report := getSystemCheckReport(t, mux)
+	check := findSystemCheckItem(t, report, "SETTINGS_REAL_SEND_GATED")
+	if check.Status != SystemCheckPass {
 		t.Fatalf("status=%s detail=%s", check.Status, check.Detail)
 	}
 	if !strings.Contains(strings.ToLower(check.Detail), "transport=http") {
@@ -111,7 +111,7 @@ func TestOperatorExportReturnsJSONWithoutPrivateKeyMaterial(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal export: %v", err)
 	}
-	if payload.GeneratedAt.IsZero() || len(payload.Readiness.Sections) == 0 {
+	if payload.GeneratedAt.IsZero() || len(payload.SystemCheck.Sections) == 0 {
 		t.Fatalf("unexpected export payload")
 	}
 }
@@ -179,7 +179,7 @@ func TestOperatorTemplatesPageIncludesRenderPreviewAndMatcherFields(t *testing.T
 		t.Fatalf("status=%d", res.Code)
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, "Render Preview (No Send)") {
+	if !strings.Contains(body, "Render Preview") {
 		t.Fatalf("missing render preview heading")
 	}
 	if !strings.Contains(body, "confirmation_rules_json") {
@@ -187,6 +187,180 @@ func TestOperatorTemplatesPageIncludesRenderPreviewAndMatcherFields(t *testing.T
 	}
 	if !strings.Contains(body, "failure_rules_json") {
 		t.Fatalf("missing failure matcher field")
+	}
+}
+
+func TestOperatorRoutesAndNavLabels(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	requiredRoutes := []string{
+		"/operator",
+		"/operator/inputs",
+		"/operator/actions",
+		"/operator/comms",
+		"/operator/egms",
+		"/operator/templates",
+		"/operator/audit",
+		"/operator/settings",
+	}
+	for _, route := range requiredRoutes {
+		req := httptest.NewRequest(http.MethodGet, route, nil)
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("route %s status=%d body=%s", route, res.Code, res.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/operator", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	body := res.Body.String()
+	navStart := strings.Index(body, "<nav>")
+	navEnd := strings.Index(body, "</nav>")
+	if navStart < 0 || navEnd < 0 || navEnd <= navStart {
+		t.Fatalf("nav section not found")
+	}
+	nav := body[navStart:navEnd]
+	if strings.Count(nav, "<a href=") != 8 {
+		t.Fatalf("nav link count=%d want=8 nav=%s", strings.Count(nav, "<a href="), nav)
+	}
+	if strings.Contains(nav, ">Readiness</a>") {
+		t.Fatalf("nav unexpectedly contains Readiness")
+	}
+	labels := []string{"Live", "Inputs", "Actions", "Comms", "EGMs", "Templates", "Audit", "Settings"}
+	cursor := 0
+	for _, label := range labels {
+		index := strings.Index(nav[cursor:], ">"+label+"</a>")
+		if index < 0 {
+			t.Fatalf("missing nav label=%s nav=%s", label, nav)
+		}
+		cursor += index + len(label)
+	}
+}
+
+func TestOperatorDeprecatedRoutesReturnNotFound(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	for _, route := range []string{"/operator/readiness", "/operator/readiness.json", "/field-test"} {
+		req := httptest.NewRequest(http.MethodGet, route, nil)
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, req)
+		if res.Code != http.StatusNotFound {
+			t.Fatalf("route %s status=%d want=%d body=%s", route, res.Code, http.StatusNotFound, res.Body.String())
+		}
+	}
+}
+
+func TestOperatorSystemCheckRouteReturnsOK(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings/system-check", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestOperatorRuntimeHTMLExcludesProjectAndTestLanguage(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	routes := []string{
+		"/operator",
+		"/operator/inputs",
+		"/operator/actions",
+		"/operator/comms",
+		"/operator/egms",
+		"/operator/templates",
+		"/operator/audit",
+		"/operator/settings",
+		"/operator/settings/system-check",
+	}
+	bannedTerms := []string{
+		"field-test",
+		"fieldtest",
+		"readiness",
+		"phase 2g",
+		"phase 3",
+		"project-definition",
+		"project plan",
+		"smoke",
+		"queue only",
+		"queue_only_no_send",
+		"demo",
+		"fake",
+		"simulator",
+		"test harness",
+	}
+	for _, route := range routes {
+		req := httptest.NewRequest(http.MethodGet, route, nil)
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("route %s status=%d body=%s", route, res.Code, res.Body.String())
+		}
+		lowered := strings.ToLower(res.Body.String())
+		for _, term := range bannedTerms {
+			if strings.Contains(lowered, term) {
+				t.Fatalf("route %s contains banned term %q", route, term)
+			}
+		}
+	}
+}
+
+func TestOperatorActionsPageUsesProductSemanticNames(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/actions", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	expected := []string{
+		"Emergency Broadcast Trigger",
+		"Emergency Broadcast Restore",
+		"General Broadcast Trigger",
+		"General Broadcast Restore",
+		"Local Notice Trigger",
+		"Local Notice Restore",
+		"Regular Operation Trigger",
+	}
+	for _, term := range expected {
+		if !strings.Contains(body, term) {
+			t.Fatalf("actions page missing %q", term)
+		}
+	}
+}
+
+func TestOperatorEGMPageUsesProductNeutralSeedLabels(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/egms", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if strings.Contains(body, "Smoke EGM") {
+		t.Fatalf("egm page should not include smoke labels")
+	}
+	if !strings.Contains(body, "Cabinet 001") || !strings.Contains(body, "Cabinet 002") {
+		t.Fatalf("egm page missing product-neutral cabinet labels")
+	}
+}
+
+func TestOperatorTemplatesPageUsesProductNeutralSeedLabels(t *testing.T) {
+	mux := setupOperatorServer(t, seedOptions{emergencyManualClear: true})
+	req := httptest.NewRequest(http.MethodGet, "/operator/templates", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if strings.Contains(body, "SMOKE") || strings.Contains(body, "Template Smoke No Send") {
+		t.Fatalf("template page should not include smoke labels")
+	}
+	if !strings.Contains(body, "Generic G2S Action Template") || !strings.Contains(body, "Generic") {
+		t.Fatalf("template page missing product-neutral labels")
 	}
 }
 
@@ -229,22 +403,22 @@ func setupOperatorServer(t *testing.T, opts seedOptions) *http.ServeMux {
 	return mux
 }
 
-func getReadinessReport(t *testing.T, mux *http.ServeMux) ReadinessReport {
+func getSystemCheckReport(t *testing.T, mux *http.ServeMux) SystemCheckReport {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/operator/readiness.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings/system-check.json", nil)
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
-	var report ReadinessReport
+	var report SystemCheckReport
 	if err := json.Unmarshal(res.Body.Bytes(), &report); err != nil {
-		t.Fatalf("unmarshal readiness: %v", err)
+		t.Fatalf("unmarshal system check: %v", err)
 	}
 	return report
 }
 
-func findReadinessCheck(t *testing.T, report ReadinessReport, code string) ReadinessCheck {
+func findSystemCheckItem(t *testing.T, report SystemCheckReport, code string) SystemCheckItem {
 	t.Helper()
 	for _, section := range report.Sections {
 		for _, check := range section.Checks {
@@ -253,8 +427,8 @@ func findReadinessCheck(t *testing.T, report ReadinessReport, code string) Readi
 			}
 		}
 	}
-	t.Fatalf("readiness check not found: %s", code)
-	return ReadinessCheck{}
+	t.Fatalf("system check item not found: %s", code)
+	return SystemCheckItem{}
 }
 
 func allowMutation(_ http.ResponseWriter, _ *http.Request) bool { return true }
@@ -289,7 +463,7 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			DebounceMS:        100,
 			Priority:          100,
 			OnTriggerActionID: "regular-operation-trigger",
-			OnNormalActionID:  "regular-operation-normal",
+			OnNormalActionID:  "",
 			LatchingMode:      inputs.LatchingAutoClear,
 		},
 		{
@@ -303,7 +477,7 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			DebounceMS:        100,
 			Priority:          250,
 			OnTriggerActionID: "general-broadcast-trigger",
-			OnNormalActionID:  "general-broadcast-normal",
+			OnNormalActionID:  "general-broadcast-restore",
 			LatchingMode:      inputs.LatchingAutoClear,
 		},
 		{
@@ -317,7 +491,7 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			DebounceMS:        150,
 			Priority:          400,
 			OnTriggerActionID: "emergency-broadcast-trigger",
-			OnNormalActionID:  "emergency-broadcast-normal",
+			OnNormalActionID:  "emergency-broadcast-restore",
 			LatchingMode:      manualMode,
 		},
 		{
@@ -331,7 +505,7 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			DebounceMS:        80,
 			Priority:          200,
 			OnTriggerActionID: "local-notice-trigger",
-			OnNormalActionID:  "local-notice-normal",
+			OnNormalActionID:  "local-notice-restore",
 			LatchingMode:      inputs.LatchingAutoClear,
 		},
 	}
@@ -371,20 +545,9 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			Enabled:          true,
 			TargetSelector:   "ALL_EMERGENCY_ENABLED",
 			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary message", Sequence: 0, TemplateActionKey: "regular_operation_notice"}},
 			RetryPolicyJSON:  `{"max_retries":1}`,
 			EscalationJSON:   `{"escalate_after_ms":5000}`,
-			ReturnActionID:   "regular-operation-normal",
-			Version:          1,
-		},
-		{
-			ID:               "regular-operation-normal",
-			Name:             "Regular Operation Normal",
-			Severity:         actions.SeverityRestore,
-			Enabled:          true,
-			TargetSelector:   "ALL_EMERGENCY_ENABLED",
-			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
 			Version:          1,
 		},
 		{
@@ -394,18 +557,18 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			Enabled:          true,
 			TargetSelector:   "ALL_EMERGENCY_ENABLED",
 			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
-			ReturnActionID:   "general-broadcast-normal",
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary message", Sequence: 0, TemplateActionKey: "general_broadcast_notice"}},
+			ReturnActionID:   "general-broadcast-restore",
 			Version:          1,
 		},
 		{
-			ID:               "general-broadcast-normal",
-			Name:             "General Broadcast Normal",
+			ID:               "general-broadcast-restore",
+			Name:             "General Broadcast Restore",
 			Severity:         actions.SeverityRestore,
 			Enabled:          true,
 			TargetSelector:   "ALL_EMERGENCY_ENABLED",
 			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary message", Sequence: 0, TemplateActionKey: "general_broadcast_restore"}},
 			Version:          1,
 		},
 		{
@@ -415,18 +578,18 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			Enabled:          true,
 			TargetSelector:   "ALL_EMERGENCY_ENABLED",
 			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
-			ReturnActionID:   "emergency-broadcast-normal",
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary message", Sequence: 0, TemplateActionKey: "emergency_broadcast_silence"}},
+			ReturnActionID:   "emergency-broadcast-restore",
 			Version:          1,
 		},
 		{
-			ID:               "emergency-broadcast-normal",
-			Name:             "Emergency Broadcast Normal",
+			ID:               "emergency-broadcast-restore",
+			Name:             "Emergency Broadcast Restore",
 			Severity:         actions.SeverityRestore,
 			Enabled:          true,
 			TargetSelector:   "ALL_EMERGENCY_ENABLED",
 			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary message", Sequence: 0, TemplateActionKey: "emergency_broadcast_restore"}},
 			Version:          1,
 		},
 		{
@@ -436,18 +599,18 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 			Enabled:          true,
 			TargetSelector:   "ALL_EMERGENCY_ENABLED",
 			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
-			ReturnActionID:   "local-notice-normal",
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary message", Sequence: 0, TemplateActionKey: "local_notice"}},
+			ReturnActionID:   "local-notice-restore",
 			Version:          1,
 		},
 		{
-			ID:               "local-notice-normal",
-			Name:             "Local Notice Normal",
+			ID:               "local-notice-restore",
+			Name:             "Local Notice Restore",
 			Severity:         actions.SeverityRestore,
 			Enabled:          true,
 			TargetSelector:   "ALL_EMERGENCY_ENABLED",
 			TemplateSelector: "template-by-egm",
-			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Step 1", Sequence: 0, TemplateActionKey: "queue_only_no_send"}},
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary message", Sequence: 0, TemplateActionKey: "local_notice_restore"}},
 			Version:          1,
 		},
 	}
@@ -469,51 +632,51 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 	}
 
 	if err := db.UpsertG2STemplate(ctx, templates.G2STemplate{
-		ID:     "template-smoke-no-send",
-		Name:   "Smoke No-Send Template",
-		Vendor: "SMOKE",
+		ID:     "template-generic-g2s-action",
+		Name:   "Generic G2S Action Template",
+		Vendor: "Generic",
 		Status: templates.TemplateStatusActive,
 	}); err != nil {
 		t.Fatalf("upsert template: %v", err)
 	}
 	if err := db.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{
-		ID:                    "template-smoke-no-send-v1",
-		TemplateID:            "template-smoke-no-send",
+		ID:                    "template-generic-g2s-action-v1",
+		TemplateID:            "template-generic-g2s-action",
 		VersionLabel:          "1",
-		ActionsJSON:           `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"}}}`,
+		ActionsJSON:           `{"actions":{"emergency_broadcast_silence":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"},"emergency_broadcast_restore":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"},"general_broadcast_notice":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"},"general_broadcast_restore":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"},"local_notice":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"},"local_notice_restore":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"},"regular_operation_notice":{"message_type":"DRY_RUN_NO_SEND","payload_template":"<dryRun action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\"/>"}}}`,
 		ConfirmationRulesJSON: `{"expected":"placeholder"}`,
 		FailureRulesJSON:      `{"failure":"placeholder"}`,
 	}); err != nil {
 		t.Fatalf("upsert template version: %v", err)
 	}
-	if err := db.SetActiveG2STemplateVersion(ctx, "template-smoke-no-send", 1); err != nil {
+	if err := db.SetActiveG2STemplateVersion(ctx, "template-generic-g2s-action", 1); err != nil {
 		t.Fatalf("set active template version: %v", err)
 	}
 
-	templateForSecond := "template-smoke-no-send"
+	templateForSecond := "template-generic-g2s-action"
 	if opts.missingEGMTemplate {
 		templateForSecond = ""
 	}
 
 	egmRows := []egms.EGMRecord{
 		{
-			EGMID:              "EGM-SMOKE-001",
-			DisplayName:        "Cabinet Smoke 1",
+			EGMID:              "EGM-001",
+			DisplayName:        "Cabinet 001",
 			IPAddress:          "127.0.0.1",
 			EndpointPath:       "/capture",
-			Vendor:             "SMOKE",
+			Vendor:             "Generic",
 			Zone:               "A",
 			Enabled:            true,
 			EmergencyEnabled:   true,
-			TemplateID:         "template-smoke-no-send",
+			TemplateID:         "template-generic-g2s-action",
 			CurrentActionState: egms.EGMActionStatePending,
 		},
 		{
-			EGMID:              "EGM-SMOKE-002",
-			DisplayName:        "Cabinet Smoke 2",
+			EGMID:              "EGM-002",
+			DisplayName:        "Cabinet 002",
 			IPAddress:          "127.0.0.1",
 			EndpointPath:       "/capture",
-			Vendor:             "SMOKE",
+			Vendor:             "Generic",
 			Zone:               "A",
 			Enabled:            true,
 			EmergencyEnabled:   true,
@@ -530,12 +693,12 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
 		Timestamp:       now,
 		Direction:       g2sengine.DirectionOutbound,
-		EGMID:           "EGM-SMOKE-001",
+		EGMID:           "EGM-001",
 		ActionRunID:     "run-1",
-		TemplateID:      "template-smoke-no-send",
+		TemplateID:      "template-generic-g2s-action",
 		TemplateVersion: "1",
-		MessageType:     "queue_only_no_send",
-		RawPayload:      "<dryRun action=\"emergency-broadcast-trigger\" run=\"run-1\" egm=\"EGM-SMOKE-001\"/>",
+		MessageType:     "emergency_broadcast_silence",
+		RawPayload:      "<dryRun action=\"emergency-broadcast-trigger\" run=\"run-1\" egm=\"EGM-001\"/>",
 		Result:          g2sengine.MessageResultSendBlocked,
 		TransportMode:   "HTTP",
 		Error:           "transport_gate",
@@ -545,12 +708,12 @@ func seedOperatorData(t *testing.T, ctx context.Context, db *store.SQLiteStore, 
 	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
 		Timestamp:       now,
 		Direction:       g2sengine.DirectionOutbound,
-		EGMID:           "EGM-SMOKE-002",
+		EGMID:           "EGM-002",
 		ActionRunID:     "run-1",
-		TemplateID:      "template-smoke-no-send",
+		TemplateID:      "template-generic-g2s-action",
 		TemplateVersion: "1",
-		MessageType:     "queue_only_no_send",
-		RawPayload:      "<dryRun action=\"emergency-broadcast-trigger\" run=\"run-1\" egm=\"EGM-SMOKE-002\"/>",
+		MessageType:     "emergency_broadcast_silence",
+		RawPayload:      "<dryRun action=\"emergency-broadcast-trigger\" run=\"run-1\" egm=\"EGM-002\"/>",
 		Result:          g2sengine.MessageResultDryRun,
 		TransportMode:   "DRY_RUN",
 	}); err != nil {

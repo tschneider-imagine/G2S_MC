@@ -4,7 +4,7 @@
 
 ## Scope
 
-Phase 3B extends the `/operator` Operator Console shell with a structured readiness review and evidence export flow.
+Phase 3B extends the `/operator` Operator Console shell with a structured system-check review and evidence export flow.
 
 This phase advances these field-test must-have sections:
 
@@ -14,9 +14,9 @@ This phase advances these field-test must-have sections:
 - Emergency Audit Timeline
 - Network/Cert Settings
 
-## Field-Test Readiness Review Contents
+## Field-Test System Check Review Contents
 
-Readiness adds a checklist view (`/operator/readiness`) and JSON representation (`/operator/readiness.json`) that evaluates:
+System Check adds a checklist view (`/operator/settings/system-check`) and JSON representation (`/operator/settings/system-check.json`) that evaluates:
 
 - Inputs: required channels, GPIO/normal/debounce/latch visibility, action bindings, emergency `MANUAL_CLEAR`.
 - Actions: definition presence, severity/selectors/steps, return action references, retry/escalation config visibility.
@@ -30,7 +30,7 @@ Readiness adds a checklist view (`/operator/readiness`) and JSON representation 
 
 Phase 3B adds evidence/reporting exports only:
 
-- `GET /operator/export`: full JSON evidence package with readiness report, config snapshots, action previews, comms, audit, and safety summary.
+- `GET /operator/export` and `GET /operator/audit/evidence-export`: full JSON evidence package with system check report, config snapshots, action previews, comms, audit, and safety summary.
 - `GET /operator/comms/export`: message journal JSON export.
 - `GET /operator/audit/export`: audit timeline JSON export.
 
@@ -48,11 +48,11 @@ Export data is read-only evidence and must not include private key material.
 
 ## Definition Of Done
 
-- `/operator/readiness` exists and renders checklist output.
-- `/operator/readiness.json` exists and returns structured JSON.
+- `/operator/settings/system-check` exists and renders checklist output.
+- `/operator/settings/system-check.json` exists and returns structured JSON.
 - `/operator/export` exists and returns evidence JSON.
 - `/operator/comms/export` and `/operator/audit/export` exist.
-- Readiness checks cover inputs/actions/EGMs/templates/comms/audit/settings safety.
+- System check coverage spans inputs/actions/EGMs/templates/comms/audit/settings safety.
 - Action Builder Lite pages show retry/escalation/return configuration fields.
 - Template Manager Lite pages show render preview and matcher placeholder fields.
 - Real send remains gated with no new transport behavior.

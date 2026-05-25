@@ -33,3 +33,7 @@ Rules:
 - Do not display this checklist every time unless asked, but always apply it.
 - Keep current project docs separate from archived old plans.
 - Do not embed project docs into runtime UI.
+- Treat "field-test" and phase naming as milestone language only; runtime product pages must use Operator Console language.
+- Runtime top-level navigation must remain exactly: Live, Inputs, Actions, Comms, EGMs, Templates, Audit, Settings.
+- System Check/Evidence Export can exist as operational views, but not as top-level project-management modules.
+- Any seed data visible in Operator Console must be product-neutral (no smoke/demo/fake/queue-only naming).

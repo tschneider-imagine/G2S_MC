@@ -2,6 +2,19 @@
 
 > Correction note: Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
 
+Runtime product navigation must remain product/operator language only:
+
+- Live
+- Inputs
+- Actions
+- Comms
+- EGMs
+- Templates
+- Audit
+- Settings
+
+System Check and Evidence Export are operational views, not top-level project-management modules.
+
 ## Scope
 
 Phase 3A adds a minimal operator-facing Operator Console shell under `/operator` to review and configure the backend spine that already exists.
@@ -26,6 +39,8 @@ This phase advances these field-test must-have sections:
 - `GET /operator/comms`
 - `GET /operator/audit`
 - `GET /operator/settings`
+- `GET /operator/settings/system-check`
+- `GET /operator/settings/system-check.json`
 
 Minimal mutation routes (server-rendered forms):
 

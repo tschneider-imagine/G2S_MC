@@ -4,6 +4,20 @@ Use this folder as the active planning entry point for G2S_MC rebuild work.
 
 Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
 
+Runtime Operator Console navigation contract:
+
+- Live
+- Inputs
+- Actions
+- Comms
+- EGMs
+- Templates
+- Audit
+- Settings
+
+System Check and Evidence Export may exist as operational views, but not as top-level project-management modules.
+Visible seed data in Operator Console must remain product-neutral (for example cabinet/template/vendor naming).
+
 ## Active Project Definition / Guardrails
 
 - `G2S_MC_REBUILD_PROJECT_DEFINITION_AND_GUARDRAILS.md`

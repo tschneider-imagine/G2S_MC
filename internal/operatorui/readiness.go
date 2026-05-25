@@ -20,30 +20,30 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
 
-type ReadinessStatus string
+type SystemCheckStatus string
 
 const (
-	ReadinessPass ReadinessStatus = "PASS"
-	ReadinessWarn ReadinessStatus = "WARN"
-	ReadinessFail ReadinessStatus = "FAIL"
-	ReadinessInfo ReadinessStatus = "INFO"
+	SystemCheckPass SystemCheckStatus = "PASS"
+	SystemCheckWarn SystemCheckStatus = "WARN"
+	SystemCheckFail SystemCheckStatus = "FAIL"
+	SystemCheckInfo SystemCheckStatus = "INFO"
 )
 
-type ReadinessCheck struct {
-	Status  ReadinessStatus `json:"status"`
-	Code    string          `json:"code"`
-	Summary string          `json:"summary"`
-	Detail  string          `json:"detail,omitempty"`
+type SystemCheckItem struct {
+	Status  SystemCheckStatus `json:"status"`
+	Code    string            `json:"code"`
+	Summary string            `json:"summary"`
+	Detail  string            `json:"detail,omitempty"`
 }
 
-type ReadinessSection struct {
-	Name   string           `json:"name"`
-	Checks []ReadinessCheck `json:"checks"`
+type SystemCheckSection struct {
+	Name   string            `json:"name"`
+	Checks []SystemCheckItem `json:"checks"`
 }
 
-type ReadinessReport struct {
-	GeneratedAt time.Time          `json:"generated_at"`
-	Sections    []ReadinessSection `json:"sections"`
+type SystemCheckReport struct {
+	GeneratedAt time.Time            `json:"generated_at"`
+	Sections    []SystemCheckSection `json:"sections"`
 }
 
 type OperatorInputSnapshot struct {
@@ -74,14 +74,14 @@ type OperatorExportPackage struct {
 	MessageJournal  []g2sengine.MessageJournalEntry `json:"message_journal"`
 	AuditTimeline   []audit.AuditTimelineEntry      `json:"audit_timeline"`
 	CertificateMeta []model.CertificateInventory    `json:"certificate_inventory"`
-	Readiness       ReadinessReport                 `json:"readiness"`
+	SystemCheck     SystemCheckReport               `json:"system_check"`
 }
 
-func (s *Server) buildReadinessReport(ctx context.Context) (ReadinessReport, error) {
+func (s *Server) buildSystemCheckReport(ctx context.Context) (SystemCheckReport, error) {
 	now := time.Now().UTC()
-	report := ReadinessReport{
+	report := SystemCheckReport{
 		GeneratedAt: now,
-		Sections:    []ReadinessSection{},
+		Sections:    []SystemCheckSection{},
 	}
 
 	channels, err := s.Store.ListInputChannels(ctx)
@@ -141,18 +141,18 @@ func (s *Server) buildReadinessReport(ctx context.Context) (ReadinessReport, err
 		return report, err
 	}
 
-	report.Sections = append(report.Sections, s.buildInputsReadinessSection(channelByID, inputSnapshots))
-	report.Sections = append(report.Sections, s.buildActionsReadinessSection(channels, definitionByID, definitions))
-	report.Sections = append(report.Sections, s.buildEGMsReadinessSection(records, templateByID))
-	report.Sections = append(report.Sections, s.buildTemplatesReadinessSection(definitions, templateRows, activeVersionByTemplate))
-	report.Sections = append(report.Sections, s.buildCommsReadinessSection(messageRows))
-	report.Sections = append(report.Sections, s.buildAuditReadinessSection(auditRows))
-	report.Sections = append(report.Sections, s.buildSettingsReadinessSection(messageRows, certRows))
+	report.Sections = append(report.Sections, s.buildInputsSystemCheckSection(channelByID, inputSnapshots))
+	report.Sections = append(report.Sections, s.buildActionsSystemCheckSection(channels, definitionByID, definitions))
+	report.Sections = append(report.Sections, s.buildEGMsSystemCheckSection(records, templateByID))
+	report.Sections = append(report.Sections, s.buildTemplatesSystemCheckSection(definitions, templateRows, activeVersionByTemplate))
+	report.Sections = append(report.Sections, s.buildCommsSystemCheckSection(messageRows))
+	report.Sections = append(report.Sections, s.buildAuditSystemCheckSection(auditRows))
+	report.Sections = append(report.Sections, s.buildSettingsSystemCheckSection(messageRows, certRows))
 	return report, nil
 }
 
-func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.InputChannel, snapshots []OperatorInputSnapshot) ReadinessSection {
-	checks := []ReadinessCheck{}
+func (s *Server) buildInputsSystemCheckSection(channelByID map[string]inputs.InputChannel, snapshots []OperatorInputSnapshot) SystemCheckSection {
+	checks := []SystemCheckItem{}
 	required := []string{"regular-operation", "general-broadcast", "emergency-broadcast", "local-notice"}
 	missing := []string{}
 	for _, id := range required {
@@ -161,15 +161,15 @@ func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.Input
 		}
 	}
 	if len(missing) > 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessFail,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckFail,
 			Code:    "INPUT_REQUIRED_CHANNELS",
 			Summary: "Required operator input channels are missing",
 			Detail:  strings.Join(missing, ", "),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "INPUT_REQUIRED_CHANNELS",
 			Summary: "All required operator input channels are present",
 			Detail:  strings.Join(required, ", "),
@@ -177,15 +177,15 @@ func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.Input
 	}
 
 	if len(channelByID) != 4 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessWarn,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckWarn,
 			Code:    "INPUT_CHANNEL_COUNT",
 			Summary: "Input channel count differs from expected operator set of 4",
 			Detail:  fmt.Sprintf("configured=%d", len(channelByID)),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "INPUT_CHANNEL_COUNT",
 			Summary: "Input channel count matches expected operator set",
 			Detail:  "configured=4",
@@ -194,21 +194,21 @@ func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.Input
 
 	emergency, hasEmergency := channelByID["emergency-broadcast"]
 	if !hasEmergency {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessFail,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckFail,
 			Code:    "INPUT_EMERGENCY_LATCH_MODE",
 			Summary: "Emergency broadcast input is missing",
 		})
 	} else if emergency.LatchingMode != inputs.LatchingManualClear {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessFail,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckFail,
 			Code:    "INPUT_EMERGENCY_LATCH_MODE",
 			Summary: "Emergency broadcast input must be MANUAL_CLEAR",
 			Detail:  "configured=" + string(emergency.LatchingMode),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "INPUT_EMERGENCY_LATCH_MODE",
 			Summary: "Emergency broadcast input uses MANUAL_CLEAR",
 		})
@@ -235,28 +235,28 @@ func (s *Server) buildInputsReadinessSection(channelByID map[string]inputs.Input
 		}
 	}
 	if len(misconfigured) > 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessWarn,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckWarn,
 			Code:    "INPUT_BINDING_COMPLETENESS",
 			Summary: "One or more input channels have incomplete operator configuration",
 			Detail:  strings.Join(misconfigured, " | "),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "INPUT_BINDING_COMPLETENESS",
 			Summary: "All configured inputs have GPIO, debounce, and action bindings",
 		})
 	}
-	return ReadinessSection{Name: "Inputs", Checks: checks}
+	return SystemCheckSection{Name: "Inputs", Checks: checks}
 }
 
-func (s *Server) buildActionsReadinessSection(channels []inputs.InputChannel, definitionByID map[string]actions.ActionDefinition, definitions []actions.ActionDefinition) ReadinessSection {
-	checks := []ReadinessCheck{}
+func (s *Server) buildActionsSystemCheckSection(channels []inputs.InputChannel, definitionByID map[string]actions.ActionDefinition, definitions []actions.ActionDefinition) SystemCheckSection {
+	checks := []SystemCheckItem{}
 	if len(definitions) == 0 {
-		checks = append(checks, ReadinessCheck{Status: ReadinessFail, Code: "ACTION_DEFINITIONS_PRESENT", Summary: "No action definitions configured"})
+		checks = append(checks, SystemCheckItem{Status: SystemCheckFail, Code: "ACTION_DEFINITIONS_PRESENT", Summary: "No action definitions configured"})
 	} else {
-		checks = append(checks, ReadinessCheck{Status: ReadinessPass, Code: "ACTION_DEFINITIONS_PRESENT", Summary: "Action definitions are configured", Detail: fmt.Sprintf("count=%d", len(definitions))})
+		checks = append(checks, SystemCheckItem{Status: SystemCheckPass, Code: "ACTION_DEFINITIONS_PRESENT", Summary: "Action definitions are configured", Detail: fmt.Sprintf("count=%d", len(definitions))})
 	}
 
 	boundIDs := map[string]struct{}{}
@@ -276,15 +276,15 @@ func (s *Server) buildActionsReadinessSection(channels []inputs.InputChannel, de
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessFail,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckFail,
 			Code:    "ACTION_BOUND_REFERENCES",
 			Summary: "Input action bindings reference undefined actions",
 			Detail:  strings.Join(missing, ", "),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "ACTION_BOUND_REFERENCES",
 			Summary: "All input action bindings resolve to configured action definitions",
 		})
@@ -310,40 +310,40 @@ func (s *Server) buildActionsReadinessSection(channels []inputs.InputChannel, de
 		}
 	}
 	if len(incomplete) > 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessWarn,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckWarn,
 			Code:    "ACTION_FIELD_COMPLETENESS",
 			Summary: "One or more action definitions are incomplete for operator review",
 			Detail:  strings.Join(incomplete, " | "),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "ACTION_FIELD_COMPLETENESS",
 			Summary: "Action definitions include severity/selectors/steps",
 		})
 	}
 
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "ACTION_RETRY_ESCALATION_STORAGE",
 		Summary: "Retry/escalation fields are stored for configuration review",
-		Detail:  "execution behavior is intentionally not implemented in this phase",
+		Detail:  "execution behavior is intentionally not implemented in this runtime surface",
 	})
-	return ReadinessSection{Name: "Actions", Checks: checks}
+	return SystemCheckSection{Name: "Actions", Checks: checks}
 }
 
-func (s *Server) buildEGMsReadinessSection(records []egms.EGMRecord, templateByID map[string]templates.G2STemplate) ReadinessSection {
-	checks := []ReadinessCheck{}
+func (s *Server) buildEGMsSystemCheckSection(records []egms.EGMRecord, templateByID map[string]templates.G2STemplate) SystemCheckSection {
+	checks := []SystemCheckItem{}
 	if len(records) == 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessWarn,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckWarn,
 			Code:    "EGM_RECORDS_PRESENT",
 			Summary: "No EGM records are configured",
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "EGM_RECORDS_PRESENT",
 			Summary: "EGM records are configured",
 			Detail:  fmt.Sprintf("count=%d", len(records)),
@@ -368,36 +368,36 @@ func (s *Server) buildEGMsReadinessSection(records []egms.EGMRecord, templateByI
 			missingTemplates = append(missingTemplates, record.EGMID+"("+record.TemplateID+")")
 		}
 	}
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "EGM_COUNTS",
 		Summary: "EGM enabled/disabled counts",
 		Detail:  fmt.Sprintf("emergency_enabled=%d disabled=%d", emergencyEnabled, disabled),
 	})
 	if len(missingTemplates) > 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessWarn,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckWarn,
 			Code:    "EGM_TEMPLATE_ASSIGNMENT",
 			Summary: "Some EGMs are missing template assignments",
 			Detail:  strings.Join(missingTemplates, ", "),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "EGM_TEMPLATE_ASSIGNMENT",
 			Summary: "All configured EGMs have template assignments",
 		})
 	}
-	return ReadinessSection{Name: "EGM Registry", Checks: checks}
+	return SystemCheckSection{Name: "EGM Registry", Checks: checks}
 }
 
-func (s *Server) buildTemplatesReadinessSection(definitions []actions.ActionDefinition, templateRows []templates.G2STemplate, activeVersionByTemplate map[string]*templates.G2STemplateVersion) ReadinessSection {
-	checks := []ReadinessCheck{}
+func (s *Server) buildTemplatesSystemCheckSection(definitions []actions.ActionDefinition, templateRows []templates.G2STemplate, activeVersionByTemplate map[string]*templates.G2STemplateVersion) SystemCheckSection {
+	checks := []SystemCheckItem{}
 	if len(templateRows) == 0 {
-		checks = append(checks, ReadinessCheck{Status: ReadinessWarn, Code: "TEMPLATE_PRESENT", Summary: "No templates configured"})
-		return ReadinessSection{Name: "Templates", Checks: checks}
+		checks = append(checks, SystemCheckItem{Status: SystemCheckWarn, Code: "TEMPLATE_PRESENT", Summary: "No templates configured"})
+		return SystemCheckSection{Name: "Templates", Checks: checks}
 	}
-	checks = append(checks, ReadinessCheck{Status: ReadinessPass, Code: "TEMPLATE_PRESENT", Summary: "Templates are configured", Detail: fmt.Sprintf("count=%d", len(templateRows))})
+	checks = append(checks, SystemCheckItem{Status: SystemCheckPass, Code: "TEMPLATE_PRESENT", Summary: "Templates are configured", Detail: fmt.Sprintf("count=%d", len(templateRows))})
 
 	missingActive := []string{}
 	stepKeys := map[string]struct{}{}
@@ -434,15 +434,15 @@ func (s *Server) buildTemplatesReadinessSection(definitions []actions.ActionDefi
 	}
 
 	if len(missingActive) > 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessWarn,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckWarn,
 			Code:    "TEMPLATE_ACTIVE_VERSION",
 			Summary: "Some templates are missing active versions or valid actions JSON",
 			Detail:  strings.Join(missingActive, ", "),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "TEMPLATE_ACTIVE_VERSION",
 			Summary: "Active template versions are available",
 		})
@@ -456,42 +456,42 @@ func (s *Server) buildTemplatesReadinessSection(definitions []actions.ActionDefi
 	}
 	sort.Strings(missingKeys)
 	if len(missingKeys) > 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessWarn,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckWarn,
 			Code:    "TEMPLATE_ACTION_KEYS_RENDERABLE",
 			Summary: "Configured action step keys are not renderable from active templates",
 			Detail:  strings.Join(missingKeys, ", "),
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "TEMPLATE_ACTION_KEYS_RENDERABLE",
 			Summary: "Configured action step keys are renderable from active templates",
 		})
 	}
 
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "TEMPLATE_MATCHER_PLACEHOLDERS",
-		Summary: "Expected/failure matcher fields are configuration placeholders in this phase",
-		Detail:  "review/export only; no confirmation execution in this phase",
+		Summary: "Expected/failure matcher fields are configuration placeholders in this runtime surface",
+		Detail:  "review/export only; no confirmation execution in this runtime surface",
 	})
 
-	return ReadinessSection{Name: "Templates", Checks: checks}
+	return SystemCheckSection{Name: "Templates", Checks: checks}
 }
 
-func (s *Server) buildCommsReadinessSection(rows []g2sengine.MessageJournalEntry) ReadinessSection {
-	checks := []ReadinessCheck{}
+func (s *Server) buildCommsSystemCheckSection(rows []g2sengine.MessageJournalEntry) SystemCheckSection {
+	checks := []SystemCheckItem{}
 	if len(rows) == 0 {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessInfo,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckInfo,
 			Code:    "COMMS_HISTORY_PRESENT",
 			Summary: "No message journal history yet",
 		})
-		return ReadinessSection{Name: "Comms Journal", Checks: checks}
+		return SystemCheckSection{Name: "Comms Journal", Checks: checks}
 	}
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessPass,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckPass,
 		Code:    "COMMS_HISTORY_PRESENT",
 		Summary: "Message journal history exists",
 		Detail:  fmt.Sprintf("rows=%d", len(rows)),
@@ -504,8 +504,8 @@ func (s *Server) buildCommsReadinessSection(rows []g2sengine.MessageJournalEntry
 			break
 		}
 	}
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "COMMS_LATEST_OUTBOUND",
 		Summary: "Latest outbound message status",
 		Detail:  string(latestOutbound.Result),
@@ -518,22 +518,22 @@ func (s *Server) buildCommsReadinessSection(rows []g2sengine.MessageJournalEntry
 			break
 		}
 	}
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "COMMS_LAST_SEND_GATE_STATUS",
 		Summary: "Latest send gate result observed in comms journal",
 		Detail:  lastGate,
 	})
-	return ReadinessSection{Name: "Comms Journal", Checks: checks}
+	return SystemCheckSection{Name: "Comms Journal", Checks: checks}
 }
 
-func (s *Server) buildAuditReadinessSection(rows []audit.AuditTimelineEntry) ReadinessSection {
-	checks := []ReadinessCheck{}
+func (s *Server) buildAuditSystemCheckSection(rows []audit.AuditTimelineEntry) SystemCheckSection {
+	checks := []SystemCheckItem{}
 	if len(rows) == 0 {
-		checks = append(checks, ReadinessCheck{Status: ReadinessInfo, Code: "AUDIT_HISTORY_PRESENT", Summary: "No audit timeline history yet"})
-		return ReadinessSection{Name: "Audit Timeline", Checks: checks}
+		checks = append(checks, SystemCheckItem{Status: SystemCheckInfo, Code: "AUDIT_HISTORY_PRESENT", Summary: "No audit timeline history yet"})
+		return SystemCheckSection{Name: "Audit Timeline", Checks: checks}
 	}
-	checks = append(checks, ReadinessCheck{Status: ReadinessPass, Code: "AUDIT_HISTORY_PRESENT", Summary: "Audit timeline entries exist", Detail: fmt.Sprintf("rows=%d", len(rows))})
+	checks = append(checks, SystemCheckItem{Status: SystemCheckPass, Code: "AUDIT_HISTORY_PRESENT", Summary: "Audit timeline entries exist", Detail: fmt.Sprintf("rows=%d", len(rows))})
 
 	checks = append(checks, latestAuditCheck(rows, "AUDIT_LATEST_INPUT_TRANSITION", "Latest input transition", audit.EventTypeInputTransition))
 	checks = append(checks, latestAuditCheck(rows, "AUDIT_LATEST_ACTION_QUEUED", "Latest action queued", audit.EventTypeActionQueued))
@@ -546,46 +546,46 @@ func (s *Server) buildAuditReadinessSection(rows []audit.AuditTimelineEntry) Rea
 			break
 		}
 	}
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "AUDIT_LATEST_SEND_PROOF",
 		Summary: "Latest send blocked/succeeded proof",
 		Detail:  sendProof,
 	})
-	return ReadinessSection{Name: "Audit Timeline", Checks: checks}
+	return SystemCheckSection{Name: "Audit Timeline", Checks: checks}
 }
 
-func (s *Server) buildSettingsReadinessSection(messages []g2sengine.MessageJournalEntry, certs []model.CertificateInventory) ReadinessSection {
-	checks := []ReadinessCheck{}
+func (s *Server) buildSettingsSystemCheckSection(messages []g2sengine.MessageJournalEntry, certs []model.CertificateInventory) SystemCheckSection {
+	checks := []SystemCheckItem{}
 	if s.Options.RealSendDefaultDisabled {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessPass,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckPass,
 			Code:    "SETTINGS_REAL_SEND_GATED",
 			Summary: "Real send default is gated/disabled",
 			Detail:  s.Options.TransportGateSummary,
 		})
 	} else {
-		checks = append(checks, ReadinessCheck{
-			Status:  ReadinessFail,
+		checks = append(checks, SystemCheckItem{
+			Status:  SystemCheckFail,
 			Code:    "SETTINGS_REAL_SEND_GATED",
 			Summary: "Real send default is not marked gated",
 		})
 	}
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "SETTINGS_CAPTURE_POLICY",
 		Summary: "Current capture behavior policy",
 		Detail:  s.Options.CapturePolicySummary,
 	})
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "SETTINGS_DB_BIND",
 		Summary: "Database path and bind address",
 		Detail:  fmt.Sprintf("db=%s bind=%s", defaultString(s.Options.DatabasePath, "unknown"), defaultString(s.Options.BindAddress, "unknown")),
 	})
 	statusSummary := summarizeCertStatuses(certs)
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "SETTINGS_CERT_STATUS",
 		Summary: "Certificate inventory status summary",
 		Detail:  statusSummary,
@@ -598,28 +598,28 @@ func (s *Server) buildSettingsReadinessSection(messages []g2sengine.MessageJourn
 			break
 		}
 	}
-	checks = append(checks, ReadinessCheck{
-		Status:  ReadinessInfo,
+	checks = append(checks, SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    "SETTINGS_LAST_SEND_RESULT",
 		Summary: "Last send-prepared result",
 		Detail:  lastSend,
 	})
-	return ReadinessSection{Name: "Settings / Safety", Checks: checks}
+	return SystemCheckSection{Name: "Settings / Safety", Checks: checks}
 }
 
-func latestAuditCheck(rows []audit.AuditTimelineEntry, code string, summary string, eventType string) ReadinessCheck {
+func latestAuditCheck(rows []audit.AuditTimelineEntry, code string, summary string, eventType string) SystemCheckItem {
 	for _, row := range rows {
 		if row.EventType == eventType {
-			return ReadinessCheck{
-				Status:  ReadinessInfo,
+			return SystemCheckItem{
+				Status:  SystemCheckInfo,
 				Code:    code,
 				Summary: summary,
 				Detail:  row.EventType + " @ " + fmtTime(row.OccurredAt),
 			}
 		}
 	}
-	return ReadinessCheck{
-		Status:  ReadinessInfo,
+	return SystemCheckItem{
+		Status:  SystemCheckInfo,
 		Code:    code,
 		Summary: summary,
 		Detail:  "not observed",
@@ -646,7 +646,7 @@ func summarizeCertStatuses(certs []model.CertificateInventory) string {
 	return strings.Join(parts, ", ")
 }
 
-func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport) (OperatorExportPackage, error) {
+func (s *Server) buildExportPackage(ctx context.Context, report SystemCheckReport) (OperatorExportPackage, error) {
 	channels, err := s.Store.ListInputChannels(ctx)
 	if err != nil {
 		return OperatorExportPackage{}, err
@@ -730,18 +730,18 @@ func (s *Server) buildExportPackage(ctx context.Context, report ReadinessReport)
 		MessageJournal:  messageRows,
 		AuditTimeline:   auditRows,
 		CertificateMeta: certRows,
-		Readiness:       report,
+		SystemCheck:     report,
 	}
 	exportPkg.SafetyGate["real_send_default"] = "gated"
 	exportPkg.SafetyGate["transport_gate"] = s.Options.TransportGateSummary
 	exportPkg.SafetyGate["capture_policy"] = s.Options.CapturePolicySummary
-	exportPkg.SafetyGate["phase_send_policy"] = "no real EGM send approved from operator UI"
+	exportPkg.SafetyGate["send_gate_policy"] = "no real EGM send approved from operator console"
 	exportPkg.SafetyGate["bind_address"] = s.Options.BindAddress
 	exportPkg.SafetyGate["database_path"] = s.Options.DatabasePath
 	return exportPkg, nil
 }
 
-func (r ReadinessReport) MarshalJSON() ([]byte, error) {
-	type alias ReadinessReport
+func (r SystemCheckReport) MarshalJSON() ([]byte, error) {
+	type alias SystemCheckReport
 	return json.Marshal(alias(r))
 }
