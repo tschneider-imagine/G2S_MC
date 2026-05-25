@@ -881,6 +881,233 @@ func TestSettingsPageHandlesEmptyCertificateInventory(t *testing.T) {
 	}
 }
 
+func TestInputsPageRendersExpectedInputsAndStates(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/inputs", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"regular-operation",
+		"general-broadcast",
+		"emergency-broadcast",
+		"local-notice",
+		"HIGH",
+		"LOW",
+		"NORMAL",
+		"TRIGGERED",
+		"Latch Active",
+		"yes",
+		"Recent Input Transitions",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in inputs page", expected)
+		}
+	}
+}
+
+func TestInputsPageRendersMissingExpectedInputWarning(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	now := time.Now().UTC()
+	rows := []inputs.InputChannel{
+		{ID: "regular-operation", Name: "Regular Operation", GPIOChannel: "GPIO16", Enabled: true, NormalState: inputs.InputStateHigh, CurrentState: inputs.InputStateHigh, DerivedState: inputs.DerivedStateNormal, DebounceMS: 100, Priority: 100, OnTriggerActionID: "regular-operation-trigger", LatchingMode: inputs.LatchingAutoClear},
+		{ID: "general-broadcast", Name: "General Broadcast", GPIOChannel: "GPIO20", Enabled: true, NormalState: inputs.InputStateHigh, CurrentState: inputs.InputStateHigh, DerivedState: inputs.DerivedStateNormal, DebounceMS: 100, Priority: 200, OnTriggerActionID: "general-broadcast-trigger", OnNormalActionID: "general-broadcast-restore", LatchingMode: inputs.LatchingAutoClear},
+		{ID: "emergency-broadcast", Name: "Emergency Broadcast", GPIOChannel: "GPIO21", Enabled: true, NormalState: inputs.InputStateHigh, CurrentState: inputs.InputStateLow, DerivedState: inputs.DerivedStateTriggered, DebounceMS: 120, Priority: 400, OnTriggerActionID: "emergency-broadcast-trigger", OnNormalActionID: "emergency-broadcast-restore", LatchingMode: inputs.LatchingManualClear},
+	}
+	for _, row := range rows {
+		if err := st.UpsertInputChannel(ctx, row); err != nil {
+			t.Fatalf("upsert input: %v", err)
+		}
+	}
+	if err := st.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              "emergency-broadcast",
+		StableRawState:       inputs.InputStateLow,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          now,
+		LastObservedRawState: inputs.InputStateLow,
+		LastObservedAt:       now,
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert runtime: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), allowMutation)
+	server.RegisterRoutes(mux)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/inputs", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Missing configured input channels") || !strings.Contains(res.Body.String(), "local-notice") {
+		t.Fatalf("expected missing input warning, body=%s", res.Body.String())
+	}
+}
+
+func TestPostInputByIDUpdatesFields(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	body := url.Values{
+		"normal_state":         {"LOW"},
+		"debounce_ms":          {"321"},
+		"latching_mode":        {"MANUAL_CLEAR"},
+		"priority":             {"77"},
+		"on_trigger_action_id": {"custom-trigger"},
+		"on_normal_action_id":  {"custom-normal"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/local-notice", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	updated, err := st.GetInputChannel(context.Background(), "local-notice")
+	if err != nil {
+		t.Fatalf("get input: %v", err)
+	}
+	if updated == nil {
+		t.Fatal("expected updated input")
+	}
+	if updated.NormalState != inputs.InputStateLow || updated.DebounceMS != 321 || updated.Priority != 77 {
+		t.Fatalf("expected normal/debounce/priority updated, got %+v", *updated)
+	}
+	if updated.LatchingMode != inputs.LatchingManualClear || updated.OnTriggerActionID != "custom-trigger" || updated.OnNormalActionID != "custom-normal" {
+		t.Fatalf("expected latch/actions updated, got %+v", *updated)
+	}
+}
+
+func TestPostInputByIDInvalidDebounceDoesNotSave(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	before, err := st.GetInputChannel(context.Background(), "local-notice")
+	if err != nil || before == nil {
+		t.Fatalf("setup get input: %v", err)
+	}
+	body := url.Values{
+		"normal_state":         {"HIGH"},
+		"debounce_ms":          {"abc"},
+		"latching_mode":        {"AUTO_CLEAR"},
+		"priority":             {"150"},
+		"on_trigger_action_id": {"local-notice-trigger"},
+		"on_normal_action_id":  {"local-notice-restore"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/local-notice", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "invalid debounce") {
+		t.Fatalf("expected invalid debounce error, body=%s", res.Body.String())
+	}
+	after, err := st.GetInputChannel(context.Background(), "local-notice")
+	if err != nil || after == nil {
+		t.Fatalf("get input after: %v", err)
+	}
+	if after.DebounceMS != before.DebounceMS {
+		t.Fatalf("debounce must not change on invalid input; before=%d after=%d", before.DebounceMS, after.DebounceMS)
+	}
+}
+
+func TestPostInputByIDInvalidPriorityDoesNotSave(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	before, err := st.GetInputChannel(context.Background(), "local-notice")
+	if err != nil || before == nil {
+		t.Fatalf("setup get input: %v", err)
+	}
+	body := url.Values{
+		"normal_state":         {"HIGH"},
+		"debounce_ms":          {"80"},
+		"latching_mode":        {"AUTO_CLEAR"},
+		"priority":             {"-3"},
+		"on_trigger_action_id": {"local-notice-trigger"},
+		"on_normal_action_id":  {"local-notice-restore"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/local-notice", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "invalid priority") {
+		t.Fatalf("expected invalid priority error, body=%s", res.Body.String())
+	}
+	after, err := st.GetInputChannel(context.Background(), "local-notice")
+	if err != nil || after == nil {
+		t.Fatalf("get input after: %v", err)
+	}
+	if after.Priority != before.Priority {
+		t.Fatalf("priority must not change on invalid input; before=%d after=%d", before.Priority, after.Priority)
+	}
+}
+
+func TestClearLatchRouteRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(w http.ResponseWriter, _ *http.Request) bool {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	})
+	server.RegisterRoutes(mux)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/emergency-broadcast/clear-latch", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=401", res.Code)
+	}
+}
+
+func TestClearLatchRouteWorksWhenPhysicalStateNormal(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := st.UpsertInputRuntimeState(ctx, inputruntime.InputRuntimeState{
+		InputID:              "emergency-broadcast",
+		StableRawState:       inputs.InputStateHigh,
+		DerivedState:         inputs.DerivedStateTriggered,
+		LatchActive:          true,
+		StableSince:          now,
+		LastObservedRawState: inputs.InputStateHigh,
+		LastObservedAt:       now,
+		UpdatedAt:            now,
+	}); err != nil {
+		t.Fatalf("upsert runtime: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/operator/inputs/emergency-broadcast/clear-latch", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "Latch clear: emergency-broadcast") || !strings.Contains(body, "action queued: emergency-broadcast-restore") {
+		t.Fatalf("expected clear-latch success message with queued action, body=%s", body)
+	}
+	state, err := st.GetInputRuntimeState(ctx, "emergency-broadcast")
+	if err != nil || state == nil {
+		t.Fatalf("get runtime state: %v", err)
+	}
+	if state.LatchActive {
+		t.Fatal("expected latch to be inactive after clear")
+	}
+}
+
 func setupOperatorServer(t *testing.T) *http.ServeMux {
 	mux, _ := setupOperatorServerWithStore(t)
 	return mux

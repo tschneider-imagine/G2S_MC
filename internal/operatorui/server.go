@@ -43,6 +43,9 @@ type Store interface {
 	UpsertInputChannel(ctx context.Context, channel inputs.InputChannel) error
 	ListInputChannels(ctx context.Context) ([]inputs.InputChannel, error)
 	GetInputRuntimeState(ctx context.Context, inputID string) (*inputruntime.InputRuntimeState, error)
+	UpsertInputRuntimeState(ctx context.Context, state inputruntime.InputRuntimeState) error
+	RecordInputTransition(ctx context.Context, transition inputs.InputTransition) (int64, error)
+	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 	ListInputTransitions(ctx context.Context, limit int) ([]inputs.InputTransition, error)
 
 	GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error)
@@ -230,11 +233,33 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeMutation(w, r) {
 		return
 	}
-	inputID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/inputs/")))
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/inputs/")))
+	action := "update"
+	inputID := strings.TrimSpace(strings.TrimSuffix(path, "/"))
+	if strings.HasSuffix(path, "/clear-latch") {
+		action = "clear-latch"
+		inputID = strings.TrimSpace(strings.TrimSuffix(path, "/clear-latch"))
+		inputID = strings.TrimSpace(strings.TrimSuffix(inputID, "/"))
+	}
 	if inputID == "" || strings.Contains(inputID, "/") {
 		http.NotFound(w, r)
 		return
 	}
+	if action == "clear-latch" {
+		evaluator := inputruntime.Evaluator{Store: s.Store}
+		result, err := evaluator.ClearLatchedInput(r.Context(), inputID, "operator-console", "operator clear latch")
+		if err != nil {
+			s.renderInputsPage(w, r, "", err.Error())
+			return
+		}
+		msg := "Latch clear: " + inputID + " " + defaultString(strings.TrimSpace(result.Reason), "updated")
+		if strings.TrimSpace(result.ActionQueuedID) != "" {
+			msg += " action queued: " + strings.TrimSpace(result.ActionQueuedID)
+		}
+		s.renderInputsPage(w, r, msg, "")
+		return
+	}
+
 	existing, err := s.Store.GetInputChannel(r.Context(), inputID)
 	if err != nil {
 		s.renderInputsPage(w, r, "", err.Error())
@@ -248,11 +273,31 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 		s.renderInputsPage(w, r, "", "invalid form payload")
 		return
 	}
+	normalState, err := parseInputStateField(r.FormValue("normal_state"))
+	if err != nil {
+		s.renderInputsPage(w, r, "", err.Error())
+		return
+	}
+	debounceMS, err := parseNonNegativeIntField(r.FormValue("debounce_ms"), "debounce")
+	if err != nil {
+		s.renderInputsPage(w, r, "", err.Error())
+		return
+	}
+	priority, err := parseNonNegativeIntField(r.FormValue("priority"), "priority")
+	if err != nil {
+		s.renderInputsPage(w, r, "", err.Error())
+		return
+	}
+	latchingMode, err := parseLatchingModeField(r.FormValue("latching_mode"))
+	if err != nil {
+		s.renderInputsPage(w, r, "", err.Error())
+		return
+	}
 	updated := *existing
-	updated.NormalState = parseInputState(r.FormValue("normal_state"), updated.NormalState)
-	updated.DebounceMS = parseIntOrDefault(r.FormValue("debounce_ms"), updated.DebounceMS)
-	updated.LatchingMode = parseLatchingMode(r.FormValue("latching_mode"), updated.LatchingMode)
-	updated.Priority = parseIntOrDefault(r.FormValue("priority"), updated.Priority)
+	updated.NormalState = normalState
+	updated.DebounceMS = debounceMS
+	updated.LatchingMode = latchingMode
+	updated.Priority = priority
 	updated.OnTriggerActionID = strings.TrimSpace(r.FormValue("on_trigger_action_id"))
 	updated.OnNormalActionID = strings.TrimSpace(r.FormValue("on_normal_action_id"))
 	if err := updated.Validate(); err != nil {
@@ -283,8 +328,41 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 			lastTransitionByInput[transition.InputChannelID] = transition
 		}
 	}
+	auditRows, err := s.Store.ListAuditTimelineEntries(r.Context(), store.AuditTimelineListQuery{Limit: 300})
+	if err != nil {
+		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
+		return
+	}
+	auditByTransitionID := map[int64]audit.AuditTimelineEntry{}
+	for _, row := range auditRows {
+		if row.InputTransitionID > 0 {
+			if _, exists := auditByTransitionID[row.InputTransitionID]; !exists {
+				auditByTransitionID[row.InputTransitionID] = row
+			}
+		}
+	}
 
 	body := strings.Builder{}
+	expectedInputs := []string{
+		"regular-operation",
+		"general-broadcast",
+		"emergency-broadcast",
+		"local-notice",
+	}
+	presentInputs := map[string]bool{}
+	for _, channel := range channels {
+		presentInputs[channel.ID] = true
+	}
+	missingInputs := []string{}
+	for _, id := range expectedInputs {
+		if !presentInputs[id] {
+			missingInputs = append(missingInputs, id)
+		}
+	}
+	if len(missingInputs) > 0 {
+		body.WriteString(`<div class="panel"><h3>Input Coverage</h3><p>Missing configured input channels: <span class="mono">` + esc(strings.Join(missingInputs, ", ")) + `</span></p></div>`)
+	}
+
 	body.WriteString(`<div class="panel"><h2>Configured Inputs</h2><table>`)
 	body.WriteString(`<tr><th>ID</th><th>Name</th><th>GPIO</th><th>Raw</th><th>Derived</th><th>Latch Mode</th><th>Latch Active</th><th>Normal</th><th>Debounce</th><th>Priority</th><th>On Trigger</th><th>On Normal</th><th>Last Transition</th><th>Edit</th></tr>`)
 	for _, channel := range channels {
@@ -295,7 +373,8 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 		}
 		lastTransition := "-"
 		if transition, ok := lastTransitionByInput[channel.ID]; ok {
-			lastTransition = fmt.Sprintf("%s %s->%s", fmtTime(transition.TransitionAt), transition.PreviousDerived, transition.NewDerived)
+			actionQueued := actionQueuedFromTransition(transition, auditByTransitionID[transition.ID])
+			lastTransition = fmt.Sprintf("%s %s->%s action=%s", fmtTime(transition.TransitionAt), transition.PreviousDerived, transition.NewDerived, defaultString(strings.TrimSpace(actionQueued), "-"))
 		}
 		rawState := string(channel.CurrentState)
 		derivedState := string(channel.DerivedState)
@@ -332,7 +411,38 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 		body.WriteString(`priority <input type="number" name="priority" value="` + esc(strconv.Itoa(channel.Priority)) + `" style="width:66px"> `)
 		body.WriteString(`<br>on-trigger <input type="text" name="on_trigger_action_id" value="` + esc(channel.OnTriggerActionID) + `" style="width:180px"> `)
 		body.WriteString(`on-normal <input type="text" name="on_normal_action_id" value="` + esc(channel.OnNormalActionID) + `" style="width:180px"> `)
+		if channel.LatchingMode == inputs.LatchingManualClear {
+			body.WriteString(`<br><button type="submit" formaction="/operator/inputs/` + esc(channel.ID) + `/clear-latch">Clear Latch</button>`)
+		}
 		body.WriteString(`<button type="submit">Save</button></form></td>`)
+		body.WriteString(`</tr>`)
+	}
+	body.WriteString(`</table></div>`)
+
+	body.WriteString(`<div class="panel"><h3>Recent Input Transitions</h3><table>`)
+	body.WriteString(`<tr><th>Timestamp</th><th>Input ID</th><th>From</th><th>To</th><th>Raw From</th><th>Raw To</th><th>Action Queued</th><th>Transition ID</th><th>Related Audit</th><th>Notes</th></tr>`)
+	for _, transition := range transitions {
+		auditRow := auditByTransitionID[transition.ID]
+		rawTo := "-"
+		if strings.TrimSpace(auditRow.DetailJSON) != "" {
+			rawTo = defaultString(extractJSONValue(auditRow.DetailJSON, "raw_state"), "-")
+		}
+		actionQueued := actionQueuedFromTransition(transition, auditRow)
+		note := defaultString(strings.TrimSpace(transition.Reason), "-")
+		if strings.TrimSpace(auditRow.Summary) != "" {
+			note = auditRow.Summary
+		}
+		body.WriteString(`<tr>`)
+		body.WriteString(`<td>` + esc(fmtTime(transition.TransitionAt)) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(transition.InputChannelID) + `</td>`)
+		body.WriteString(`<td>` + esc(string(transition.PreviousDerived)) + `</td>`)
+		body.WriteString(`<td>` + esc(string(transition.NewDerived)) + `</td>`)
+		body.WriteString(`<td>-</td>`)
+		body.WriteString(`<td>` + esc(rawTo) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(defaultString(strings.TrimSpace(actionQueued), "-")) + `</td>`)
+		body.WriteString(`<td>` + esc(zeroDash64(transition.ID)) + `</td>`)
+		body.WriteString(`<td>` + esc(zeroDash64(auditRow.ID)) + `</td>`)
+		body.WriteString(`<td>` + esc(note) + `</td>`)
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
@@ -1391,24 +1501,35 @@ func deliverySummary(row g2sengine.MessageJournalEntry) string {
 }
 
 func auditRelatedEGMID(row audit.AuditTimelineEntry) string {
-	detail := strings.TrimSpace(row.DetailJSON)
-	if detail == "" {
-		return "-"
+	return defaultString(extractJSONValue(row.DetailJSON, "egm_id", "egm", "target_egm_id"), "-")
+}
+
+func actionQueuedFromTransition(transition inputs.InputTransition, auditRow audit.AuditTimelineEntry) string {
+	if strings.TrimSpace(transition.ActionRunID) != "" {
+		return strings.TrimSpace(transition.ActionRunID)
+	}
+	return strings.TrimSpace(extractJSONValue(auditRow.DetailJSON, "action_queued_id"))
+}
+
+func extractJSONValue(detail string, keys ...string) string {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		return ""
 	}
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
-		return "-"
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return ""
 	}
-	for _, key := range []string{"egm_id", "egm", "target_egm_id"} {
+	for _, key := range keys {
 		value, ok := payload[key]
 		if !ok {
 			continue
 		}
 		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			return text
+			return strings.TrimSpace(text)
 		}
 	}
-	return "-"
+	return ""
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -1866,6 +1987,30 @@ func parseEscalationPolicyJSON(raw string) escalationPolicyConfig {
 	}
 	policy.ActionID = strings.TrimSpace(policy.ActionID)
 	return policy
+}
+
+func parseInputStateField(raw string) (inputs.InputElectricalState, error) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	switch value {
+	case string(inputs.InputStateHigh):
+		return inputs.InputStateHigh, nil
+	case string(inputs.InputStateLow):
+		return inputs.InputStateLow, nil
+	default:
+		return "", fmt.Errorf("normal state must be HIGH or LOW")
+	}
+}
+
+func parseLatchingModeField(raw string) (inputs.InputLatchingMode, error) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	switch value {
+	case string(inputs.LatchingAutoClear):
+		return inputs.LatchingAutoClear, nil
+	case string(inputs.LatchingManualClear):
+		return inputs.LatchingManualClear, nil
+	default:
+		return "", fmt.Errorf("latch mode must be AUTO_CLEAR or MANUAL_CLEAR")
+	}
 }
 
 func validateTemplateVersionPayload(row templates.G2STemplateVersion) error {
