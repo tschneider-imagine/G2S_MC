@@ -93,7 +93,12 @@ func TestValidateMutualTLSRequiresTLSAndCA(t *testing.T) {
 }
 
 func TestExampleConfigsLoad(t *testing.T) {
-	for _, name := range []string{"config.example.json", "config.tls.example.json", "config.pi.example.json"} {
+	for _, name := range []string{
+		"config.example.json",
+		"config.tls.example.json",
+		"config.pi.example.json",
+		"config.pi-field-test.example.json",
+	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join("..", "..", "configs", name)
 			if _, err := LoadFile(path); err != nil {

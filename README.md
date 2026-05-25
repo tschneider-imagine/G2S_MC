@@ -63,6 +63,8 @@ Current documentation:
 - `docs/development.md`
 - `docs/raspberry-pi.md`
 - `docs/setup-windows.md`
+- `packaging/README.md`
+- `docs/runbooks/PI_FIELD_TEST_SERVICE_RUNBOOK.md`
 
 Archived historical planning docs:
 

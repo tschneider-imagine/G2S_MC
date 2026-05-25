@@ -1,5 +1,5 @@
 [Unit]
-Description=G2S Muting Controller
+Description=G2S Appliance Service
 After=network-online.target
 Wants=network-online.target
 
@@ -7,13 +7,19 @@ Wants=network-online.target
 Type=simple
 User=g2s-mute
 Group=g2s-mute
-ExecStart=/usr/local/bin/g2s-mute -config /etc/g2s-mute/config.json
+SupplementaryGroups=gpio
+WorkingDirectory=/var/lib/g2s-mute
+ExecStart=/usr/local/bin/g2s-mute \
+  -config /etc/g2s-mute/config.json \
+  -input-runtime \
+  -input-runtime-seed-defaults \
+  -input-runtime-interval 100ms
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/var/lib/g2s-mute /var/log/g2s-mute /etc/g2s-mute/certs
+ReadWritePaths=/var/lib/g2s-mute /var/log/g2s-mute /etc/g2s-mute /etc/g2s-mute/certs
 
 [Install]
 WantedBy=multi-user.target

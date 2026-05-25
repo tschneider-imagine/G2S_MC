@@ -1,0 +1,78 @@
+{
+  "controller_id": "G2S-MC-PI-001",
+  "site_name": "Pi Cabinet Lab",
+  "cabinet_profile": {
+    "wire_host_url": "https://pi-cabinet-host.example:8444/g2s",
+    "listener_dns_name": "pi-cabinet-host.example",
+    "listener_ip": "192.168.50.40",
+    "required_san_dns": [
+      "pi-cabinet-host.example"
+    ],
+    "required_san_ips": [
+      "192.168.50.40"
+    ],
+    "host_id": "HOST-PI-001",
+    "first_test_egm_ids": [
+      "EGM-001"
+    ]
+  },
+  "hardware_io": {
+    "security_line_gpio_pin": 17,
+    "voltage_drop_threshold_ms": 250,
+    "psu_1_gpio_pin": 22,
+    "psu_2_gpio_pin": 23,
+    "buzzer_gpio_pin": 18,
+    "active_low_inputs": true
+  },
+  "power_management": {
+    "critical_battery_threshold_percent": 5,
+    "buzzer_on_single_psu_failure": true
+  },
+  "crypto": {
+    "g2s_client_cert_path": "/etc/g2s-mute/certs/client.crt",
+    "g2s_client_key_path": "/etc/g2s-mute/certs/client.key",
+    "g2s_ca_cert_path": "/etc/g2s-mute/certs/ca.crt",
+    "web_server_cert_path": "",
+    "web_server_key_path": ""
+  },
+  "api": {
+    "auth_token": ""
+  },
+  "alerts": {
+    "grey_threshold_count_to_buzz": 3,
+    "grey_threshold_percent_to_buzz": 15.0
+  },
+  "timeouts": {
+    "g2s_request_timeout_ms": 5000,
+    "egm_heartbeat_interval_ms": 5000,
+    "ui_session_timeout_minutes": 30
+  },
+  "database": {
+    "path": "/var/lib/g2s-mute/controller.db"
+  },
+  "web_ui": {
+    "bind_address": "0.0.0.0:8444",
+    "require_login": false,
+    "require_client_cert_for_admin": false,
+    "allow_private_key_export": false,
+    "allow_trusted_private_network_mutations": true
+  },
+  "g2s": {
+    "host_id": "HOST-PI-001",
+    "host_url": "http://127.0.0.1:8444/g2s",
+    "endpoint_path": "/g2s",
+    "require_tls": false,
+    "require_client_cert": false
+  },
+  "egm_roster": [
+    {
+      "egm_id": "EGM-001",
+      "ip_address": "192.168.50.101",
+      "port": 9443,
+      "vendor": "Generic",
+      "cabinet_family": "Generic",
+      "game_title": "Cabinet 001",
+      "software_version": "1.0.0"
+    }
+  ]
+}
