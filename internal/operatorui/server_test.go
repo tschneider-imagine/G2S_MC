@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -234,7 +236,155 @@ func TestAuditPageRendersTimelineEvidence(t *testing.T) {
 	}
 }
 
+func TestActionsPageRendersActionRowsAndFields(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/actions", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Action Definitions",
+		"regular-operation-trigger",
+		"Emergency Broadcast Trigger",
+		"Return Action",
+		"Retry Count",
+		"Retry Delay (ms)",
+		"Escalation Action",
+		"Escalation After Attempts",
+		"Target Selector Type",
+		"Target Preview",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in actions page", expected)
+		}
+	}
+}
+
+func TestActionsPageShowsInlineTargetPreviewAndWarnings(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/actions", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"targets=2",
+		"EMPTY_TARGET_SET",
+		"MISSING_TEMPLATE",
+		"EMERGENCY_RETURN_MISSING",
+		"Cabinet 001 (EGM-001)",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in actions page", expected)
+		}
+	}
+}
+
+func TestPostActionsSavesRetryAndEscalationJSON(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	body := url.Values{
+		"id":                        {"action-new"},
+		"name":                      {"Action New"},
+		"severity":                  {"NOTICE"},
+		"enabled":                   {"true"},
+		"target_selector_type":      {targetSelectorTypeEGMIDs},
+		"target_selector_value":     {"EGM-001"},
+		"template_selector":         {"template-by-egm"},
+		"step_template_action_key":  {"regular_operation_notice"},
+		"return_action_id":          {"regular-operation-trigger"},
+		"retry_count":               {"3"},
+		"retry_delay_ms":            {"1500"},
+		"escalation_action_id":      {"emergency-broadcast-trigger"},
+		"escalation_after_attempts": {"2"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/actions", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	definition, err := st.GetActionDefinition(context.Background(), "action-new")
+	if err != nil {
+		t.Fatalf("get action: %v", err)
+	}
+	if definition == nil {
+		t.Fatal("expected action definition saved")
+	}
+	if definition.TargetSelector != "EGM_IDS:EGM-001" {
+		t.Fatalf("target_selector=%q", definition.TargetSelector)
+	}
+	retryPolicy := parseRetryPolicyJSON(definition.RetryPolicyJSON)
+	if !reflect.DeepEqual(retryPolicy, retryPolicyConfig{Count: 3, DelayMS: 1500}) {
+		t.Fatalf("retry_policy=%+v", retryPolicy)
+	}
+	escalationPolicy := parseEscalationPolicyJSON(definition.EscalationJSON)
+	if !reflect.DeepEqual(escalationPolicy, escalationPolicyConfig{ActionID: "emergency-broadcast-trigger", AfterAttempts: 2}) {
+		t.Fatalf("escalation_policy=%+v", escalationPolicy)
+	}
+}
+
+func TestPostActionsRejectsInvalidRetryCount(t *testing.T) {
+	mux := setupOperatorServer(t)
+	body := url.Values{
+		"id":                       {"action-invalid-retry"},
+		"name":                     {"Action Invalid Retry"},
+		"severity":                 {"NOTICE"},
+		"enabled":                  {"true"},
+		"target_selector_type":     {targetSelectorTypeAllEmergencyEnabled},
+		"template_selector":        {"template-by-egm"},
+		"step_template_action_key": {"regular_operation_notice"},
+		"retry_count":              {"abc"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/actions", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "invalid retry count") {
+		t.Fatalf("expected invalid retry count error, body=%s", res.Body.String())
+	}
+}
+
+func TestPostActionsRejectsInvalidEscalationAttempts(t *testing.T) {
+	mux := setupOperatorServer(t)
+	body := url.Values{
+		"id":                        {"action-invalid-escalation"},
+		"name":                      {"Action Invalid Escalation"},
+		"severity":                  {"NOTICE"},
+		"enabled":                   {"true"},
+		"target_selector_type":      {targetSelectorTypeAllEmergencyEnabled},
+		"template_selector":         {"template-by-egm"},
+		"step_template_action_key":  {"regular_operation_notice"},
+		"escalation_action_id":      {"emergency-broadcast-trigger"},
+		"escalation_after_attempts": {"0"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/actions", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "escalation after attempts must be greater than zero") {
+		t.Fatalf("expected invalid escalation error, body=%s", res.Body.String())
+	}
+}
+
 func setupOperatorServer(t *testing.T) *http.ServeMux {
+	mux, _ := setupOperatorServerWithStore(t)
+	return mux
+}
+
+func setupOperatorServerWithStore(t *testing.T) (*http.ServeMux, *store.SQLiteStore) {
 	t.Helper()
 	ctx := context.Background()
 	st := newTestStore(t, ctx)
@@ -244,7 +394,7 @@ func setupOperatorServer(t *testing.T) *http.ServeMux {
 	mux := http.NewServeMux()
 	server := NewServer(st, Options{}, allowMutation)
 	server.RegisterRoutes(mux)
-	return mux
+	return mux, st
 }
 
 func allowMutation(_ http.ResponseWriter, _ *http.Request) bool { return true }
@@ -312,10 +462,30 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 		def("regular-operation-trigger", "Regular Operation Trigger", "regular_operation_notice", actions.SeverityNotice, ""),
 		def("general-broadcast-trigger", "General Broadcast Trigger", "general_broadcast_notice", actions.SeverityBroadcast, "general-broadcast-restore"),
 		def("general-broadcast-restore", "General Broadcast Restore", "general_broadcast_restore", actions.SeverityRestore, ""),
-		def("emergency-broadcast-trigger", "Emergency Broadcast Trigger", "emergency_broadcast_silence", actions.SeverityEmergency, "emergency-broadcast-restore"),
+		def("emergency-broadcast-trigger", "Emergency Broadcast Trigger", "emergency_broadcast_silence", actions.SeverityEmergency, ""),
 		def("emergency-broadcast-restore", "Emergency Broadcast Restore", "emergency_broadcast_restore", actions.SeverityRestore, ""),
 		def("local-notice-trigger", "Local Notice Trigger", "local_notice", actions.SeverityNotice, "local-notice-restore"),
 		def("local-notice-restore", "Local Notice Restore", "local_notice_restore", actions.SeverityRestore, ""),
+		{
+			ID:               "action-zero-targets",
+			Name:             "Action Zero Targets",
+			Severity:         actions.SeverityNotice,
+			Enabled:          true,
+			TargetSelector:   "EGM_IDS:EGM-404",
+			TemplateSelector: "template-by-egm",
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary Step", Sequence: 0, TemplateActionKey: "regular_operation_notice"}},
+			Version:          1,
+		},
+		{
+			ID:               "action-missing-template",
+			Name:             "Action Missing Template",
+			Severity:         actions.SeverityNotice,
+			Enabled:          true,
+			TargetSelector:   "EGM_IDS:EGM-003",
+			TemplateSelector: "template-by-egm",
+			Steps:            []actions.ActionStep{{ID: "step-1", Name: "Primary Step", Sequence: 0, TemplateActionKey: "regular_operation_notice"}},
+			Version:          1,
+		},
 	}
 	for _, row := range actionRows {
 		if err := st.UpsertActionDefinition(ctx, row); err != nil {
@@ -356,6 +526,7 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 	egmRows := []egms.EGMRecord{
 		{EGMID: "EGM-001", DisplayName: "Cabinet 001", Enabled: true, EmergencyEnabled: true, TemplateID: "template-generic-g2s-action", CurrentActionState: egms.EGMActionStatePending},
 		{EGMID: "EGM-002", DisplayName: "Cabinet 002", Enabled: true, EmergencyEnabled: true, TemplateID: "template-generic-g2s-action", CurrentActionState: egms.EGMActionStatePending},
+		{EGMID: "EGM-003", DisplayName: "Cabinet 003", Enabled: true, EmergencyEnabled: false, CurrentActionState: egms.EGMActionStatePending},
 	}
 	for _, row := range egmRows {
 		if err := st.UpsertEGMRecord(ctx, row); err != nil {

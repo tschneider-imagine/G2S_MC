@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
@@ -390,6 +391,16 @@ func (s *Server) upsertActionFromForm(ctx context.Context, actionID string, r *h
 	if r.Form.Has("enabled") {
 		enabled = parseFormBool(r.FormValue("enabled"))
 	}
+
+	targetSelector, err := parseTargetSelectorForm(r.FormValue("target_selector_type"), r.FormValue("target_selector_value"))
+	if err != nil {
+		return err
+	}
+	templateSelector := strings.TrimSpace(r.FormValue("template_selector"))
+	if templateSelector == "" {
+		return fmt.Errorf("template selector is required")
+	}
+
 	stepKey := strings.TrimSpace(r.FormValue("step_template_action_key"))
 	if stepKey == "" && existing != nil && len(existing.Steps) > 0 {
 		stepKey = existing.Steps[0].TemplateActionKey
@@ -397,22 +408,30 @@ func (s *Server) upsertActionFromForm(ctx context.Context, actionID string, r *h
 	if stepKey == "" {
 		stepKey = "regular_operation_notice"
 	}
+	retryPolicy, err := parseRetryPolicyForm(r.FormValue("retry_count"), r.FormValue("retry_delay_ms"))
+	if err != nil {
+		return err
+	}
+	escalationPolicy, err := parseEscalationPolicyForm(r.FormValue("escalation_action_id"), r.FormValue("escalation_after_attempts"))
+	if err != nil {
+		return err
+	}
 
 	definition := actions.ActionDefinition{
 		ID:               actionID,
 		Name:             strings.TrimSpace(r.FormValue("name")),
 		Severity:         actions.ActionSeverity(strings.ToUpper(strings.TrimSpace(r.FormValue("severity")))),
 		Enabled:          enabled,
-		TargetSelector:   strings.TrimSpace(r.FormValue("target_selector")),
-		TemplateSelector: strings.TrimSpace(r.FormValue("template_selector")),
+		TargetSelector:   targetSelector,
+		TemplateSelector: templateSelector,
 		Steps: []actions.ActionStep{{
 			ID:                "step-1",
 			Name:              "Step 1",
 			Sequence:          0,
 			TemplateActionKey: stepKey,
 		}},
-		RetryPolicyJSON: strings.TrimSpace(r.FormValue("retry_policy_json")),
-		EscalationJSON:  strings.TrimSpace(r.FormValue("escalation_policy_json")),
+		RetryPolicyJSON: retryPolicy.toJSON(),
+		EscalationJSON:  escalationPolicy.toJSON(),
 		ReturnActionID:  strings.TrimSpace(r.FormValue("return_action_id")),
 		Version:         version,
 	}
@@ -429,15 +448,12 @@ func (s *Server) upsertActionFromForm(ctx context.Context, actionID string, r *h
 		if definition.TemplateSelector == "" {
 			definition.TemplateSelector = existing.TemplateSelector
 		}
-		if definition.RetryPolicyJSON == "" {
-			definition.RetryPolicyJSON = existing.RetryPolicyJSON
-		}
-		if definition.EscalationJSON == "" {
-			definition.EscalationJSON = existing.EscalationJSON
-		}
 		if definition.ReturnActionID == "" {
 			definition.ReturnActionID = existing.ReturnActionID
 		}
+	}
+	if err := validateActionTargetSelector(definition.TargetSelector); err != nil {
+		return err
 	}
 	return s.Store.UpsertActionDefinition(ctx, definition)
 }
@@ -448,9 +464,10 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		s.renderError(w, "/operator/actions", "Operator Console Actions", err)
 		return
 	}
+	planner := actionplanner.Planner{Store: s.Store}
 	body := strings.Builder{}
 	body.WriteString(`<div class="panel"><h2>Action Definitions</h2><table>`)
-	body.WriteString(`<tr><th>ID</th><th>Name</th><th>Severity</th><th>Enabled</th><th>Target Selector</th><th>Template Selector</th><th>Step Keys</th><th>Return Action</th><th>Retry</th><th>Escalation</th><th>Preview</th><th>Edit</th></tr>`)
+	body.WriteString(`<tr><th>ID</th><th>Name</th><th>Severity</th><th>Enabled</th><th>Target Selector</th><th>Template Selector</th><th>Template Action Key</th><th>Return Action</th><th>Retry Count</th><th>Retry Delay (ms)</th><th>Escalation Action</th><th>Escalation After Attempts</th><th>Target Preview</th><th>Edit</th></tr>`)
 	for _, definition := range definitions {
 		stepKeys := []string{}
 		for _, step := range definition.Steps {
@@ -460,34 +477,70 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		if len(stepKeys) > 0 {
 			firstStep = stepKeys[0]
 		}
+		retryPolicy := parseRetryPolicyJSON(definition.RetryPolicyJSON)
+		escalationPolicy := parseEscalationPolicyJSON(definition.EscalationJSON)
+		selectorType, selectorValue, selectorReadable := selectorTypeValueAndReadable(definition.TargetSelector)
+
+		plan, planErr := planner.BuildPlanForDefinition(r.Context(), definition)
+		previewSummary := "target preview unavailable"
+		if planErr == nil {
+			targets := make([]string, 0, len(plan.Targets))
+			for _, target := range plan.Targets {
+				if strings.TrimSpace(target.DisplayName) != "" {
+					targets = append(targets, target.DisplayName+" ("+target.EGMID+")")
+				} else {
+					targets = append(targets, target.EGMID)
+				}
+			}
+			targetText := "-"
+			if len(targets) > 0 {
+				targetText = strings.Join(targets, ", ")
+			}
+			warnings := []string{}
+			for _, warning := range plan.Warnings {
+				warnings = append(warnings, warning.Code+": "+warning.Message)
+			}
+			if definition.Severity == actions.SeverityEmergency && strings.TrimSpace(definition.ReturnActionID) == "" {
+				warnings = append(warnings, "EMERGENCY_RETURN_MISSING: Emergency action has no return action configured")
+			}
+			previewSummary = fmt.Sprintf("targets=%d [%s]", plan.TargetCount, targetText)
+			if len(warnings) > 0 {
+				previewSummary += " warnings=" + strings.Join(warnings, " | ")
+			}
+		}
 		body.WriteString(`<tr>`)
 		body.WriteString(`<td class="mono">` + esc(definition.ID) + `</td>`)
 		body.WriteString(`<td>` + esc(definition.Name) + `</td>`)
 		body.WriteString(`<td>` + esc(string(definition.Severity)) + `</td>`)
 		body.WriteString(`<td>` + yesNo(definition.Enabled) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(definition.TargetSelector) + `</td>`)
+		body.WriteString(`<td><div>` + esc(selectorReadable) + `</div><div class="mono">` + esc(definition.TargetSelector) + `</div></td>`)
 		body.WriteString(`<td class="mono">` + esc(definition.TemplateSelector) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(strings.Join(stepKeys, ", ")) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(definition.ReturnActionID) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(definition.RetryPolicyJSON) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(definition.EscalationJSON) + `</td>`)
-		body.WriteString(`<td><a href="/api/v2/actions/` + esc(definition.ID) + `/preview" target="_blank" rel="noreferrer">Preview Targets</a></td>`)
+		body.WriteString(`<td>` + esc(strconv.Itoa(retryPolicy.Count)) + `</td>`)
+		body.WriteString(`<td>` + esc(strconv.Itoa(retryPolicy.DelayMS)) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(escalationPolicy.ActionID) + `</td>`)
+		body.WriteString(`<td>` + esc(strconv.Itoa(escalationPolicy.AfterAttempts)) + `</td>`)
+		body.WriteString(`<td><details><summary>summary</summary><pre>` + esc(previewSummary) + `</pre></details><a href="/api/v2/actions/` + esc(definition.ID) + `/preview" target="_blank" rel="noreferrer">View API Preview</a></td>`)
 		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/actions/` + esc(definition.ID) + `">`)
 		body.WriteString(`<input type="hidden" name="id" value="` + esc(definition.ID) + `">`)
 		body.WriteString(`name <input type="text" name="name" value="` + esc(definition.Name) + `" style="width:140px"> `)
 		body.WriteString(`severity <select name="severity">` + severityOptions(definition.Severity) + `</select> `)
 		body.WriteString(`enabled <input type="checkbox" name="enabled" value="true"` + checked(definition.Enabled) + `> `)
-		body.WriteString(`<br>target <input type="text" name="target_selector" value="` + esc(definition.TargetSelector) + `" style="width:220px"> `)
+		body.WriteString(`<br>target type <select name="target_selector_type">` + targetSelectorTypeOptions(selectorType) + `</select> `)
+		body.WriteString(`target value <input type="text" name="target_selector_value" value="` + esc(selectorValue) + `" style="width:220px"> `)
 		body.WriteString(`template <input type="text" name="template_selector" value="` + esc(definition.TemplateSelector) + `" style="width:150px"> `)
 		body.WriteString(`<br>step key <input type="text" name="step_template_action_key" value="` + esc(firstStep) + `" style="width:180px"> `)
 		body.WriteString(`return <input type="text" name="return_action_id" value="` + esc(definition.ReturnActionID) + `" style="width:180px"> `)
-		body.WriteString(`<br>retry json <input type="text" name="retry_policy_json" value="` + esc(definition.RetryPolicyJSON) + `" style="width:280px"> `)
-		body.WriteString(`escalation json <input type="text" name="escalation_policy_json" value="` + esc(definition.EscalationJSON) + `" style="width:280px"> `)
+		body.WriteString(`<br>retry count <input type="number" name="retry_count" min="0" value="` + esc(strconv.Itoa(retryPolicy.Count)) + `" style="width:90px"> `)
+		body.WriteString(`retry delay ms <input type="number" name="retry_delay_ms" min="0" value="` + esc(strconv.Itoa(retryPolicy.DelayMS)) + `" style="width:110px"> `)
+		body.WriteString(`<br>escalation action <input type="text" name="escalation_action_id" value="` + esc(escalationPolicy.ActionID) + `" style="width:180px"> `)
+		body.WriteString(`escalation after attempts <input type="number" name="escalation_after_attempts" min="0" value="` + esc(strconv.Itoa(escalationPolicy.AfterAttempts)) + `" style="width:110px"> `)
 		body.WriteString(`<button type="submit">Save</button></form></td>`)
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
-	body.WriteString(`<div class="panel"><p>Retry, escalation, and return fields are stored for configuration review. Runtime execution behavior is not available in this console.</p></div>`)
+	body.WriteString(`<div class="panel"><p>Retry, escalation, and return fields are configuration only in this console. Execution behavior is not available here.</p></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert Action</h3>`)
 	body.WriteString(`<form method="post" action="/operator/actions">`)
@@ -495,12 +548,15 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 	body.WriteString(`<label>Name <input type="text" name="name"></label>`)
 	body.WriteString(`<label>Severity <select name="severity">` + severityOptions("") + `</select></label>`)
 	body.WriteString(`<label>Enabled <input type="checkbox" name="enabled" value="true" checked></label><br>`)
-	body.WriteString(`<label>Target Selector <input type="text" name="target_selector" value="ALL_EMERGENCY_ENABLED" style="width:260px"></label>`)
+	body.WriteString(`<label>Target Selector Type <select name="target_selector_type">` + targetSelectorTypeOptions(targetSelectorTypeAllEmergencyEnabled) + `</select></label>`)
+	body.WriteString(`<label>Target Selector Value <input type="text" name="target_selector_value" style="width:220px"></label>`)
 	body.WriteString(`<label>Template Selector <input type="text" name="template_selector" value="template-by-egm" style="width:200px"></label><br>`)
 	body.WriteString(`<label>Step Template Action Key <input type="text" name="step_template_action_key" value="regular_operation_notice" style="width:220px"></label>`)
 	body.WriteString(`<label>Return Action ID <input type="text" name="return_action_id" style="width:220px"></label><br>`)
-	body.WriteString(`<label>Retry Policy JSON <input type="text" name="retry_policy_json" style="width:320px"></label><br>`)
-	body.WriteString(`<label>Escalation Policy JSON <input type="text" name="escalation_policy_json" style="width:320px"></label><br>`)
+	body.WriteString(`<label>Retry Count <input type="number" name="retry_count" min="0" value="0" style="width:100px"></label>`)
+	body.WriteString(`<label>Retry Delay Milliseconds <input type="number" name="retry_delay_ms" min="0" value="0" style="width:120px"></label><br>`)
+	body.WriteString(`<label>Escalation Action ID <input type="text" name="escalation_action_id" style="width:220px"></label>`)
+	body.WriteString(`<label>Escalation After Attempts <input type="number" name="escalation_after_attempts" min="0" value="0" style="width:120px"></label><br>`)
 	body.WriteString(`<button type="submit">Upsert Action</button></form></div>`)
 
 	s.renderPage(w, operatorRoute("/actions"), "Operator Actions", body.String(), message, errText)
@@ -1336,6 +1392,223 @@ func templateStatusOptions(current templates.TemplateStatus) string {
 		builder.WriteString(`<option value="` + esc(string(value)) + `"` + selected(string(current), string(value)) + `>` + esc(string(value)) + `</option>`)
 	}
 	return builder.String()
+}
+
+const (
+	targetSelectorTypeAllEmergencyEnabled = "all_emergency_enabled"
+	targetSelectorTypeEGMIDs              = "egm_ids"
+	targetSelectorTypeGroup               = "group"
+	targetSelectorTypeTemplate            = "template"
+	targetSelectorTypeZone                = "zone"
+)
+
+type retryPolicyConfig struct {
+	Count   int `json:"count"`
+	DelayMS int `json:"delay_ms"`
+}
+
+func (p retryPolicyConfig) toJSON() string {
+	payload, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return string(payload)
+}
+
+type escalationPolicyConfig struct {
+	ActionID      string `json:"escalation_action_id"`
+	AfterAttempts int    `json:"after_attempts"`
+}
+
+func (p escalationPolicyConfig) toJSON() string {
+	if strings.TrimSpace(p.ActionID) == "" && p.AfterAttempts == 0 {
+		return ""
+	}
+	payload, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return string(payload)
+}
+
+func targetSelectorTypeOptions(current string) string {
+	type option struct {
+		Value string
+		Label string
+	}
+	options := []option{
+		{Value: targetSelectorTypeAllEmergencyEnabled, Label: "All emergency-enabled EGMs"},
+		{Value: targetSelectorTypeEGMIDs, Label: "Explicit EGM IDs"},
+		{Value: targetSelectorTypeGroup, Label: "Group"},
+		{Value: targetSelectorTypeTemplate, Label: "Template"},
+		{Value: targetSelectorTypeZone, Label: "Zone"},
+	}
+	builder := strings.Builder{}
+	for _, option := range options {
+		builder.WriteString(`<option value="` + esc(option.Value) + `"` + selected(current, option.Value) + `>` + esc(option.Label) + `</option>`)
+	}
+	return builder.String()
+}
+
+func parseTargetSelectorForm(selectorType string, selectorValue string) (string, error) {
+	value := strings.TrimSpace(selectorValue)
+	switch strings.ToLower(strings.TrimSpace(selectorType)) {
+	case targetSelectorTypeAllEmergencyEnabled:
+		return actionplanner.SelectorAllEmergencyEnabled, nil
+	case targetSelectorTypeEGMIDs:
+		if value == "" {
+			return "", fmt.Errorf("target selector value is required for explicit EGM IDs")
+		}
+		return actionplanner.SelectorEGMIDsPrefix + value, nil
+	case targetSelectorTypeGroup:
+		if value == "" {
+			return "", fmt.Errorf("target selector value is required for group selector")
+		}
+		return actionplanner.SelectorGroupPrefix + value, nil
+	case targetSelectorTypeTemplate:
+		if value == "" {
+			return "", fmt.Errorf("target selector value is required for template selector")
+		}
+		return actionplanner.SelectorTemplatePrefix + value, nil
+	case targetSelectorTypeZone:
+		if value == "" {
+			return "", fmt.Errorf("target selector value is required for zone selector")
+		}
+		return actionplanner.SelectorZonePrefix + value, nil
+	default:
+		return "", fmt.Errorf("invalid target selector type")
+	}
+}
+
+func validateActionTargetSelector(selector string) error {
+	trimmed := strings.TrimSpace(selector)
+	if trimmed == "" {
+		return fmt.Errorf("target selector is required")
+	}
+	if trimmed == actionplanner.SelectorAllEmergencyEnabled {
+		return nil
+	}
+	switch {
+	case strings.HasPrefix(trimmed, actionplanner.SelectorEGMIDsPrefix):
+		if strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorEGMIDsPrefix)) == "" {
+			return fmt.Errorf("target selector EGM IDs value is required")
+		}
+	case strings.HasPrefix(trimmed, actionplanner.SelectorGroupPrefix):
+		if strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorGroupPrefix)) == "" {
+			return fmt.Errorf("target selector group value is required")
+		}
+	case strings.HasPrefix(trimmed, actionplanner.SelectorTemplatePrefix):
+		if strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorTemplatePrefix)) == "" {
+			return fmt.Errorf("target selector template value is required")
+		}
+	case strings.HasPrefix(trimmed, actionplanner.SelectorZonePrefix):
+		if strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorZonePrefix)) == "" {
+			return fmt.Errorf("target selector zone value is required")
+		}
+	default:
+		return fmt.Errorf("invalid target selector")
+	}
+	return nil
+}
+
+func selectorTypeValueAndReadable(selector string) (string, string, string) {
+	trimmed := strings.TrimSpace(selector)
+	if trimmed == actionplanner.SelectorAllEmergencyEnabled {
+		return targetSelectorTypeAllEmergencyEnabled, "", "All emergency-enabled EGMs"
+	}
+	if strings.HasPrefix(trimmed, actionplanner.SelectorEGMIDsPrefix) {
+		value := strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorEGMIDsPrefix))
+		return targetSelectorTypeEGMIDs, value, "Explicit EGM IDs: " + value
+	}
+	if strings.HasPrefix(trimmed, actionplanner.SelectorGroupPrefix) {
+		value := strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorGroupPrefix))
+		return targetSelectorTypeGroup, value, "Group: " + value
+	}
+	if strings.HasPrefix(trimmed, actionplanner.SelectorTemplatePrefix) {
+		value := strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorTemplatePrefix))
+		return targetSelectorTypeTemplate, value, "Template: " + value
+	}
+	if strings.HasPrefix(trimmed, actionplanner.SelectorZonePrefix) {
+		value := strings.TrimSpace(strings.TrimPrefix(trimmed, actionplanner.SelectorZonePrefix))
+		return targetSelectorTypeZone, value, "Zone: " + value
+	}
+	return targetSelectorTypeAllEmergencyEnabled, "", "Unrecognized selector: " + trimmed
+}
+
+func parseRetryPolicyForm(countRaw string, delayRaw string) (retryPolicyConfig, error) {
+	count, err := parseNonNegativeIntField(countRaw, "retry count")
+	if err != nil {
+		return retryPolicyConfig{}, err
+	}
+	delay, err := parseNonNegativeIntField(delayRaw, "retry delay milliseconds")
+	if err != nil {
+		return retryPolicyConfig{}, err
+	}
+	return retryPolicyConfig{Count: count, DelayMS: delay}, nil
+}
+
+func parseEscalationPolicyForm(actionIDRaw string, attemptsRaw string) (escalationPolicyConfig, error) {
+	actionID := strings.TrimSpace(actionIDRaw)
+	attempts, err := parseNonNegativeIntField(attemptsRaw, "escalation after attempts")
+	if err != nil {
+		return escalationPolicyConfig{}, err
+	}
+	if actionID == "" && attempts > 0 {
+		return escalationPolicyConfig{}, fmt.Errorf("escalation action ID is required when escalation attempts are set")
+	}
+	if actionID != "" && attempts <= 0 {
+		return escalationPolicyConfig{}, fmt.Errorf("escalation after attempts must be greater than zero when escalation action ID is set")
+	}
+	return escalationPolicyConfig{
+		ActionID:      actionID,
+		AfterAttempts: attempts,
+	}, nil
+}
+
+func parseNonNegativeIntField(raw string, fieldLabel string) (int, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s", fieldLabel)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("invalid %s", fieldLabel)
+	}
+	return value, nil
+}
+
+func parseRetryPolicyJSON(raw string) retryPolicyConfig {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return retryPolicyConfig{}
+	}
+	var policy retryPolicyConfig
+	if err := json.Unmarshal([]byte(trimmed), &policy); err != nil {
+		return retryPolicyConfig{}
+	}
+	if policy.Count < 0 || policy.DelayMS < 0 {
+		return retryPolicyConfig{}
+	}
+	return policy
+}
+
+func parseEscalationPolicyJSON(raw string) escalationPolicyConfig {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return escalationPolicyConfig{}
+	}
+	var policy escalationPolicyConfig
+	if err := json.Unmarshal([]byte(trimmed), &policy); err != nil {
+		return escalationPolicyConfig{}
+	}
+	if policy.AfterAttempts < 0 {
+		return escalationPolicyConfig{}
+	}
+	policy.ActionID = strings.TrimSpace(policy.ActionID)
+	return policy
 }
 
 func parseFormBool(raw string) bool {
