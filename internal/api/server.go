@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
+	"github.com/tschneider-imagine/G2S_MC/internal/actionexecutor"
 	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
@@ -40,6 +41,7 @@ type Store interface {
 	UpdateActionRun(ctx context.Context, run actions.ActionRun) error
 	CreateActionTargetResult(ctx context.Context, result actions.ActionTargetResult) (actions.ActionTargetResult, error)
 	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
+	UpdateActionTargetResult(ctx context.Context, row actions.ActionTargetResult) error
 
 	GetG2STemplate(ctx context.Context, id string) (*templates.G2STemplate, error)
 	GetG2STemplateVersion(ctx context.Context, templateID string, version int) (*templates.G2STemplateVersion, error)
@@ -200,6 +202,36 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 			CaptureOnlySend: req.CaptureOnlySend,
 			CaptureEndpoint: strings.TrimSpace(req.CaptureEndpoint),
 			Actor:           strings.TrimSpace(req.Actor),
+		})
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				writeJSONError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	case "execute":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		var req ActionRunExecuteRequest
+		if r.ContentLength > 0 {
+			if !decodeJSON(w, r, &req) {
+				return
+			}
+		}
+		executor := actionexecutor.Executor{Store: s.Store}
+		result, err := executor.Execute(r.Context(), actionexecutor.ExecuteRequest{
+			ActionRunID: id,
+			Actor:       strings.TrimSpace(req.Actor),
+			MaxTargets:  req.MaxTargets,
 		})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {
@@ -772,6 +804,13 @@ func actionRunRoute(path string) (id string, action string, ok bool) {
 			return "", "", false
 		}
 		return id, "send-prepared", true
+	}
+	if strings.HasSuffix(trimmed, "/execute") {
+		id = strings.TrimSpace(strings.TrimSuffix(trimmed, "/execute"))
+		if id == "" || strings.Contains(id, "/") {
+			return "", "", false
+		}
+		return id, "execute", true
 	}
 	if strings.Contains(trimmed, "/") {
 		return "", "", false

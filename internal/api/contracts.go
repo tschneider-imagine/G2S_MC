@@ -51,6 +51,11 @@ type ActionRunSendPreparedRequest struct {
 	Actor           string `json:"actor,omitempty"`
 }
 
+type ActionRunExecuteRequest struct {
+	Actor      string `json:"actor,omitempty"`
+	MaxTargets int    `json:"max_targets,omitempty"`
+}
+
 type TemplatesListResponse struct {
 	Templates []templates.G2STemplate `json:"templates"`
 }

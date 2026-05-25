@@ -225,6 +225,22 @@ func TestActionTargetResultCreateList(t *testing.T) {
 	if len(list) != 1 || list[0].TargetEGMID != "EGM-001" {
 		t.Fatalf("unexpected target results: %+v", list)
 	}
+
+	row.Status = actions.TargetStatusFailed
+	row.AttemptCount = 2
+	row.LastError = "delivery failed"
+	lastResultAt := time.Now().UTC()
+	row.LastResultAt = &lastResultAt
+	if err := store.UpdateActionTargetResult(ctx, row); err != nil {
+		t.Fatalf("update action target result: %v", err)
+	}
+	updatedList, err := store.ListActionTargetResults(ctx, "run-22")
+	if err != nil {
+		t.Fatalf("list updated action target results: %v", err)
+	}
+	if len(updatedList) != 1 || updatedList[0].Status != actions.TargetStatusFailed || updatedList[0].AttemptCount != 2 {
+		t.Fatalf("unexpected updated target row: %+v", updatedList)
+	}
 }
 
 func TestG2STemplateUpsertGetList(t *testing.T) {

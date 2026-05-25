@@ -632,6 +632,36 @@ func TestPostActionRunSendPreparedRequiresMutationAuth(t *testing.T) {
 	}
 }
 
+func TestPostActionRunExecuteRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d, want 1", calls)
+	}
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestPostActionRunDispatchDryRunCreatesMessages(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
@@ -810,6 +840,60 @@ func TestPostActionRunSendPreparedLocalhostCaptureSends(t *testing.T) {
 	}
 	if run.Status == actions.RunStatusSucceeded {
 		t.Fatalf("run should not be marked succeeded in Phase 2G: %q", run.Status)
+	}
+}
+
+func TestPostActionRunExecuteExecutesSpecifiedRunOnly(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	if _, err := db.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-2",
+		ActionDefinitionID: "action-1",
+		StartedAt:          time.Now().UTC(),
+		Status:             actions.RunStatusPending,
+		TriggerReason:      "manual",
+		TargetCount:        1,
+	}); err != nil {
+		t.Fatalf("seed second run: %v", err)
+	}
+	if _, err := db.CreateActionTargetResult(ctx, actions.ActionTargetResult{
+		ActionRunID:  "run-2",
+		TargetEGMID:  "EGM-1",
+		Status:       actions.TargetStatusPending,
+		AttemptCount: 0,
+	}); err != nil {
+		t.Fatalf("seed second run target: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	run1, err := db.GetActionRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("get run-1: %v", err)
+	}
+	if run1 == nil || run1.Status == actions.RunStatusPending {
+		t.Fatalf("run-1 should have executed, got %+v", run1)
+	}
+
+	run2, err := db.GetActionRun(ctx, "run-2")
+	if err != nil {
+		t.Fatalf("get run-2: %v", err)
+	}
+	if run2 == nil || run2.Status != actions.RunStatusPending {
+		t.Fatalf("run-2 should remain pending, got %+v", run2)
 	}
 }
 

@@ -531,6 +531,34 @@ func (s *SQLiteStore) ListActionTargetResults(ctx context.Context, actionRunID s
 	return result, rows.Err()
 }
 
+func (s *SQLiteStore) UpdateActionTargetResult(ctx context.Context, row actions.ActionTargetResult) error {
+	if row.ID <= 0 {
+		return fmt.Errorf("id is required")
+	}
+	if err := row.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE action_target_results
+		    SET action_run_id = ?,
+		        target_egm_id = ?,
+		        status = ?,
+		        attempt_count = ?,
+		        last_error = ?,
+		        last_result_at = ?
+		  WHERE id = ?`,
+		strings.TrimSpace(row.ActionRunID),
+		strings.TrimSpace(row.TargetEGMID),
+		row.Status,
+		row.AttemptCount,
+		nullableTrimmed(row.LastError),
+		nullableTime(row.LastResultAt),
+		row.ID,
+	)
+	return err
+}
+
 func (s *SQLiteStore) UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error {
 	if err := tpl.Validate(); err != nil {
 		return err
