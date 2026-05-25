@@ -238,6 +238,67 @@ func TestAuditPageRendersTimelineEvidence(t *testing.T) {
 	}
 }
 
+func TestCommsPageRendersInboundRow(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:         time.Now().UTC(),
+		Direction:         g2sengine.DirectionInbound,
+		FromEndpoint:      "10.0.0.10:9443",
+		ToEndpoint:        "/g2s",
+		EGMID:             "EGM-001",
+		ActionRunID:       "run-1",
+		MessageType:       "ACK",
+		RawPayload:        `<ack status="accepted"/>`,
+		ParsedSummaryJSON: `{"match_outcome":"EXPECTED"}`,
+		Result:            g2sengine.MessageResultReceived,
+	}); err != nil {
+		t.Fatalf("seed inbound row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"INBOUND", "accepted"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/comms", expected)
+		}
+	}
+}
+
+func TestAuditPageRendersInboundAuditRows(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
+		OccurredAt:       time.Now().UTC(),
+		Severity:         audit.AuditSeverityInfo,
+		EventType:        audit.EventTypeMessageReceived,
+		Summary:          "Inbound message received",
+		ActionRunID:      "run-1",
+		MessageJournalID: 1,
+		Operator:         "listener",
+	}); err != nil {
+		t.Fatalf("seed inbound audit row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"MESSAGE_RECEIVED", "Inbound message received"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/audit", expected)
+		}
+	}
+}
+
 func TestActionsPageRendersActionRowsAndFields(t *testing.T) {
 	mux := setupOperatorServer(t)
 	res := httptest.NewRecorder()

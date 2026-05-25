@@ -1,6 +1,7 @@
 package g2s
 
 import (
+	"context"
 	"encoding/xml"
 	"io"
 	"net"
@@ -10,15 +11,25 @@ import (
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
+	"github.com/tschneider-imagine/G2S_MC/internal/inbound"
 )
 
 type Server struct {
-	hostID string
-	engine *engine.Engine
+	hostID   string
+	engine   *engine.Engine
+	inbounds InboundProcessor
 }
 
 func NewServer(hostID string, engine *engine.Engine) *Server {
 	return &Server{hostID: hostID, engine: engine}
+}
+
+type InboundProcessor interface {
+	Process(ctx context.Context, message inbound.InboundMessage) (inbound.ProcessResult, error)
+}
+
+func (s *Server) SetInboundProcessor(processor InboundProcessor) {
+	s.inbounds = processor
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux, endpointPath string) {
@@ -44,6 +55,33 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 		egmID = findElement(message, "egmId")
 	}
 	sourceIP, sourcePort := parseRemoteEndpoint(r.RemoteAddr)
+
+	if s.inbounds != nil {
+		headers := map[string]string{}
+		for key, values := range r.Header {
+			if len(values) == 0 {
+				continue
+			}
+			headers[key] = strings.Join(values, ", ")
+		}
+		query := map[string]string{}
+		for key, values := range r.URL.Query() {
+			if len(values) == 0 {
+				continue
+			}
+			query[key] = values[0]
+		}
+		_, _ = s.inbounds.Process(r.Context(), inbound.InboundMessage{
+			ReceivedAt:   time.Now().UTC(),
+			FromEndpoint: strings.TrimSpace(r.RemoteAddr),
+			ToEndpoint:   strings.TrimSpace(r.URL.Path),
+			RemoteAddr:   strings.TrimSpace(r.RemoteAddr),
+			EGMID:        egmID,
+			RawPayload:   message,
+			Headers:      headers,
+			QueryParams:  query,
+		})
+	}
 
 	switch {
 	case strings.Contains(message, "commsOnLine") || strings.Contains(message, "commsOnline"):

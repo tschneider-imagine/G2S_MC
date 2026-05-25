@@ -23,6 +23,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
+	"github.com/tschneider-imagine/G2S_MC/internal/inbound"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/operatorui"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
@@ -107,6 +108,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	g2sServer := g2s.NewServer(cfg.G2S.HostID, eng)
+	g2sServer.SetInboundProcessor(&inbound.Service{Store: auditStore, Clock: time.Now})
 	g2sServer.RegisterRoutes(mux, cfg.G2S.EndpointPath)
 	rebuildV2API := &rebuildapi.Server{
 		Store: auditStore,
