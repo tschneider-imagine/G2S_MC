@@ -8,6 +8,9 @@ import (
 	"testing"
 )
 
+// These tests verify the current capture-proof guardrails. They do not
+// establish permanent production endpoint policy.
+
 func TestHTTPSenderBlocksWhenAllowFalse(t *testing.T) {
 	var hitCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -101,7 +104,7 @@ func TestHTTPSenderSendsWhenAllowed(t *testing.T) {
 	}
 }
 
-func TestHTTPSenderBlocksWhenCaptureOnlyNotSet(t *testing.T) {
+func TestHTTPSenderCaptureProofBlocksWhenCaptureOnlyNotSet(t *testing.T) {
 	var hitCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hitCount, 1)
@@ -130,7 +133,7 @@ func TestHTTPSenderBlocksWhenCaptureOnlyNotSet(t *testing.T) {
 	}
 }
 
-func TestHTTPSenderBlocksNonLocalCaptureEndpoint(t *testing.T) {
+func TestHTTPSenderCaptureProofBlocksNonLocalEndpoint(t *testing.T) {
 	sender := &HTTPSender{}
 	result, err := sender.Send(context.Background(), SendRequest{
 		MessageID:       5,

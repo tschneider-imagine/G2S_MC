@@ -433,6 +433,8 @@ func TestSendPreparedMessagesRealSenderBlockedWithoutCaptureOnly(t *testing.T) {
 	}
 }
 
+// This test covers the current capture-proof mode. It does not imply that
+// loopback-only endpoints are a permanent production policy.
 func TestSendPreparedMessagesRealSenderLocalhostCaptureSucceeds(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)

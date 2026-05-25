@@ -30,7 +30,6 @@ This phase advances these field-test must-have sections:
 
 Phase 3B approved runtime exports:
 
-- `GET /operator/export`: operator evidence JSON package.
 - `GET /operator/comms/export`: message journal JSON export.
 - `GET /operator/audit/export`: audit timeline JSON export.
 - Visible seeded runtime records must use product-neutral names (`EGM-001`, `EGM-002`, `template-generic-g2s-action`).
@@ -51,7 +50,6 @@ Export data is read-only evidence and must not include private key material.
 
 ## Definition Of Done
 
-- `/operator/export` exists and returns evidence JSON.
 - `/operator/comms/export` and `/operator/audit/export` exist.
 - Action Builder Lite pages show retry/escalation/return configuration fields.
 - Template Manager Lite pages show render preview and matcher placeholder fields.

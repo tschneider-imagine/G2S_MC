@@ -21,6 +21,11 @@ import (
 )
 
 var forbiddenRuntimeTerms = []string{
+	"Transport Status",
+	"SENDING DISABLED",
+	"controlled transport settings",
+	"Capture endpoint behavior",
+	"Evidence Export (JSON)",
 	"Readiness",
 	"System Check",
 	"system-check",
@@ -103,6 +108,7 @@ func TestRemovedRoutesReturnNotFound(t *testing.T) {
 	mux := setupOperatorServer(t)
 	for _, path := range []string{
 		"/field-test",
+		"/operator/export",
 		"/operator/readiness",
 		"/operator/readiness.json",
 		"/operator/settings/system-check",
@@ -137,7 +143,7 @@ func TestCommsExportStillWorks(t *testing.T) {
 	}
 }
 
-func TestAuditAndEvidenceExportsStillWork(t *testing.T) {
+func TestAuditExportStillWorks(t *testing.T) {
 	mux := setupOperatorServer(t)
 
 	auditRes := httptest.NewRecorder()
@@ -153,19 +159,15 @@ func TestAuditAndEvidenceExportsStillWork(t *testing.T) {
 	if len(auditRows) == 0 {
 		t.Fatal("expected audit rows")
 	}
+}
 
-	evidenceRes := httptest.NewRecorder()
-	evidenceReq := httptest.NewRequest(http.MethodGet, "/operator/export", nil)
-	mux.ServeHTTP(evidenceRes, evidenceReq)
-	if evidenceRes.Code != http.StatusOK {
-		t.Fatalf("evidence export status=%d body=%s", evidenceRes.Code, evidenceRes.Body.String())
-	}
-	var payload OperatorEvidencePackage
-	if err := json.Unmarshal(evidenceRes.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("evidence unmarshal: %v", err)
-	}
-	if payload.GeneratedAt.IsZero() {
-		t.Fatal("expected generated timestamp")
+func TestOperatorExportRouteRemoved(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/export", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=404", res.Code)
 	}
 }
 
@@ -177,7 +179,7 @@ func setupOperatorServer(t *testing.T) *http.ServeMux {
 	seedOperatorData(t, ctx, st)
 
 	mux := http.NewServeMux()
-	server := NewServer(st, Options{RealSendDefaultDisabled: true}, allowMutation)
+	server := NewServer(st, Options{}, allowMutation)
 	server.RegisterRoutes(mux)
 	return mux
 }

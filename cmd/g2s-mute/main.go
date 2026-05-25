@@ -117,10 +117,9 @@ func main() {
 	operatorServer := operatorui.NewServer(
 		auditStore,
 		operatorui.Options{
-			AppVersion:              "operator-console",
-			DatabasePath:            cfg.Database.Path,
-			BindAddress:             cfg.WebUI.BindAddress,
-			RealSendDefaultDisabled: true,
+			AppVersion:   "operator-console",
+			DatabasePath: cfg.Database.Path,
+			BindAddress:  cfg.WebUI.BindAddress,
 		},
 		func(w http.ResponseWriter, r *http.Request) bool {
 			return requireMutationAuth(w, r, cfg)

@@ -17,16 +17,19 @@ const (
 )
 
 type SendRequest struct {
-	MessageID       int64
-	ActionRunID     string
-	EGMID           string
-	EndpointURL     string
-	Method          string
-	ContentType     string
-	Headers         map[string]string
-	RawPayload      string
-	TimeoutMS       int
-	AllowRealSend   bool
+	MessageID     int64
+	ActionRunID   string
+	EGMID         string
+	EndpointURL   string
+	Method        string
+	ContentType   string
+	Headers       map[string]string
+	RawPayload    string
+	TimeoutMS     int
+	AllowRealSend bool
+	// CaptureOnlySend enforces the phase-2 capture-endpoint policy.
+	// This is a temporary safety control for capture proofing and is not
+	// the long-term production transport policy.
 	CaptureOnlySend bool
 	TransportMode   Mode
 	RequestedAt     time.Time
@@ -62,6 +65,9 @@ func normalizeMode(mode Mode) Mode {
 	}
 }
 
+// CaptureEndpointAllowed applies the phase-2 capture-only host restriction.
+// This should remain scoped to capture-proof mode and must not become a hidden
+// permanent blocker for explicitly configured product endpoints.
 func CaptureEndpointAllowed(endpointURL string) (bool, string) {
 	trimmed := strings.TrimSpace(endpointURL)
 	if trimmed == "" {

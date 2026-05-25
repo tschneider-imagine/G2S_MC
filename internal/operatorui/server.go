@@ -71,12 +71,9 @@ type Store interface {
 }
 
 type Options struct {
-	AppVersion              string
-	DatabasePath            string
-	BindAddress             string
-	TransportStatusSummary  string
-	CaptureStatusSummary    string
-	RealSendDefaultDisabled bool
+	AppVersion   string
+	DatabasePath string
+	BindAddress  string
 }
 
 type Server struct {
@@ -86,15 +83,6 @@ type Server struct {
 }
 
 func NewServer(store Store, options Options, authorizeMutation func(http.ResponseWriter, *http.Request) bool) *Server {
-	if strings.TrimSpace(options.TransportStatusSummary) == "" {
-		options.TransportStatusSummary = "Sending remains disabled unless explicitly enabled through controlled transport settings."
-	}
-	if strings.TrimSpace(options.CaptureStatusSummary) == "" {
-		options.CaptureStatusSummary = "Capture endpoint behavior is restricted to approved runtime controls."
-	}
-	if !options.RealSendDefaultDisabled {
-		options.RealSendDefaultDisabled = true
-	}
 	return &Server{
 		Store:             store,
 		Options:           options,
@@ -104,7 +92,6 @@ func NewServer(store Store, options Options, authorizeMutation func(http.Respons
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute(""), s.handleHome)
-	mux.HandleFunc(operatorRoute("/export"), s.handleExport)
 	mux.HandleFunc(operatorRoute("/inputs"), s.handleInputs)
 	mux.HandleFunc(operatorRoute("/inputs/"), s.handleInputByID)
 	mux.HandleFunc(operatorRoute("/actions"), s.handleActions)
@@ -170,13 +157,6 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Transport Status</h2>`)
-	body.WriteString(`<p><span class="badge">SENDING DISABLED</span></p>`)
-	body.WriteString(`<p>` + esc(s.Options.TransportStatusSummary) + `</p>`)
-	body.WriteString(`<p>` + esc(s.Options.CaptureStatusSummary) + `</p>`)
-	body.WriteString(`<p><a href="` + operatorRoute("/export") + `">Evidence Export (JSON)</a></p>`)
-	body.WriteString(`</div>`)
-
 	body.WriteString(`<div class="panel"><h2>Input Summary</h2>`)
 	body.WriteString(fmt.Sprintf(`<p>Configured inputs: <strong>%d</strong> | Triggered now: <strong>%d</strong></p>`, len(channels), triggered))
 	if len(latches) > 0 {
@@ -1140,8 +1120,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<tr><td>Database Path</td><td class="mono">` + esc(defaultString(s.Options.DatabasePath, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Bind Address</td><td class="mono">` + esc(defaultString(s.Options.BindAddress, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Sending Status</td><td>disabled</td></tr>`)
-	body.WriteString(`<tr><td>Transport Status</td><td>` + esc(s.Options.TransportStatusSummary) + `</td></tr>`)
-	body.WriteString(`<tr><td>Capture Endpoint Status</td><td>` + esc(s.Options.CaptureStatusSummary) + `</td></tr>`)
 	latestMessages, msgErr := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 1})
 	lastSend := "none"
 	if msgErr == nil && len(latestMessages) > 0 {
@@ -1152,22 +1130,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<tr><td>Trust Material Status</td><td>read-only</td></tr>`)
 	body.WriteString(`</table></div>`)
 	s.renderPage(w, operatorRoute("/settings"), "Operator Settings", body.String(), "", "")
-}
-
-func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	pkg, err := s.buildEvidencePackage(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	filename := "operator-evidence-" + time.Now().UTC().Format("20060102T150405Z") + ".json"
-	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
-	_ = json.NewEncoder(w).Encode(pkg)
 }
 
 func (s *Server) renderError(w http.ResponseWriter, active string, title string, err error) {

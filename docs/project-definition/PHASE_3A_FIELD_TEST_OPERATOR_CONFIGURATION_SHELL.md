@@ -17,7 +17,7 @@ Runtime product navigation must remain product/operator language only:
 - Audit
 - Settings
 
-Evidence Export is an operational view, not a top-level project-management module.
+Runtime export scope is limited to Comms and Audit exports.
 
 ## Scope
 
