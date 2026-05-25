@@ -287,7 +287,7 @@ func TestRunClearLatchPath(t *testing.T) {
 	evaluator := &inputruntime.Evaluator{Store: st, Clock: time.Now}
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, nil, channel.ID, true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, nil, nil, channel.ID, true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	rows, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})
@@ -375,7 +375,7 @@ func TestRunClearLatchWithoutExecuteQueuesButDoesNotExecute(t *testing.T) {
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &fakeMonitorExecutor{}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, "emergency-broadcast", true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	if len(executor.calls) != 0 {
@@ -405,7 +405,7 @@ func TestRunClearLatchWithExecuteRunsQueuedAction(t *testing.T) {
 	executor := &fakeMonitorExecutor{}
 	delivery := g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP, AllowDelivery: true, TimeoutMS: 5000}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	if len(executor.calls) != 1 {
@@ -442,7 +442,7 @@ func TestRunClearLatchExecutesOnlyCurrentProcessQueuedRun(t *testing.T) {
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &fakeMonitorExecutor{}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	if len(executor.calls) != 1 {
@@ -464,7 +464,7 @@ func TestRunClearLatchExecuteWithDisabledDeliveryRecordsFailureEvidence(t *testi
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &actionexecutor.Executor{Store: st, Clock: time.Now}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, "emergency-broadcast", true, true, g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeDisabled, AllowDelivery: false}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeDisabled, AllowDelivery: false}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 
@@ -528,7 +528,7 @@ func TestRunClearLatchExecutePrintsEscalationQueuedWithoutAutoExecution(t *testi
 		}},
 	}
 	output := captureStdout(t, func() {
-		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 			t.Fatalf("runClearLatch: %v", err)
 		}
 	})
@@ -653,7 +653,7 @@ func TestRunClearLatchExecuteUsesConfiguredDeliveryAndCanSucceed(t *testing.T) {
 	executor := &actionexecutor.Executor{Store: st, Sender: sender, Clock: time.Now}
 	delivery := g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP, AllowDelivery: true, TimeoutMS: 5000}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	if sender.calls == 0 {

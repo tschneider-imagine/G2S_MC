@@ -120,6 +120,9 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if err := s.ensureInputRuntimeLatchSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureIncidentLifecycleSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensurePhase2FMessageJournalSendSchema(ctx); err != nil {
 		return err
 	}

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actionexecutor"
 	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
+	"github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 )
@@ -39,6 +41,11 @@ type Executor interface {
 	Execute(ctx context.Context, request actionexecutor.ExecuteRequest) (actionexecutor.ExecuteResult, error)
 }
 
+type IncidentManager interface {
+	HandleTransition(ctx context.Context, transitionID int64, actor string, occurredAt time.Time) (incidents.TransitionResult, error)
+	LinkActionRun(ctx context.Context, actionRunID string, transitionID int64, inputID string, actor string, occurredAt time.Time) (*incidents.IncidentRecord, error)
+}
+
 type Logger interface {
 	Printf(format string, v ...any)
 }
@@ -47,6 +54,7 @@ type Runtime struct {
 	Poller              Poller
 	Queuer              Queuer
 	Executor            Executor
+	IncidentManager     IncidentManager
 	SeedDefaultInputsFn func(context.Context) error
 	Logger              Logger
 	Clock               func() time.Time
@@ -160,6 +168,21 @@ func (r *Runtime) runOnce(ctx context.Context, options RuntimeOptions) error {
 		)
 
 		actionID := strings.TrimSpace(sample.ActionQueuedID)
+		incidentID := ""
+		if r.IncidentManager != nil {
+			incidentResult, incidentErr := r.IncidentManager.HandleTransition(ctx, sample.TransitionID, options.Actor, result.ObservedAt)
+			if incidentErr != nil {
+				r.logf("incident_transition_error input=%s transition_id=%d error=%s", sample.InputID, sample.TransitionID, incidentErr.Error())
+			} else if incidentResult.Incident != nil {
+				incidentID = strconv.FormatInt(incidentResult.Incident.ID, 10)
+				if incidentResult.Opened {
+					r.logf("incident_opened incident_id=%s input=%s", incidentID, sample.InputID)
+				}
+				if incidentResult.Closed {
+					r.logf("incident_closed incident_id=%s input=%s", incidentID, sample.InputID)
+				}
+			}
+		}
 		if actionID == "" {
 			continue
 		}
@@ -171,6 +194,7 @@ func (r *Runtime) runOnce(ctx context.Context, options RuntimeOptions) error {
 				TransitionAt:   result.ObservedAt,
 			},
 			ActionID:      actionID,
+			IncidentID:    incidentID,
 			TriggerReason: fmt.Sprintf("input transition %d", sample.TransitionID),
 			Actor:         options.Actor,
 			QueuedAt:      result.ObservedAt,
@@ -185,6 +209,11 @@ func (r *Runtime) runOnce(ctx context.Context, options RuntimeOptions) error {
 		}
 
 		runID := strings.TrimSpace(queueResult.ActionRun.ID)
+		if r.IncidentManager != nil {
+			if _, linkErr := r.IncidentManager.LinkActionRun(ctx, runID, sample.TransitionID, sample.InputID, options.Actor, result.ObservedAt); linkErr != nil {
+				r.logf("incident_link_error run_id=%s transition_id=%d error=%s", runID, sample.TransitionID, linkErr.Error())
+			}
+		}
 		r.logf(
 			"action_queued run_id=%s action_id=%s targets=%d warnings=%d",
 			runID,

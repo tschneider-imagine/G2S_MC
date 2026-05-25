@@ -15,6 +15,7 @@ import (
 type QueueRequest struct {
 	InputTransition inputs.InputTransition
 	ActionID        string
+	IncidentID      string
 	TriggerReason   string
 	Actor           string
 	QueuedAt        time.Time
@@ -41,4 +42,3 @@ type Store interface {
 
 	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 }
-

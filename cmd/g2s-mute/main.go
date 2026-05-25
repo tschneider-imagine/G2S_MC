@@ -29,6 +29,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/gpioinput"
 	"github.com/tschneider-imagine/G2S_MC/internal/inbound"
+	incidentsvc "github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
@@ -165,6 +166,10 @@ func main() {
 				Store:  auditStore,
 				Sender: &g2stransport.HTTPSender{},
 				Clock:  time.Now,
+			},
+			IncidentManager: &incidentsvc.Service{
+				Store: auditStore,
+				Clock: time.Now,
 			},
 			SeedDefaultInputsFn: func(ctx context.Context) error {
 				return inputpoller.EnsureDefaultPi4InputChannels(ctx, auditStore, false)

@@ -16,6 +16,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/gpioinput"
+	"github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
@@ -127,6 +128,7 @@ func main() {
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &actionexecutor.Executor{Store: st, Sender: &g2stransport.HTTPSender{}, Clock: time.Now}
+	incidentService := &incidents.Service{Store: st, Clock: time.Now}
 	evaluator := &inputruntime.Evaluator{Store: st, Clock: time.Now}
 	delivery := g2stransport.DeliverySettings{
 		Mode:          deliveryMode,
@@ -143,14 +145,14 @@ func main() {
 	}
 
 	if strings.TrimSpace(*clearLatchInputID) != "" {
-		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, strings.TrimSpace(*clearLatchInputID), *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint)); err != nil {
+		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, incidentService, strings.TrimSpace(*clearLatchInputID), *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint)); err != nil {
 			fmt.Fprintf(os.Stderr, "clear latch: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	if *once {
-		if err := runPoll(ctx, poller, queuer, dispatcher, executor, *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), 1); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, executor, incidentService, *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), 1); err != nil {
 			fmt.Fprintf(os.Stderr, "poll once: %v\n", err)
 			os.Exit(1)
 		}
@@ -161,7 +163,7 @@ func main() {
 	count := 0
 	for {
 		count++
-		if err := runPoll(ctx, poller, queuer, dispatcher, executor, *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), count); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, executor, incidentService, *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), count); err != nil {
 			fmt.Fprintf(os.Stderr, "poll #%d: %v\n", count, err)
 			os.Exit(1)
 		}
@@ -176,7 +178,12 @@ type actionRunExecutor interface {
 	Execute(ctx context.Context, request actionexecutor.ExecuteRequest) (actionexecutor.ExecuteResult, error)
 }
 
-func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, executor actionRunExecutor, queueActions bool, executeActions bool, delivery g2stransport.DeliverySettings, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string, iteration int) error {
+type incidentManager interface {
+	HandleTransition(ctx context.Context, transitionID int64, actor string, occurredAt time.Time) (incidents.TransitionResult, error)
+	LinkActionRun(ctx context.Context, actionRunID string, transitionID int64, inputID string, actor string, occurredAt time.Time) (*incidents.IncidentRecord, error)
+}
+
+func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, executor actionRunExecutor, incidentManager incidentManager, queueActions bool, executeActions bool, delivery g2stransport.DeliverySettings, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string, iteration int) error {
 	result, err := poller.PollOnce(ctx)
 	if err != nil {
 		return err
@@ -206,6 +213,21 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 			sample.TransitionID,
 			sample.ActionQueuedID,
 		)
+		incidentID := ""
+		if sample.Transitioned && incidentManager != nil {
+			incidentResult, incidentErr := incidentManager.HandleTransition(ctx, sample.TransitionID, "g2s-input-monitor", result.ObservedAt)
+			if incidentErr != nil {
+				fmt.Printf("incident_error input=%s transition_id=%d err=%v\n", sample.InputID, sample.TransitionID, incidentErr)
+			} else if incidentResult.Incident != nil {
+				incidentID = fmt.Sprintf("%d", incidentResult.Incident.ID)
+				if incidentResult.Opened {
+					fmt.Printf("incident_opened incident_id=%s input=%s\n", incidentID, sample.InputID)
+				}
+				if incidentResult.Closed {
+					fmt.Printf("incident_closed incident_id=%s input=%s\n", incidentID, sample.InputID)
+				}
+			}
+		}
 		if queueActions && sample.Transitioned && strings.TrimSpace(sample.ActionQueuedID) != "" {
 			queueResult, queueErr := queuer.QueueActionRun(ctx, actionruntime.QueueRequest{
 				InputTransition: inputs.InputTransition{
@@ -214,6 +236,7 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 					TransitionAt:   result.ObservedAt,
 				},
 				ActionID:      sample.ActionQueuedID,
+				IncidentID:    incidentID,
 				TriggerReason: fmt.Sprintf("input transition %d", sample.TransitionID),
 				Actor:         "g2s-input-monitor",
 				QueuedAt:      result.ObservedAt,
@@ -223,6 +246,11 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 				continue
 			}
 			if queueResult.Queued && queueResult.ActionRun != nil {
+				if incidentManager != nil {
+					if _, linkErr := incidentManager.LinkActionRun(ctx, queueResult.ActionRun.ID, sample.TransitionID, sample.InputID, "g2s-input-monitor", result.ObservedAt); linkErr != nil {
+						fmt.Printf("incident_link_error run_id=%s transition_id=%d err=%v\n", queueResult.ActionRun.ID, sample.TransitionID, linkErr)
+					}
+				}
 				fmt.Printf("action_queued run_id=%s action_id=%s targets=%d warnings=%d\n",
 					queueResult.ActionRun.ID,
 					sample.ActionQueuedID,
@@ -367,7 +395,7 @@ func validateCaptureSendConfig(transportMode g2stransport.Mode, allowRealSend bo
 	return nil
 }
 
-func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, executor actionRunExecutor, inputID string, queueActions bool, executeActions bool, delivery g2stransport.DeliverySettings, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string) error {
+func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, executor actionRunExecutor, incidentManager incidentManager, inputID string, queueActions bool, executeActions bool, delivery g2stransport.DeliverySettings, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string) error {
 	clearedAt := time.Now().UTC()
 	clearResult, err := evaluator.ClearLatchedInput(ctx, inputID, "g2s-input-monitor", "operator requested clear-latch")
 	if err != nil {
@@ -379,12 +407,25 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 		clearResult.Transition.ID,
 		clearResult.ActionQueuedID,
 	)
+	incidentID := ""
+	if clearResult.Transition != nil && incidentManager != nil {
+		incidentResult, incidentErr := incidentManager.HandleTransition(ctx, clearResult.Transition.ID, "g2s-input-monitor", clearedAt)
+		if incidentErr != nil {
+			fmt.Printf("incident_error input=%s transition_id=%d err=%v\n", clearResult.InputID, clearResult.Transition.ID, incidentErr)
+		} else if incidentResult.Incident != nil {
+			incidentID = fmt.Sprintf("%d", incidentResult.Incident.ID)
+			if incidentResult.Closed {
+				fmt.Printf("incident_closed incident_id=%s input=%s\n", incidentID, clearResult.InputID)
+			}
+		}
+	}
 	if !queueActions || strings.TrimSpace(clearResult.ActionQueuedID) == "" || clearResult.Transition == nil {
 		return nil
 	}
 	queueResult, queueErr := queuer.QueueActionRun(ctx, actionruntime.QueueRequest{
 		InputTransition: *clearResult.Transition,
 		ActionID:        clearResult.ActionQueuedID,
+		IncidentID:      incidentID,
 		TriggerReason:   fmt.Sprintf("manual clear transition %d", clearResult.Transition.ID),
 		Actor:           "g2s-input-monitor",
 		QueuedAt:        clearedAt,
@@ -402,6 +443,11 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 		len(queueResult.TargetResults),
 		len(queueResult.PlanWarnings),
 	)
+	if incidentManager != nil {
+		if _, linkErr := incidentManager.LinkActionRun(ctx, queueResult.ActionRun.ID, clearResult.Transition.ID, clearResult.InputID, "g2s-input-monitor", clearedAt); linkErr != nil {
+			fmt.Printf("incident_link_error run_id=%s transition_id=%d err=%v\n", queueResult.ActionRun.ID, clearResult.Transition.ID, linkErr)
+		}
+	}
 	if executeActions {
 		if executor == nil {
 			fmt.Printf("action_execution_failed run_id=%s error=executor_not_configured\n", queueResult.ActionRun.ID)

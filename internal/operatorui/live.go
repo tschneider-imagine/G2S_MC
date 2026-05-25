@@ -9,6 +9,7 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
+	"github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
@@ -23,6 +24,8 @@ type LiveView struct {
 	ActiveInputCount    int                  `json:"active_input_count"`
 	ActiveLatchCount    int                  `json:"active_latch_count"`
 	LatestTransitionAt  string               `json:"latest_transition_at,omitempty"`
+	ActiveIncidentID    string               `json:"active_incident_id,omitempty"`
+	ActiveIncident      *LiveIncidentSummary `json:"active_incident,omitempty"`
 	ActiveInputs        []LiveInputSummary   `json:"active_inputs"`
 	ActiveActions       []LiveActionSummary  `json:"active_actions"`
 	EGMAttention        []LiveEGMAttention   `json:"egm_attention"`
@@ -32,6 +35,16 @@ type LiveView struct {
 	RuntimeDatabasePath string               `json:"runtime_database_path,omitempty"`
 	InputRuntimeEnabled bool                 `json:"input_runtime_enabled"`
 	CertificateCount    int                  `json:"certificate_count"`
+}
+
+type LiveIncidentSummary struct {
+	IncidentID       string `json:"incident_id"`
+	OpenedAt         string `json:"opened_at"`
+	Status           string `json:"status"`
+	Severity         string `json:"severity"`
+	PrimaryInputID   string `json:"primary_input_id"`
+	PrimaryActionRun string `json:"primary_action_run_id,omitempty"`
+	Summary          string `json:"summary,omitempty"`
 }
 
 type LiveInputSummary struct {
@@ -204,6 +217,26 @@ func (s *Server) buildLiveView(ctx context.Context) (LiveView, error) {
 		}
 	}
 
+	openIncidents, err := s.Store.ListOpenIncidentRecords(ctx, 10)
+	if err != nil {
+		return LiveView{}, err
+	}
+	if len(openIncidents) > 0 {
+		incident := choosePrimaryIncident(openIncidents, activeCandidates)
+		if incident != nil {
+			view.ActiveIncidentID = strconv.FormatInt(incident.ID, 10)
+			view.ActiveIncident = &LiveIncidentSummary{
+				IncidentID:       view.ActiveIncidentID,
+				OpenedAt:         fmtTime(incident.OpenedAt),
+				Status:           string(incident.Status),
+				Severity:         defaultString(strings.TrimSpace(incident.Severity), "INFO"),
+				PrimaryInputID:   incident.PrimaryInputID,
+				PrimaryActionRun: strings.TrimSpace(incident.PrimaryActionRunID),
+				Summary:          strings.TrimSpace(incident.Summary),
+			}
+		}
+	}
+
 	runs, err := s.Store.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 80})
 	if err != nil {
 		return LiveView{}, err
@@ -364,6 +397,35 @@ func operationName(inputID string, inputName string) string {
 	return "Unknown"
 }
 
+func choosePrimaryIncident(rows []incidents.IncidentRecord, activeInputs []LiveInputSummary) *incidents.IncidentRecord {
+	if len(rows) == 0 {
+		return nil
+	}
+	priorityByInput := map[string]int{}
+	for _, row := range activeInputs {
+		priorityByInput[row.InputID] = row.Priority
+	}
+	selected := rows[0]
+	selectedPriority := priorityByInput[strings.TrimSpace(selected.PrimaryInputID)]
+	for i := 1; i < len(rows); i++ {
+		candidate := rows[i]
+		candidatePriority := priorityByInput[strings.TrimSpace(candidate.PrimaryInputID)]
+		if candidatePriority > selectedPriority {
+			selected = candidate
+			selectedPriority = candidatePriority
+			continue
+		}
+		if candidatePriority == selectedPriority {
+			if candidate.OpenedAt.After(selected.OpenedAt) {
+				selected = candidate
+				selectedPriority = candidatePriority
+			}
+		}
+	}
+	copy := selected
+	return &copy
+}
+
 func (s *Server) renderLivePanels(view LiveView) string {
 	body := strings.Builder{}
 	body.WriteString(`<div class="panel"><h2>Current Operation</h2>`)
@@ -377,6 +439,13 @@ func (s *Server) renderLivePanels(view LiveView) string {
 	body.WriteString(`<p>Active Inputs: <span class="mono" id="live-active-count">` + esc(strconv.Itoa(view.ActiveInputCount)) + `</span></p>`)
 	body.WriteString(`<p>Emergency Latches: <span class="mono" id="live-latch-count">` + esc(strconv.Itoa(view.ActiveLatchCount)) + `</span></p>`)
 	body.WriteString(`<p>Latest Transition: <span class="mono" id="live-latest-transition">` + esc(defaultString(view.LatestTransitionAt, "-")) + `</span></p>`)
+	if view.ActiveIncident != nil {
+		body.WriteString(`<p>Active Incident: <a class="mono" id="live-active-incident" href="/operator/audit?incident_id=` + esc(view.ActiveIncidentID) + `">` + esc(view.ActiveIncidentID) + `</a></p>`)
+		body.WriteString(`<p>Opened: <span class="mono" id="live-incident-opened">` + esc(defaultString(view.ActiveIncident.OpenedAt, "-")) + `</span></p>`)
+		body.WriteString(`<p>Incident Input: <span class="mono" id="live-incident-input">` + esc(defaultString(view.ActiveIncident.PrimaryInputID, "-")) + `</span></p>`)
+	} else {
+		body.WriteString(`<p>Active Incident: <span class="mono" id="live-active-incident">none</span></p>`)
+	}
 	body.WriteString(`<p>Last Updated: <span class="mono" id="live-last-updated">` + esc(view.LastUpdated) + `</span></p>`)
 	body.WriteString(`</div>`)
 
@@ -571,6 +640,21 @@ func liveRefreshScript() string {
         text('live-active-count', String(payload.active_input_count || 0), '0');
         text('live-latch-count', String(payload.active_latch_count || 0), '0');
         text('live-latest-transition', payload.latest_transition_at, '-');
+        if (payload.active_incident_id) {
+          var incidentNode = document.getElementById('live-active-incident');
+          if (incidentNode) {
+            incidentNode.textContent = payload.active_incident_id;
+            if (incidentNode.tagName && incidentNode.tagName.toLowerCase() === 'a') {
+              incidentNode.setAttribute('href', '/operator/audit?incident_id=' + encodeURIComponent(payload.active_incident_id));
+            }
+          }
+          text('live-incident-opened', payload.active_incident && payload.active_incident.opened_at, '-');
+          text('live-incident-input', payload.active_incident && payload.active_incident.primary_input_id, '-');
+        } else {
+          text('live-active-incident', 'none', 'none');
+          text('live-incident-opened', '-', '-');
+          text('live-incident-input', '-', '-');
+        }
         text('live-last-updated', payload.last_updated, '-');
         text('live-input-runtime-enabled', boolText(!!payload.input_runtime_enabled), 'no');
         text('live-certificate-count', String(payload.certificate_count || 0), '0');

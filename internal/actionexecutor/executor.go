@@ -468,6 +468,7 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 			queueResult, queueErr := queuer.QueueActionRun(ctx, actionruntime.QueueRequest{
 				InputTransition: inputs.InputTransition{ID: run.InputTransitionID},
 				ActionID:        escalationPolicy.ActionID,
+				IncidentID:      strings.TrimSpace(run.IncidentID),
 				TriggerReason:   fmt.Sprintf("escalation from action run %s", run.ID),
 				Actor:           strings.TrimSpace(request.Actor),
 				QueuedAt:        e.now(),

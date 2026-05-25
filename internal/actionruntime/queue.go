@@ -69,6 +69,7 @@ func (q *Queuer) QueueActionRun(ctx context.Context, request QueueRequest) (Queu
 	run := actions.ActionRun{
 		ID:                 newActionRunID(queuedAt),
 		ActionDefinitionID: definition.ID,
+		IncidentID:         strings.TrimSpace(request.IncidentID),
 		InputTransitionID:  request.InputTransition.ID,
 		StartedAt:          queuedAt,
 		Status:             actions.RunStatusPending,
@@ -162,4 +163,3 @@ func newActionRunID(now time.Time) string {
 	}
 	return fmt.Sprintf("run-%d-%s", now.UTC().UnixNano(), hex.EncodeToString(token[:]))
 }
-

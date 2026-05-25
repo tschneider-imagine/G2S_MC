@@ -21,6 +21,7 @@ type MessageJournalListQuery struct {
 	Limit             int
 	EGMID             string
 	ActionRunID       string
+	IncidentID        string
 	InputTransitionID int64
 	Direction         g2sengine.MessageDirection
 }
@@ -30,6 +31,7 @@ type AuditTimelineListQuery struct {
 	EventType         string
 	Severity          audit.AuditSeverity
 	ActionRunID       string
+	IncidentID        string
 	InputTransitionID int64
 }
 
@@ -37,6 +39,7 @@ type ActionRunListQuery struct {
 	Limit              int
 	Status             actions.ActionRunStatus
 	ActionDefinitionID string
+	IncidentID         string
 	InputTransitionID  int64
 }
 
@@ -417,6 +420,10 @@ func (s *SQLiteStore) ListActionRuns(ctx context.Context, query ActionRunListQue
 	}
 	if id := strings.TrimSpace(query.ActionDefinitionID); id != "" {
 		where = append(where, "action_definition_id = ?")
+		args = append(args, id)
+	}
+	if id := strings.TrimSpace(query.IncidentID); id != "" {
+		where = append(where, "incident_id = ?")
 		args = append(args, id)
 	}
 	if query.InputTransitionID > 0 {
@@ -1164,6 +1171,10 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 		where = append(where, "action_run_id = ?")
 		args = append(args, id)
 	}
+	if id := strings.TrimSpace(query.IncidentID); id != "" {
+		where = append(where, "action_run_id IN (SELECT id FROM action_runs WHERE incident_id = ?)")
+		args = append(args, id)
+	}
 	if query.InputTransitionID > 0 {
 		where = append(where, "input_transition_id = ?")
 		args = append(args, query.InputTransitionID)
@@ -1283,6 +1294,10 @@ func (s *SQLiteStore) ListAuditTimelineEntries(ctx context.Context, query AuditT
 	if id := strings.TrimSpace(query.ActionRunID); id != "" {
 		where = append(where, "action_run_id = ?")
 		args = append(args, id)
+	}
+	if id := strings.TrimSpace(query.IncidentID); id != "" {
+		where = append(where, "(action_run_id IN (SELECT id FROM action_runs WHERE incident_id = ?) OR input_transition_id IN (SELECT opened_by_transition_id FROM incident_records WHERE CAST(incident_id AS TEXT) = ?) OR input_transition_id IN (SELECT closed_by_transition_id FROM incident_records WHERE CAST(incident_id AS TEXT) = ?))")
+		args = append(args, id, id, id)
 	}
 	if query.InputTransitionID > 0 {
 		where = append(where, "input_transition_id = ?")

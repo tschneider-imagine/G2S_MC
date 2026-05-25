@@ -16,6 +16,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
@@ -265,6 +266,81 @@ func TestOperatorLiveShowsEGMAttentionForMissingTemplate(t *testing.T) {
 	}
 	if !strings.Contains(body, "Template not assigned") {
 		t.Fatalf("expected missing template attention reason, body=%s", body)
+	}
+}
+
+func TestOperatorLiveShowsActiveIncident(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"Active Incident", "/operator/audit?incident_id=", "emergency-broadcast"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in live page", expected)
+		}
+	}
+}
+
+func TestAuditPageSupportsIncidentFilter(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list action runs: %v", err)
+	}
+	if len(runs) == 0 || strings.TrimSpace(runs[0].IncidentID) == "" {
+		t.Fatalf("expected seeded incident-linked run: %+v", runs)
+	}
+	incidentID := strings.TrimSpace(runs[0].IncidentID)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit?incident_id="+incidentID, nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"Incident ID", "Active Incident", incidentID, "run-1"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in incident audit filter page", expected)
+		}
+	}
+}
+
+func TestAuditEvidenceExportByIncidentIncludesIncidentPackage(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("list action runs: %v", err)
+	}
+	if len(runs) == 0 || strings.TrimSpace(runs[0].IncidentID) == "" {
+		t.Fatalf("expected seeded incident-linked run: %+v", runs)
+	}
+	incidentID := strings.TrimSpace(runs[0].IncidentID)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit/evidence-export?incident_id="+incidentID, nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var payload auditEvidencePackage
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Incident == nil {
+		t.Fatal("expected incident in evidence package")
+	}
+	if strconv.FormatInt(payload.Incident.ID, 10) != incidentID {
+		t.Fatalf("incident id=%d want=%s", payload.Incident.ID, incidentID)
+	}
+	if len(payload.ActionRuns) == 0 || len(payload.Messages) == 0 || len(payload.AuditTimeline) == 0 {
+		t.Fatalf("expected linked evidence in package: %+v", payload)
 	}
 }
 
@@ -1919,6 +1995,17 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 	if err != nil {
 		t.Fatalf("record transition: %v", err)
 	}
+	incidentRecord, err := st.CreateIncidentRecord(ctx, incidents.IncidentRecord{
+		OpenedAt:             now,
+		Status:               incidents.StatusOpen,
+		Severity:             "EMERGENCY",
+		PrimaryInputID:       "emergency-broadcast",
+		OpenedByTransitionID: transitionID,
+		Summary:              "Emergency Broadcast triggered",
+	})
+	if err != nil {
+		t.Fatalf("create incident: %v", err)
+	}
 
 	def := func(id, name, key string, sev actions.ActionSeverity, restore string) actions.ActionDefinition {
 		return actions.ActionDefinition{
@@ -1970,6 +2057,7 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 	if _, err := st.CreateActionRun(ctx, actions.ActionRun{
 		ID:                 "run-1",
 		ActionDefinitionID: "emergency-broadcast-trigger",
+		IncidentID:         strconv.FormatInt(incidentRecord.ID, 10),
 		InputTransitionID:  transitionID,
 		StartedAt:          now,
 		Status:             actions.RunStatusDispatchPrepared,

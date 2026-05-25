@@ -33,6 +33,9 @@ const (
 	EventTypeRetry                    = "RETRY"
 	EventTypeEscalation               = "ESCALATION"
 	EventTypeReturnToNormal           = "RETURN_TO_NORMAL"
+	EventTypeIncidentOpened           = "INCIDENT_OPENED"
+	EventTypeIncidentClosed           = "INCIDENT_CLOSED"
+	EventTypeIncidentLinked           = "INCIDENT_LINKED"
 	EventTypeOperatorAction           = "OPERATOR_ACTION"
 	EventTypeSystemWarning            = "SYSTEM_WARNING"
 )
