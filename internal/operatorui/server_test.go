@@ -566,6 +566,215 @@ func TestEGMsFormIncludesExpectedFields(t *testing.T) {
 	}
 }
 
+func TestTemplatesPageRendersTemplateRowsActiveVersionAndActionKeys(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/templates", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Templates",
+		"template-generic-g2s-action",
+		"Generic G2S Action Template",
+		"Active Version",
+		"Action Keys",
+		"Expected Response Matcher",
+		"Failure Matcher",
+		"emergency_broadcast_silence",
+		"Render Preview",
+		"Supported variables: ActionID",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/templates", expected)
+		}
+	}
+}
+
+func TestPostTemplatesCreatesOrUpsertsTemplate(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	body := url.Values{
+		"id":                     {"template-ops"},
+		"name":                   {"Operations Template"},
+		"vendor":                 {"Generic"},
+		"cabinet_family":         {"Family X"},
+		"software_version_match": {"3.x"},
+		"status":                 {"ACTIVE"},
+		"notes":                  {"Operator maintained"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	row, err := st.GetG2STemplate(context.Background(), "template-ops")
+	if err != nil {
+		t.Fatalf("get template: %v", err)
+	}
+	if row == nil {
+		t.Fatal("expected template row")
+	}
+	if row.Name != "Operations Template" || row.CabinetFamily != "Family X" || row.SoftwareVersionMatch != "3.x" || row.Notes != "Operator maintained" {
+		t.Fatalf("unexpected template row: %+v", *row)
+	}
+}
+
+func TestPostTemplateVersionCreatesVersionWithActionsAndMatchers(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	body := url.Values{
+		"version_label":           {"2"},
+		"version_id":              {"template-generic-g2s-action-v2"},
+		"notes":                   {"Version 2"},
+		"endpoint_quirks_json":    {`{"soap_action":"urn:test"}`},
+		"heartbeat_profile_json":  {`{"interval_ms":1000}`},
+		"confirmation_rules_json": {`{"expect":["ok"]}`},
+		"failure_rules_json":      {`{"fail":["fault"]}`},
+		"actions_json":            {`{"actions":{"general_broadcast_notice":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"}}}`},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/template-generic-g2s-action/versions", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	versionRow, err := st.GetG2STemplateVersion(context.Background(), "template-generic-g2s-action", 2)
+	if err != nil {
+		t.Fatalf("get version: %v", err)
+	}
+	if versionRow == nil {
+		t.Fatal("expected template version row")
+	}
+	if strings.TrimSpace(versionRow.ConfirmationRulesJSON) == "" || strings.TrimSpace(versionRow.FailureRulesJSON) == "" || strings.TrimSpace(versionRow.ActionsJSON) == "" {
+		t.Fatalf("expected matcher/actions json saved: %+v", *versionRow)
+	}
+}
+
+func TestPostTemplateActiveVersionSetsVersion(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if err := st.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{
+		ID:           "template-generic-g2s-action-v2",
+		TemplateID:   "template-generic-g2s-action",
+		VersionLabel: "2",
+		ActionsJSON:  `{"actions":{"emergency_broadcast_restore":{"message_type":"NOTICE","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"}}}`,
+	}); err != nil {
+		t.Fatalf("upsert version: %v", err)
+	}
+
+	body := url.Values{"active_version": {"2"}}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/template-generic-g2s-action/active-version", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	row, err := st.GetG2STemplate(ctx, "template-generic-g2s-action")
+	if err != nil {
+		t.Fatalf("get template: %v", err)
+	}
+	if row == nil || row.CurrentVersionID != "2" {
+		t.Fatalf("expected current_version_id=2, row=%+v", row)
+	}
+}
+
+func TestPostTemplateVersionInvalidJSONShowsErrorAndDoesNotSave(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	body := url.Values{
+		"version_label": {"3"},
+		"actions_json":  {`{"actions":`},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/template-generic-g2s-action/versions", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "invalid actions_json") {
+		t.Fatalf("expected invalid actions_json error, body=%s", res.Body.String())
+	}
+	row, err := st.GetG2STemplateVersion(context.Background(), "template-generic-g2s-action", 3)
+	if err != nil {
+		t.Fatalf("get version: %v", err)
+	}
+	if row != nil {
+		t.Fatalf("expected invalid version not saved, row=%+v", row)
+	}
+}
+
+func TestTemplateRenderPreviewRendersSubstitutionAndNoJournalWrites(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	beforeRows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 200})
+	if err != nil {
+		t.Fatalf("list before messages: %v", err)
+	}
+
+	body := url.Values{
+		"template_id":         {"template-generic-g2s-action"},
+		"template_action_key": {"emergency_broadcast_silence"},
+		"action_id":           {"emergency-broadcast-trigger"},
+		"action_run_id":       {"run-preview"},
+		"action_step_id":      {"step-1"},
+		"egm_id":              {"EGM-001"},
+		"host_id":             {"host-1"},
+		"ip_address":          {"10.0.0.10"},
+		"endpoint_path":       {"/g2s"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/render-preview", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	responseBody := res.Body.String()
+	for _, expected := range []string{
+		"Preview Result",
+		"Message Type",
+		"emergency-broadcast-trigger",
+		"EGM-001",
+	} {
+		if !strings.Contains(responseBody, expected) {
+			t.Fatalf("expected %q in render preview output", expected)
+		}
+	}
+
+	afterRows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 200})
+	if err != nil {
+		t.Fatalf("list after messages: %v", err)
+	}
+	if len(afterRows) != len(beforeRows) {
+		t.Fatalf("render preview should not write message journal rows; before=%d after=%d", len(beforeRows), len(afterRows))
+	}
+}
+
+func TestTemplateRenderPreviewMissingActionKeyShowsError(t *testing.T) {
+	mux := setupOperatorServer(t)
+	body := url.Values{
+		"template_id":         {"template-generic-g2s-action"},
+		"template_action_key": {"missing_action_key"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/render-preview", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "template action key") || !strings.Contains(res.Body.String(), "not found") {
+		t.Fatalf("expected missing action key error, body=%s", res.Body.String())
+	}
+}
+
 func setupOperatorServer(t *testing.T) *http.ServeMux {
 	mux, _ := setupOperatorServerWithStore(t)
 	return mux

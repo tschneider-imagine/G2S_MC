@@ -836,11 +836,13 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		templateRow := templates.G2STemplate{
-			ID:     templateID,
-			Name:   strings.TrimSpace(r.FormValue("name")),
-			Vendor: strings.TrimSpace(r.FormValue("vendor")),
-			Status: templates.TemplateStatus(strings.ToUpper(strings.TrimSpace(r.FormValue("status")))),
-			Notes:  strings.TrimSpace(r.FormValue("notes")),
+			ID:                   templateID,
+			Name:                 strings.TrimSpace(r.FormValue("name")),
+			Vendor:               strings.TrimSpace(r.FormValue("vendor")),
+			CabinetFamily:        strings.TrimSpace(r.FormValue("cabinet_family")),
+			SoftwareVersionMatch: strings.TrimSpace(r.FormValue("software_version_match")),
+			Status:               templates.TemplateStatus(strings.ToUpper(strings.TrimSpace(r.FormValue("status")))),
+			Notes:                strings.TrimSpace(r.FormValue("notes")),
 		}
 		existing, err := s.Store.GetG2STemplate(r.Context(), templateID)
 		if err != nil {
@@ -907,18 +909,29 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 			s.renderTemplatesPage(w, r, "", "version_label is required", nil)
 			return
 		}
+		versionValue, err := strconv.Atoi(versionLabel)
+		if err != nil || versionValue <= 0 {
+			s.renderTemplatesPage(w, r, "", "version_label must be a positive integer", nil)
+			return
+		}
 		versionID := strings.TrimSpace(r.FormValue("version_id"))
 		if versionID == "" {
-			versionID = fmt.Sprintf("%s-v%s", templateID, sanitizeVersionLabel(versionLabel))
+			versionID = fmt.Sprintf("%s-v%d", templateID, versionValue)
 		}
 		row := templates.G2STemplateVersion{
 			ID:                    versionID,
 			TemplateID:            templateID,
 			VersionLabel:          versionLabel,
+			EndpointQuirksJSON:    strings.TrimSpace(r.FormValue("endpoint_quirks_json")),
 			ActionsJSON:           strings.TrimSpace(r.FormValue("actions_json")),
 			ConfirmationRulesJSON: strings.TrimSpace(r.FormValue("confirmation_rules_json")),
 			FailureRulesJSON:      strings.TrimSpace(r.FormValue("failure_rules_json")),
+			HeartbeatProfileJSON:  strings.TrimSpace(r.FormValue("heartbeat_profile_json")),
 			Notes:                 strings.TrimSpace(r.FormValue("notes")),
+		}
+		if err := validateTemplateVersionPayload(row); err != nil {
+			s.renderTemplatesPage(w, r, "", err.Error(), nil)
+			return
 		}
 		if err := s.Store.UpsertG2STemplateVersion(r.Context(), row); err != nil {
 			s.renderTemplatesPage(w, r, "", err.Error(), nil)
@@ -976,11 +989,13 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	templateRow := templates.G2STemplate{
-		ID:     templateID,
-		Name:   strings.TrimSpace(r.FormValue("name")),
-		Vendor: strings.TrimSpace(r.FormValue("vendor")),
-		Status: templates.TemplateStatus(strings.ToUpper(strings.TrimSpace(r.FormValue("status")))),
-		Notes:  strings.TrimSpace(r.FormValue("notes")),
+		ID:                   templateID,
+		Name:                 strings.TrimSpace(r.FormValue("name")),
+		Vendor:               strings.TrimSpace(r.FormValue("vendor")),
+		CabinetFamily:        strings.TrimSpace(r.FormValue("cabinet_family")),
+		SoftwareVersionMatch: strings.TrimSpace(r.FormValue("software_version_match")),
+		Status:               templates.TemplateStatus(strings.ToUpper(strings.TrimSpace(r.FormValue("status")))),
+		Notes:                strings.TrimSpace(r.FormValue("notes")),
 	}
 	existing, err := s.Store.GetG2STemplate(r.Context(), templateID)
 	if err != nil {
@@ -1000,6 +1015,7 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 type renderPreviewResult struct {
 	MessageType string
 	ContentType string
+	Headers     map[string]string
 	RawPayload  string
 	SummaryJSON string
 	Warnings    []string
@@ -1011,9 +1027,15 @@ func (s *Server) renderTemplatePreview(ctx context.Context, r *http.Request) (*r
 	if templateID == "" || actionKey == "" {
 		return nil, fmt.Errorf("template_id and template_action_key are required")
 	}
+	templateRow, err := s.Store.GetG2STemplate(ctx, templateID)
+	if err != nil {
+		return nil, err
+	}
+	if templateRow == nil {
+		return nil, fmt.Errorf("template not found")
+	}
 	versionRaw := strings.TrimSpace(r.FormValue("version"))
 	var versionRow *templates.G2STemplateVersion
-	var err error
 	if versionRaw == "" {
 		versionRow, err = s.Store.GetActiveG2STemplateVersion(ctx, templateID)
 	} else {
@@ -1054,6 +1076,7 @@ func (s *Server) renderTemplatePreview(ctx context.Context, r *http.Request) (*r
 	return &renderPreviewResult{
 		MessageType: rendered.MessageType,
 		ContentType: rendered.ContentType,
+		Headers:     rendered.Headers,
 		RawPayload:  rendered.RawPayload,
 		SummaryJSON: rendered.SummaryJSON,
 		Warnings:    rendered.Warnings,
@@ -1078,32 +1101,62 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 
 	body := strings.Builder{}
 	body.WriteString(`<div class="panel"><h2>Templates</h2><table>`)
-	body.WriteString(`<tr><th>ID</th><th>Name</th><th>Vendor</th><th>Status</th><th>Active Version</th><th>Versions</th><th>Edit</th></tr>`)
+	body.WriteString(`<tr><th>Template ID</th><th>Name</th><th>Vendor</th><th>Status</th><th>Active Version</th><th>Version Count</th><th>ActionsJSON</th><th>Expected Response Matcher</th><th>Failure Matcher</th><th>Action Keys</th><th>Edit</th></tr>`)
 	for _, tpl := range templateRows {
-		versionLabels := []string{}
-		for _, version := range versionsByTemplate[tpl.ID] {
+		versionRows := versionsByTemplate[tpl.ID]
+		versionLabels := make([]string, 0, len(versionRows))
+		for _, version := range versionRows {
 			versionLabels = append(versionLabels, version.VersionLabel)
 		}
+		activeVersion := findActiveTemplateVersion(tpl, versionRows)
+		activeHasActions := false
+		activeHasExpectedMatcher := false
+		activeHasFailureMatcher := false
+		activeActionKeys := []string{}
+		if activeVersion != nil {
+			activeHasActions = strings.TrimSpace(activeVersion.ActionsJSON) != ""
+			activeHasExpectedMatcher = strings.TrimSpace(activeVersion.ConfirmationRulesJSON) != ""
+			activeHasFailureMatcher = strings.TrimSpace(activeVersion.FailureRulesJSON) != ""
+			keys, keyErr := actionKeysFromActionsJSON(activeVersion.ActionsJSON)
+			if keyErr != nil {
+				activeActionKeys = []string{"invalid_actions_json"}
+			} else {
+				activeActionKeys = keys
+			}
+		}
+
 		body.WriteString(`<tr>`)
 		body.WriteString(`<td class="mono">` + esc(tpl.ID) + `</td>`)
 		body.WriteString(`<td>` + esc(tpl.Name) + `</td>`)
 		body.WriteString(`<td>` + esc(tpl.Vendor) + `</td>`)
 		body.WriteString(`<td>` + esc(string(tpl.Status)) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(tpl.CurrentVersionID) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(strings.Join(versionLabels, ", ")) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(defaultString(tpl.CurrentVersionID, "-")) + `</td>`)
+		body.WriteString(`<td>` + esc(strconv.Itoa(len(versionRows))) + `</td>`)
+		body.WriteString(`<td>` + yesNo(activeHasActions) + `</td>`)
+		body.WriteString(`<td>` + yesNo(activeHasExpectedMatcher) + `</td>`)
+		body.WriteString(`<td>` + yesNo(activeHasFailureMatcher) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(defaultString(strings.Join(activeActionKeys, ", "), "-")) + `</td>`)
 		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/templates/` + esc(tpl.ID) + `">`)
 		body.WriteString(`<label>Name <input type="text" name="name" value="` + esc(tpl.Name) + `" style="width:120px"></label>`)
 		body.WriteString(`<label>Vendor <input type="text" name="vendor" value="` + esc(tpl.Vendor) + `" style="width:100px"></label>`)
+		body.WriteString(`<label>Cabinet Family <input type="text" name="cabinet_family" value="` + esc(tpl.CabinetFamily) + `" style="width:100px"></label>`)
+		body.WriteString(`<label>Software Match <input type="text" name="software_version_match" value="` + esc(tpl.SoftwareVersionMatch) + `" style="width:100px"></label>`)
 		body.WriteString(`<label>Status <select name="status">` + templateStatusOptions(tpl.Status) + `</select></label>`)
+		body.WriteString(`<label>Notes <input type="text" name="notes" value="` + esc(tpl.Notes) + `" style="width:120px"></label>`)
 		body.WriteString(`<button type="submit">Save</button></form>`)
 		body.WriteString(`<form class="inline-form" method="post" action="/operator/templates/` + esc(tpl.ID) + `/active-version">`)
-		body.WriteString(`<label>Set Active Version <input type="number" name="active_version" style="width:70px"></label> <button type="submit">Set</button></form>`)
+		body.WriteString(`<label>Set Active Version <input type="number" name="active_version" min="1" style="width:70px"></label> <button type="submit">Set</button></form>`)
+		if len(versionLabels) > 0 {
+			body.WriteString(`<div>Versions: <span class="mono">` + esc(strings.Join(versionLabels, ", ")) + `</span></div>`)
+		}
 		body.WriteString(`<form class="inline-form" method="post" action="/operator/templates/` + esc(tpl.ID) + `/versions">`)
-		body.WriteString(`<label>Version Label <input type="text" name="version_label" style="width:90px"></label>`)
+		body.WriteString(`<label>Version Number <input type="number" name="version_label" min="1" style="width:90px"></label>`)
 		body.WriteString(`<label>Version ID <input type="text" name="version_id" style="width:150px"></label>`)
+		body.WriteString(`<label>Endpoint Quirks JSON <input type="text" name="endpoint_quirks_json" style="width:180px"></label>`)
+		body.WriteString(`<label>Heartbeat Profile JSON <input type="text" name="heartbeat_profile_json" style="width:180px"></label>`)
 		body.WriteString(`<label>Notes <input type="text" name="notes" style="width:150px"></label><br>`)
-		body.WriteString(`<label style="display:block;">Expected Response Matcher JSON (placeholder) <textarea name="confirmation_rules_json"></textarea></label>`)
-		body.WriteString(`<label style="display:block;">Failure Matcher JSON (placeholder) <textarea name="failure_rules_json"></textarea></label>`)
+		body.WriteString(`<label style="display:block;">Expected Response Matcher JSON <textarea name="confirmation_rules_json"></textarea></label>`)
+		body.WriteString(`<label style="display:block;">Failure Matcher JSON <textarea name="failure_rules_json"></textarea></label>`)
 		body.WriteString(`<label style="display:block;">ActionsJSON <textarea name="actions_json"></textarea></label>`)
 		body.WriteString(`<button type="submit">Add Version</button></form></td>`)
 		body.WriteString(`</tr>`)
@@ -1112,19 +1165,22 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert Template</h3>`)
 	body.WriteString(`<form method="post" action="/operator/templates">`)
-	body.WriteString(`<label>ID <input type="text" name="id"></label>`)
+	body.WriteString(`<label>Template ID <input type="text" name="id"></label>`)
 	body.WriteString(`<label>Name <input type="text" name="name"></label>`)
 	body.WriteString(`<label>Vendor <input type="text" name="vendor"></label>`)
+	body.WriteString(`<label>Cabinet Family <input type="text" name="cabinet_family"></label>`)
+	body.WriteString(`<label>Software Match <input type="text" name="software_version_match"></label>`)
 	body.WriteString(`<label>Status <select name="status">` + templateStatusOptions("") + `</select></label>`)
+	body.WriteString(`<label>Notes <input type="text" name="notes"></label>`)
 	body.WriteString(`<button type="submit">Upsert Template</button></form></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Render Preview (No Send)</h3>`)
 	body.WriteString(`<p>Supported variables: ` + esc(strings.Join(renderPreviewSupportedVariables, ", ")) + `.</p>`)
-	body.WriteString(`<p>Restore/return guidance: configure return actions in Action Builder Lite with template action keys for normal-state restoration.</p>`)
+	body.WriteString(`<p>Use Action Keys to map trigger and return behavior for each action.</p>`)
 	body.WriteString(`<form method="post" action="/operator/templates/render-preview">`)
 	body.WriteString(`<label>Template ID <input type="text" name="template_id"></label>`)
 	body.WriteString(`<label>Version (optional) <input type="number" name="version" style="width:70px"></label>`)
-	body.WriteString(`<label>Action Key <input type="text" name="template_action_key"></label><br>`)
+	body.WriteString(`<label>Template Action Key <input type="text" name="template_action_key"></label><br>`)
 	body.WriteString(`<label>Action ID <input type="text" name="action_id"></label>`)
 	body.WriteString(`<label>Action Run ID <input type="text" name="action_run_id"></label>`)
 	body.WriteString(`<label>Action Step ID <input type="text" name="action_step_id"></label><br>`)
@@ -1137,6 +1193,10 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 		body.WriteString(`<h4>Preview Result</h4>`)
 		body.WriteString(`<p>Message Type: <span class="mono">` + esc(preview.MessageType) + `</span></p>`)
 		body.WriteString(`<p>Content Type: <span class="mono">` + esc(preview.ContentType) + `</span></p>`)
+		if len(preview.Headers) > 0 {
+			headersJSON, _ := json.Marshal(preview.Headers)
+			body.WriteString(`<details><summary>Headers</summary><pre>` + esc(string(headersJSON)) + `</pre></details>`)
+		}
 		body.WriteString(`<pre>` + esc(preview.RawPayload) + `</pre>`)
 		if preview.SummaryJSON != "" {
 			body.WriteString(`<details><summary>Summary JSON</summary><pre>` + esc(preview.SummaryJSON) + `</pre></details>`)
@@ -1738,6 +1798,73 @@ func parseEscalationPolicyJSON(raw string) escalationPolicyConfig {
 	}
 	policy.ActionID = strings.TrimSpace(policy.ActionID)
 	return policy
+}
+
+func validateTemplateVersionPayload(row templates.G2STemplateVersion) error {
+	if err := validateOptionalJSONField("actions_json", row.ActionsJSON, true); err != nil {
+		return err
+	}
+	if _, err := g2sengine.ParseActionTemplateDocument(strings.TrimSpace(row.ActionsJSON)); err != nil {
+		return err
+	}
+	if err := validateOptionalJSONField("expected response matcher JSON", row.ConfirmationRulesJSON, false); err != nil {
+		return err
+	}
+	if err := validateOptionalJSONField("failure matcher JSON", row.FailureRulesJSON, false); err != nil {
+		return err
+	}
+	if err := validateOptionalJSONField("endpoint quirks JSON", row.EndpointQuirksJSON, false); err != nil {
+		return err
+	}
+	if err := validateOptionalJSONField("heartbeat profile JSON", row.HeartbeatProfileJSON, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateOptionalJSONField(label string, raw string, required bool) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		if required {
+			return fmt.Errorf("%s is required", label)
+		}
+		return nil
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return fmt.Errorf("invalid %s", label)
+	}
+	return nil
+}
+
+func findActiveTemplateVersion(tpl templates.G2STemplate, rows []templates.G2STemplateVersion) *templates.G2STemplateVersion {
+	active := strings.TrimSpace(tpl.CurrentVersionID)
+	if active == "" {
+		return nil
+	}
+	for i := range rows {
+		if strings.EqualFold(strings.TrimSpace(rows[i].VersionLabel), active) || strings.EqualFold(strings.TrimSpace(rows[i].ID), active) {
+			return &rows[i]
+		}
+	}
+	return nil
+}
+
+func actionKeysFromActionsJSON(raw string) ([]string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return []string{}, nil
+	}
+	doc, err := g2sengine.ParseActionTemplateDocument(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(doc.Actions))
+	for key := range doc.Actions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys, nil
 }
 
 func parseFormBool(raw string) bool {
