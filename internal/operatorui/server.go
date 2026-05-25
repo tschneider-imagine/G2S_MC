@@ -74,8 +74,8 @@ type Options struct {
 	AppVersion              string
 	DatabasePath            string
 	BindAddress             string
-	TransportGateSummary    string
-	CapturePolicySummary    string
+	TransportStatusSummary  string
+	CaptureStatusSummary    string
 	RealSendDefaultDisabled bool
 }
 
@@ -86,11 +86,11 @@ type Server struct {
 }
 
 func NewServer(store Store, options Options, authorizeMutation func(http.ResponseWriter, *http.Request) bool) *Server {
-	if strings.TrimSpace(options.TransportGateSummary) == "" {
-		options.TransportGateSummary = "Real send is blocked unless transport=http, allow_real_send=true, capture_only_send=true, and endpoint is localhost/loopback."
+	if strings.TrimSpace(options.TransportStatusSummary) == "" {
+		options.TransportStatusSummary = "Sending remains disabled unless explicitly enabled through controlled transport settings."
 	}
-	if strings.TrimSpace(options.CapturePolicySummary) == "" {
-		options.CapturePolicySummary = "Send Gate: Real EGM-directed send is disabled. Only explicitly approved capture endpoints may receive rendered payloads."
+	if strings.TrimSpace(options.CaptureStatusSummary) == "" {
+		options.CaptureStatusSummary = "Capture endpoint behavior is restricted to approved runtime controls."
 	}
 	if !options.RealSendDefaultDisabled {
 		options.RealSendDefaultDisabled = true
@@ -117,10 +117,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute("/comms/export"), s.handleCommsExport)
 	mux.HandleFunc(operatorRoute("/audit"), s.handleAudit)
 	mux.HandleFunc(operatorRoute("/audit/export"), s.handleAuditExport)
-	mux.HandleFunc(operatorRoute("/audit/evidence-export"), s.handleExport)
 	mux.HandleFunc(operatorRoute("/settings"), s.handleSettings)
-	mux.HandleFunc(operatorRoute("/settings/system-check"), s.handleSystemCheck)
-	mux.HandleFunc(operatorRoute("/settings/system-check.json"), s.handleSystemCheckJSON)
 	mux.HandleFunc(operatorCSSRoute, s.handleStyles)
 }
 
@@ -173,11 +170,11 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Send Gate Summary</h2>`)
-	body.WriteString(`<p><span class="badge">REAL SEND IS GATED / DISABLED</span></p>`)
-	body.WriteString(`<p>` + esc(s.Options.TransportGateSummary) + `</p>`)
-	body.WriteString(`<p>` + esc(s.Options.CapturePolicySummary) + `</p>`)
-	body.WriteString(`<p><a href="` + operatorRoute("/settings/system-check") + `">System Check</a> | <a href="` + operatorRoute("/audit/evidence-export") + `">Evidence Export</a></p>`)
+	body.WriteString(`<div class="panel"><h2>Transport Status</h2>`)
+	body.WriteString(`<p><span class="badge">SENDING DISABLED</span></p>`)
+	body.WriteString(`<p>` + esc(s.Options.TransportStatusSummary) + `</p>`)
+	body.WriteString(`<p>` + esc(s.Options.CaptureStatusSummary) + `</p>`)
+	body.WriteString(`<p><a href="` + operatorRoute("/export") + `">Evidence Export (JSON)</a></p>`)
 	body.WriteString(`</div>`)
 
 	body.WriteString(`<div class="panel"><h2>Input Summary</h2>`)
@@ -510,7 +507,7 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
-	body.WriteString(`<div class="panel"><p>Retry, escalation, and return fields are stored for configuration review; execution behavior is not implemented in this runtime surface.</p></div>`)
+	body.WriteString(`<div class="panel"><p>Retry, escalation, and return fields are stored for configuration review. Runtime execution behavior is not available in this console.</p></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert Action</h3>`)
 	body.WriteString(`<form method="post" action="/operator/actions">`)
@@ -963,7 +960,7 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 	body.WriteString(`<label>Status <select name="status">` + templateStatusOptions("") + `</select></label>`)
 	body.WriteString(`<button type="submit">Upsert Template</button></form></div>`)
 
-	body.WriteString(`<div class="panel"><h3>Render Preview</h3>`)
+	body.WriteString(`<div class="panel"><h3>Render Preview (No Send)</h3>`)
 	body.WriteString(`<p>Supported variables: ` + esc(strings.Join(renderPreviewSupportedVariables, ", ")) + `.</p>`)
 	body.WriteString(`<p>Restore/return guidance: configure return actions in Action Builder Lite with template action keys for normal-state restoration.</p>`)
 	body.WriteString(`<form method="post" action="/operator/templates/render-preview">`)
@@ -1137,71 +1134,24 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Network / Cert / Send Gate Settings (Read-Only)</h2><table>`)
+	body.WriteString(`<div class="panel"><h2>Network and Certificate Settings (Read-Only)</h2><table>`)
 	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
 	body.WriteString(`<tr><td>App Version</td><td>` + esc(defaultString(s.Options.AppVersion, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Database Path</td><td class="mono">` + esc(defaultString(s.Options.DatabasePath, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Bind Address</td><td class="mono">` + esc(defaultString(s.Options.BindAddress, "unknown")) + `</td></tr>`)
-	body.WriteString(`<tr><td>Real Send Default</td><td>disabled/gated</td></tr>`)
-	body.WriteString(`<tr><td>Send Gate</td><td>` + esc(s.Options.TransportGateSummary) + `</td></tr>`)
-	body.WriteString(`<tr><td>Capture Endpoint Status</td><td>` + esc(s.Options.CapturePolicySummary) + `</td></tr>`)
-	body.WriteString(`<tr><td>Safety Policy</td><td>Real EGM-directed send remains disabled in this runtime surface.</td></tr>`)
+	body.WriteString(`<tr><td>Sending Status</td><td>disabled</td></tr>`)
+	body.WriteString(`<tr><td>Transport Status</td><td>` + esc(s.Options.TransportStatusSummary) + `</td></tr>`)
+	body.WriteString(`<tr><td>Capture Endpoint Status</td><td>` + esc(s.Options.CaptureStatusSummary) + `</td></tr>`)
 	latestMessages, msgErr := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 1})
 	lastSend := "none"
 	if msgErr == nil && len(latestMessages) > 0 {
 		lastSend = string(latestMessages[0].Result)
 	}
-	body.WriteString(`<tr><td>Last Send Result</td><td>` + esc(lastSend) + `</td></tr>`)
+	body.WriteString(`<tr><td>Last Message Delivery Result</td><td>` + esc(lastSend) + `</td></tr>`)
 	body.WriteString(`<tr><td>Certificate Status Summary</td><td>` + esc(certSummary) + `</td></tr>`)
-	body.WriteString(`<tr><td>Trust Material</td><td>placeholder/read-only in this runtime surface</td></tr>`)
+	body.WriteString(`<tr><td>Trust Material Status</td><td>read-only</td></tr>`)
 	body.WriteString(`</table></div>`)
-	body.WriteString(`<div class="panel"><h3>System Check</h3><p><a href="` + operatorRoute("/settings/system-check") + `">Open System Check</a></p></div>`)
 	s.renderPage(w, operatorRoute("/settings"), "Operator Settings", body.String(), "", "")
-}
-
-func (s *Server) handleSystemCheck(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	report, err := s.buildSystemCheckReport(r.Context())
-	if err != nil {
-		s.renderError(w, operatorRoute("/settings/system-check"), "System Check", err)
-		return
-	}
-	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>System Check</h2>`)
-	body.WriteString(`<p>Generated: ` + esc(fmtTime(report.GeneratedAt)) + `</p>`)
-	body.WriteString(`<p><a href="` + operatorRoute("/settings/system-check.json") + `">System Check JSON</a> | <a href="` + operatorRoute("/audit/evidence-export") + `">Evidence Export</a></p>`)
-	body.WriteString(`</div>`)
-	for _, section := range report.Sections {
-		body.WriteString(`<div class="panel"><h3>` + esc(section.Name) + `</h3><table>`)
-		body.WriteString(`<tr><th>Status</th><th>Code</th><th>Summary</th><th>Detail</th></tr>`)
-		for _, check := range section.Checks {
-			body.WriteString(`<tr>`)
-			body.WriteString(`<td>` + esc(string(check.Status)) + `</td>`)
-			body.WriteString(`<td class="mono">` + esc(check.Code) + `</td>`)
-			body.WriteString(`<td>` + esc(check.Summary) + `</td>`)
-			body.WriteString(`<td>` + esc(check.Detail) + `</td>`)
-			body.WriteString(`</tr>`)
-		}
-		body.WriteString(`</table></div>`)
-	}
-	s.renderPage(w, operatorRoute("/settings/system-check"), "System Check", body.String(), "", "")
-}
-
-func (s *Server) handleSystemCheckJSON(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	report, err := s.buildSystemCheckReport(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(report)
 }
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
@@ -1209,12 +1159,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	report, err := s.buildSystemCheckReport(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	pkg, err := s.buildExportPackage(r.Context(), report)
+	pkg, err := s.buildEvidencePackage(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1239,9 +1184,9 @@ func (s *Server) renderPage(w http.ResponseWriter, active string, title string, 
 	htmlText.WriteString(navLink(operatorRoute(""), "Live", active))
 	htmlText.WriteString(navLink(operatorRoute("/inputs"), "Inputs", active))
 	htmlText.WriteString(navLink(operatorRoute("/actions"), "Actions", active))
-	htmlText.WriteString(navLink(operatorRoute("/comms"), "Comms", active))
 	htmlText.WriteString(navLink(operatorRoute("/egms"), "EGMs", active))
 	htmlText.WriteString(navLink(operatorRoute("/templates"), "Templates", active))
+	htmlText.WriteString(navLink(operatorRoute("/comms"), "Comms", active))
 	htmlText.WriteString(navLink(operatorRoute("/audit"), "Audit", active))
 	htmlText.WriteString(navLink(operatorRoute("/settings"), "Settings", active))
 	htmlText.WriteString(`</nav></header><main>`)

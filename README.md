@@ -9,10 +9,9 @@ The repo now contains the first Go MVP scaffold:
 - config loading and validation
 - controller runtime state model
 - in-memory engine event loop
-- G2S host listener for fake `commsOnLine` and `keepAlive` traffic
-- fake EGM command for exercising the host listener
+- G2S host listener for development traffic
 - development CA/server/client certificate generator
-- HTTPS and mutual TLS smoke-test path for fake EGM traffic
+- HTTPS and mutual TLS development path
 - SQLite-backed audit store for incidents, EGM status snapshots, compliance logs, and state history
 - Raspberry Pi/systemd packaging starter
 
@@ -28,7 +27,7 @@ go run ./cmd/g2s-mute -config .\configs\config.example.json
 In a second terminal, simulate an EGM starting a G2S session:
 
 ```powershell
-go run ./cmd/g2s-fake-egm -host-url http://127.0.0.1:8444/g2s -egm-id EGM-01
+go run ./cmd/g2s-capture-sink
 ```
 
 For the TLS-shaped local flow:
@@ -41,7 +40,7 @@ go run ./cmd/g2s-mute -config .\configs\config.tls.example.json
 In a second terminal:
 
 ```powershell
-go run ./cmd/g2s-fake-egm -host-url https://localhost:8444/g2s -egm-id EGM-01 -ca .\certs\ca.crt -cert .\certs\client.crt -key .\certs\client.key
+go run ./cmd/g2s-gpio-probe
 ```
 
 Once running, the development listener exposes:
@@ -56,10 +55,6 @@ Once running, the development listener exposes:
 - `GET /api/state-history`
 - `GET /api/certificates`
 - `POST /g2s`
-
-Active planning entry point:
-
-- `docs/project-definition/README.md`
 
 Current documentation:
 

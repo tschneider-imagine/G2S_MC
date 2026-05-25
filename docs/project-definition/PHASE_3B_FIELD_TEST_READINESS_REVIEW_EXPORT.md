@@ -1,10 +1,12 @@
 # Phase 3B: Field-Test Readiness Review + Export
 
 > Correction note: Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
+>
+> Runtime scope correction: Readiness pages/endpoints are superseded and removed from runtime scope. System Check is not an approved replacement.
 
 ## Scope
 
-Phase 3B extends the `/operator` Operator Console shell with a structured system-check review and evidence export flow.
+Phase 3B now records export-focused runtime scope only.
 
 This phase advances these field-test must-have sections:
 
@@ -14,25 +16,21 @@ This phase advances these field-test must-have sections:
 - Emergency Audit Timeline
 - Network/Cert Settings
 
-## Field-Test System Check Review Contents
+## Runtime Scope
 
-System Check adds a checklist view (`/operator/settings/system-check`) and JSON representation (`/operator/settings/system-check.json`) that evaluates:
-
-- Inputs: required channels, GPIO/normal/debounce/latch visibility, action bindings, emergency `MANUAL_CLEAR`.
-- Actions: definition presence, severity/selectors/steps, return action references, retry/escalation config visibility.
-- EGMs: registry count, emergency-enabled/disabled counts, missing template assignment warnings.
-- Templates: active versions, renderable action keys, actions JSON presence/validity, matcher placeholders.
-- Comms: journal presence, latest outbound result, latest send-gate result.
-- Audit: latest transition/action queued/manual clear/send proof entries.
-- Settings/Safety: real-send gated default, transport-gate summary, capture policy summary, db/bind metadata, cert status summary.
+- Runtime navigation is limited to: `Live | Inputs | Actions | Comms | EGMs | Templates | Audit | Settings`.
+- Readiness runtime pages and JSON endpoints are removed.
+- System Check runtime pages and JSON endpoints are not approved.
+- Runtime UI must not show project/test language or "Gate" wording.
 
 ## Export Behavior
 
-Phase 3B adds evidence/reporting exports only:
+Phase 3B approved runtime exports:
 
-- `GET /operator/export` and `GET /operator/audit/evidence-export`: full JSON evidence package with system check report, config snapshots, action previews, comms, audit, and safety summary.
+- `GET /operator/export`: operator evidence JSON package.
 - `GET /operator/comms/export`: message journal JSON export.
 - `GET /operator/audit/export`: audit timeline JSON export.
+- Visible seeded runtime records must use product-neutral names (`EGM-001`, `EGM-002`, `template-generic-g2s-action`).
 
 Export data is read-only evidence and must not include private key material.
 
@@ -41,6 +39,8 @@ Export data is read-only evidence and must not include private key material.
 - no real EGM send capability expansion,
 - no LAN capture allowlist,
 - no retry/escalation execution engine changes,
+- no Readiness runtime UI/API/export,
+- no System Check runtime UI/API/export,
 - no fake EGM tooling or simulator behavior,
 - no UI chart/dashboard polish work,
 - no action run success marking changes,
@@ -48,14 +48,11 @@ Export data is read-only evidence and must not include private key material.
 
 ## Definition Of Done
 
-- `/operator/settings/system-check` exists and renders checklist output.
-- `/operator/settings/system-check.json` exists and returns structured JSON.
 - `/operator/export` exists and returns evidence JSON.
 - `/operator/comms/export` and `/operator/audit/export` exist.
-- System check coverage spans inputs/actions/EGMs/templates/comms/audit/settings safety.
 - Action Builder Lite pages show retry/escalation/return configuration fields.
 - Template Manager Lite pages show render preview and matcher placeholder fields.
-- Real send remains gated with no new transport behavior.
+- Runtime sending remains disabled with no new transport behavior.
 - `go test ./...` passes.
 
 ## Next Expected Phase

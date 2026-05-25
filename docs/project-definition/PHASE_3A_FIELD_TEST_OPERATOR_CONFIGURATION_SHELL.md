@@ -1,6 +1,8 @@
 # Phase 3A: Field-Test Operator Configuration Shell
 
 > Correction note: Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
+>
+> Runtime correction: Readiness and System Check are not approved runtime features. They are removed from runtime scope.
 
 Runtime product navigation must remain product/operator language only:
 
@@ -31,6 +33,7 @@ This phase advances these field-test must-have sections:
 
 ## Routes / Pages
 
+- Runtime navigation: `Live | Inputs | Actions | Comms | EGMs | Templates | Audit | Settings`
 - `GET /operator`
 - `GET /operator/inputs`
 - `GET /operator/actions`
@@ -63,19 +66,23 @@ Minimal mutation routes (server-rendered forms):
 
 ## Intentionally Not Included
 
+- no Readiness page, Readiness JSON, or Readiness export route,
+- no System Check page or System Check JSON route,
+- no runtime "Gate"/"Safety Gate"/"Send Gate" UI wording,
 - no real G2S send expansion,
 - no LAN allowlist or transport capability broadening,
 - no retry/escalation execution changes,
 - no fake EGM tooling or simulated floor behavior,
 - no new charts/dashboard polish work,
 - no project docs embedded as runtime product content.
+- no seeded visible runtime records with smoke/demo/queue-only naming.
 
 ## Definition Of Done
 
 - Separate `internal/operatorui` package exists and is routed.
 - `/operator` pages expose operator review/config surfaces for inputs/actions/EGMs/templates/comms/audit/settings.
 - Minimal mutation forms exist for inputs/actions/EGMs/templates with auth enforcement.
-- Real-send safety state remains gated/disabled by current transport gate behavior.
+- Sending remains disabled by runtime transport safety logic.
 - No legacy UI bundle edits are required.
 - `go test ./...` passes.
 

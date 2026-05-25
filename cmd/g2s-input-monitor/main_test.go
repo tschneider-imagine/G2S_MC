@@ -17,7 +17,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
-func TestSeedLabActionDefinitionsAndBindings(t *testing.T) {
+func TestSeedActionDefinitionsAndBindings(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -28,8 +28,8 @@ func TestSeedLabActionDefinitionsAndBindings(t *testing.T) {
 	if err := inputpoller.EnsureDefaultPi4InputChannels(ctx, st, true); err != nil {
 		t.Fatalf("seed default channels: %v", err)
 	}
-	if err := seedLabActionDefinitionsAndBindings(ctx, st); err != nil {
-		t.Fatalf("seed lab definitions and bindings: %v", err)
+	if err := seedActionDefinitionsAndBindings(ctx, st); err != nil {
+		t.Fatalf("seed definitions and bindings: %v", err)
 	}
 
 	emergency, err := st.GetInputChannel(ctx, "emergency-broadcast")
@@ -42,7 +42,7 @@ func TestSeedLabActionDefinitionsAndBindings(t *testing.T) {
 	if emergency.OnTriggerActionID != "emergency-broadcast-trigger" {
 		t.Fatalf("emergency trigger action id=%q", emergency.OnTriggerActionID)
 	}
-	if emergency.OnNormalActionID != "emergency-broadcast-restore" {
+	if emergency.OnNormalActionID != "emergency-broadcast-normal" {
 		t.Fatalf("emergency normal action id=%q", emergency.OnNormalActionID)
 	}
 
@@ -51,9 +51,9 @@ func TestSeedLabActionDefinitionsAndBindings(t *testing.T) {
 		"general-broadcast-trigger",
 		"emergency-broadcast-trigger",
 		"local-notice-trigger",
-		"emergency-broadcast-restore",
-		"general-broadcast-restore",
-		"local-notice-restore",
+		"emergency-broadcast-normal",
+		"general-broadcast-normal",
+		"local-notice-normal",
 	}
 	for _, id := range actionIDs {
 		row, getErr := st.GetActionDefinition(ctx, id)
@@ -66,7 +66,7 @@ func TestSeedLabActionDefinitionsAndBindings(t *testing.T) {
 	}
 }
 
-func TestSeedLabEGMRegistry(t *testing.T) {
+func TestSeedEGMRegistry(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -74,26 +74,26 @@ func TestSeedLabEGMRegistry(t *testing.T) {
 	}
 	defer st.Close()
 
-	if err := seedLabEGMRegistry(ctx, st, "http://127.0.0.1:18080/capture"); err != nil {
-		t.Fatalf("seed lab egm registry: %v", err)
+	if err := seedEGMRegistry(ctx, st, "http://127.0.0.1:18080/capture"); err != nil {
+		t.Fatalf("seed egm registry: %v", err)
 	}
 
 	tpl, err := st.GetG2STemplate(ctx, "template-generic-g2s-action")
 	if err != nil {
-		t.Fatalf("get generic template: %v", err)
+		t.Fatalf("get template: %v", err)
 	}
 	if tpl == nil {
-		t.Fatal("expected generic template")
+		t.Fatal("expected template")
 	}
 	if tpl.CurrentVersionID != "1" {
 		t.Fatalf("current version id=%q, want 1", tpl.CurrentVersionID)
 	}
 	active, err := st.GetActiveG2STemplateVersion(ctx, "template-generic-g2s-action")
 	if err != nil {
-		t.Fatalf("get active generic template version: %v", err)
+		t.Fatalf("get active template version: %v", err)
 	}
 	if active == nil {
-		t.Fatal("expected active generic template version")
+		t.Fatal("expected active template version")
 	}
 	doc, err := g2sengine.ParseActionTemplateDocument(active.ActionsJSON)
 	if err != nil {
@@ -242,7 +242,7 @@ func TestRunClearLatchPath(t *testing.T) {
 		DebounceMS:        30,
 		Priority:          400,
 		OnTriggerActionID: "emergency-broadcast-trigger",
-		OnNormalActionID:  "emergency-broadcast-restore",
+		OnNormalActionID:  "emergency-broadcast-normal",
 		LatchingMode:      inputs.LatchingManualClear,
 	}
 	if err := st.UpsertInputChannel(ctx, channel); err != nil {
@@ -262,7 +262,7 @@ func TestRunClearLatchPath(t *testing.T) {
 		t.Fatalf("upsert input runtime state: %v", err)
 	}
 	if err := st.UpsertActionDefinition(ctx, actions.ActionDefinition{
-		ID:               "emergency-broadcast-restore",
+		ID:               "emergency-broadcast-normal",
 		Name:             "Emergency Broadcast Restore",
 		Severity:         actions.SeverityRestore,
 		Enabled:          true,
@@ -270,7 +270,7 @@ func TestRunClearLatchPath(t *testing.T) {
 		TemplateSelector: "template-by-egm",
 		Steps: []actions.ActionStep{{
 			ID:                "step-1",
-			Name:              "Primary message",
+			Name:              "Primary Notification",
 			Sequence:          0,
 			TemplateActionKey: "emergency_broadcast_restore",
 		}},

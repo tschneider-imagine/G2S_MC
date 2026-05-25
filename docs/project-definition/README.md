@@ -3,6 +3,9 @@
 Use this folder as the active planning entry point for G2S_MC rebuild work.
 
 Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
+Runtime UI scope is limited to: Live, Inputs, Actions, Comms, EGMs, Templates, Audit, Settings.
+Readiness/System Check runtime pages are not approved replacements and remain out of runtime scope.
+MVP runtime exports are Comms export and Audit/Evidence export only.
 
 Runtime Operator Console navigation contract:
 
