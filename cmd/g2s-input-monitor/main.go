@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actiondispatch"
+	"github.com/tschneider-imagine/G2S_MC/internal/actionexecutor"
 	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
@@ -30,6 +31,11 @@ func main() {
 	interval := flag.Duration("interval", 100*time.Millisecond, "poll interval")
 	duration := flag.Duration("duration", 0, "poll duration (default 30s when not -once)")
 	queueActions := flag.Bool("queue-actions", false, "queue pending action runs when transitions include action IDs")
+	executeActions := flag.Bool("execute-actions", false, "execute newly queued action runs from this process")
+	deliveryModeRaw := flag.String("delivery-mode", "disabled", "delivery mode for -execute-actions: disabled|http")
+	allowDelivery := flag.Bool("allow-delivery", false, "allow configured delivery attempts for -execute-actions")
+	captureOnly := flag.Bool("capture-only", false, "restrict -execute-actions delivery attempts to capture-safe localhost endpoints")
+	deliveryTimeoutMS := flag.Int("delivery-timeout-ms", 5000, "delivery timeout in milliseconds for -execute-actions")
 	dispatchDryRun := flag.Bool("dispatch-dry-run", false, "dry-run dispatch queued runs from this monitor process")
 	sendPrepared := flag.Bool("send-prepared", false, "send prepared outbound messages for newly queued runs")
 	transportModeRaw := flag.String("transport", "disabled", "transport mode: disabled|dry-run|http")
@@ -53,8 +59,25 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-dispatch-dry-run requires -queue-actions")
 		os.Exit(2)
 	}
+	if *executeActions && !*queueActions {
+		fmt.Fprintln(os.Stderr, "-execute-actions requires -queue-actions")
+		os.Exit(2)
+	}
+	if *executeActions && (*dispatchDryRun || *sendPrepared) {
+		fmt.Fprintln(os.Stderr, "-execute-actions cannot be combined with -dispatch-dry-run or -send-prepared")
+		os.Exit(2)
+	}
 	if *sendPrepared && !*dispatchDryRun {
 		fmt.Fprintln(os.Stderr, "-send-prepared requires -dispatch-dry-run")
+		os.Exit(2)
+	}
+	deliveryMode, deliveryModeErr := parseDeliveryMode(*deliveryModeRaw)
+	if deliveryModeErr != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", deliveryModeErr)
+		os.Exit(2)
+	}
+	if err := validateExecuteDeliveryConfig(deliveryMode, *allowDelivery, *deliveryTimeoutMS); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
 	transportMode, modeErr := parseTransportMode(*transportModeRaw)
@@ -103,7 +126,14 @@ func main() {
 	reader.Consumer = "g2s_input_monitor"
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
+	executor := &actionexecutor.Executor{Store: st, Sender: &g2stransport.HTTPSender{}, Clock: time.Now}
 	evaluator := &inputruntime.Evaluator{Store: st, Clock: time.Now}
+	delivery := g2stransport.DeliverySettings{
+		Mode:          deliveryMode,
+		AllowDelivery: *allowDelivery,
+		CaptureOnly:   *captureOnly,
+		TimeoutMS:     *deliveryTimeoutMS,
+	}
 
 	poller := &inputpoller.Poller{
 		Store:     st,
@@ -113,14 +143,14 @@ func main() {
 	}
 
 	if strings.TrimSpace(*clearLatchInputID) != "" {
-		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, strings.TrimSpace(*clearLatchInputID), *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint)); err != nil {
+		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, strings.TrimSpace(*clearLatchInputID), *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint)); err != nil {
 			fmt.Fprintf(os.Stderr, "clear latch: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	if *once {
-		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), 1); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, executor, *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), 1); err != nil {
 			fmt.Fprintf(os.Stderr, "poll once: %v\n", err)
 			os.Exit(1)
 		}
@@ -131,7 +161,7 @@ func main() {
 	count := 0
 	for {
 		count++
-		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), count); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, executor, *queueActions, *executeActions, delivery, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), count); err != nil {
 			fmt.Fprintf(os.Stderr, "poll #%d: %v\n", count, err)
 			os.Exit(1)
 		}
@@ -142,7 +172,11 @@ func main() {
 	}
 }
 
-func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string, iteration int) error {
+type actionRunExecutor interface {
+	Execute(ctx context.Context, request actionexecutor.ExecuteRequest) (actionexecutor.ExecuteResult, error)
+}
+
+func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, executor actionRunExecutor, queueActions bool, executeActions bool, delivery g2stransport.DeliverySettings, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string, iteration int) error {
 	result, err := poller.PollOnce(ctx)
 	if err != nil {
 		return err
@@ -189,12 +223,39 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 				continue
 			}
 			if queueResult.Queued && queueResult.ActionRun != nil {
-				fmt.Printf("queued_run run_id=%s action_id=%s targets=%d warnings=%d\n",
+				fmt.Printf("action_queued run_id=%s action_id=%s targets=%d warnings=%d\n",
 					queueResult.ActionRun.ID,
 					sample.ActionQueuedID,
 					len(queueResult.TargetResults),
 					len(queueResult.PlanWarnings),
 				)
+				if executeActions {
+					if executor == nil {
+						fmt.Printf("action_execution_failed run_id=%s error=executor_not_configured\n", queueResult.ActionRun.ID)
+						continue
+					}
+					executeResult, executeErr := executor.Execute(ctx, actionexecutor.ExecuteRequest{
+						ActionRunID: queueResult.ActionRun.ID,
+						Actor:       "g2s-input-monitor",
+						RequestedAt: result.ObservedAt,
+						Delivery:    delivery,
+					})
+					if executeErr != nil {
+						fmt.Printf("action_execution_failed run_id=%s error=%s\n", queueResult.ActionRun.ID, sanitizeOutput(executeErr.Error()))
+						continue
+					}
+					fmt.Printf("action_executed run_id=%s status=%s confirmed=%d failed=%d attempts=%d\n",
+						executeResult.ActionRun.ID,
+						executeResult.ActionRun.Status,
+						executeResult.ActionRun.ConfirmedCount,
+						executeResult.ActionRun.FailedCount,
+						len(executeResult.Attempts),
+					)
+					if executeResult.EscalationRun != nil {
+						fmt.Printf("escalation_queued run_id=%s action_id=%s\n", executeResult.EscalationRun.ID, executeResult.EscalationRun.ActionDefinitionID)
+					}
+					continue
+				}
 				if dispatchDryRun {
 					dispatchResult, dispatchErr := dispatcher.Dispatch(ctx, actiondispatch.DispatchRequest{
 						ActionRunID: queueResult.ActionRun.ID,
@@ -268,6 +329,27 @@ func parseTransportMode(raw string) (g2stransport.Mode, error) {
 	}
 }
 
+func parseDeliveryMode(raw string) (g2stransport.DeliveryMode, error) {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "", "DISABLED":
+		return g2stransport.DeliveryModeDisabled, nil
+	case "HTTP":
+		return g2stransport.DeliveryModeHTTP, nil
+	default:
+		return "", fmt.Errorf("invalid -delivery-mode value %q (use disabled|http)", raw)
+	}
+}
+
+func validateExecuteDeliveryConfig(mode g2stransport.DeliveryMode, allowDelivery bool, timeoutMS int) error {
+	if timeoutMS < 0 {
+		return fmt.Errorf("-delivery-timeout-ms must be >= 0")
+	}
+	if allowDelivery && mode != g2stransport.DeliveryModeHTTP {
+		return fmt.Errorf("-allow-delivery requires -delivery-mode http")
+	}
+	return nil
+}
+
 func validateCaptureSendConfig(transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string) error {
 	if !allowRealSend {
 		return nil
@@ -285,7 +367,7 @@ func validateCaptureSendConfig(transportMode g2stransport.Mode, allowRealSend bo
 	return nil
 }
 
-func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, inputID string, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string) error {
+func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, executor actionRunExecutor, inputID string, queueActions bool, executeActions bool, delivery g2stransport.DeliverySettings, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string) error {
 	clearedAt := time.Now().UTC()
 	clearResult, err := evaluator.ClearLatchedInput(ctx, inputID, "g2s-input-monitor", "operator requested clear-latch")
 	if err != nil {
@@ -314,12 +396,39 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 		fmt.Printf("queue_skipped input=%s action_id=%s reason=%s\n", clearResult.InputID, clearResult.ActionQueuedID, queueResult.Reason)
 		return nil
 	}
-	fmt.Printf("queued_run run_id=%s action_id=%s targets=%d warnings=%d\n",
+	fmt.Printf("action_queued run_id=%s action_id=%s targets=%d warnings=%d\n",
 		queueResult.ActionRun.ID,
 		clearResult.ActionQueuedID,
 		len(queueResult.TargetResults),
 		len(queueResult.PlanWarnings),
 	)
+	if executeActions {
+		if executor == nil {
+			fmt.Printf("action_execution_failed run_id=%s error=executor_not_configured\n", queueResult.ActionRun.ID)
+			return nil
+		}
+		executeResult, executeErr := executor.Execute(ctx, actionexecutor.ExecuteRequest{
+			ActionRunID: queueResult.ActionRun.ID,
+			Actor:       "g2s-input-monitor",
+			RequestedAt: clearedAt,
+			Delivery:    delivery,
+		})
+		if executeErr != nil {
+			fmt.Printf("action_execution_failed run_id=%s error=%s\n", queueResult.ActionRun.ID, sanitizeOutput(executeErr.Error()))
+			return nil
+		}
+		fmt.Printf("action_executed run_id=%s status=%s confirmed=%d failed=%d attempts=%d\n",
+			executeResult.ActionRun.ID,
+			executeResult.ActionRun.Status,
+			executeResult.ActionRun.ConfirmedCount,
+			executeResult.ActionRun.FailedCount,
+			len(executeResult.Attempts),
+		)
+		if executeResult.EscalationRun != nil {
+			fmt.Printf("escalation_queued run_id=%s action_id=%s\n", executeResult.EscalationRun.ID, executeResult.EscalationRun.ActionDefinitionID)
+		}
+		return nil
+	}
 	if !dispatchDryRun {
 		return nil
 	}
@@ -363,6 +472,16 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 		)
 	}
 	return nil
+}
+
+func sanitizeOutput(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "unknown_error"
+	}
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	return value
 }
 
 func seedEGMRegistry(ctx context.Context, st *store.SQLiteStore, captureEndpoint string) error {
