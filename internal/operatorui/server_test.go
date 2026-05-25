@@ -1083,7 +1083,10 @@ func TestEGMsPageRendersRegistryRowsAndTemplateID(t *testing.T) {
 		"template-generic-g2s-action",
 		"Current Action State",
 		"Available Template IDs",
-		"EGM Groups",
+		"Groups",
+		"Group Members",
+		"Export Registry",
+		"Import Registry",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in /operator/egms", expected)
@@ -1252,6 +1255,178 @@ func TestEGMsFormIncludesExpectedFields(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected field %q in /operator/egms form", expected)
 		}
+	}
+}
+
+func TestPostEGMGroupsCreatesOrUpdatesGroup(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	body := url.Values{
+		"group_id":    {"group-main-floor"},
+		"name":        {"Main Floor"},
+		"description": {"Primary cabinets"},
+		"egm_ids":     {"EGM-001, EGM-002"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/egms/groups", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	group, err := st.GetEGMGroup(context.Background(), "group-main-floor")
+	if err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	if group == nil {
+		t.Fatal("expected group saved")
+	}
+	if group.Name != "Main Floor" || group.Description != "Primary cabinets" {
+		t.Fatalf("unexpected group fields: %+v", *group)
+	}
+	if len(group.EGMIDs) != 2 || group.EGMIDs[0] != "EGM-001" || group.EGMIDs[1] != "EGM-002" {
+		t.Fatalf("unexpected group members: %+v", group.EGMIDs)
+	}
+}
+
+func TestEGMExportReturnsJSONWithEGMsAndGroups(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if err := st.UpsertEGMGroup(ctx, egms.EGMGroup{ID: "group-east-bank", Name: "East Bank", EGMIDs: []string{"EGM-001"}}); err != nil {
+		t.Fatalf("upsert group: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/egms/export", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(res.Header().Get("Content-Type")), "application/json") {
+		t.Fatalf("content-type=%q", res.Header().Get("Content-Type"))
+	}
+
+	var payload struct {
+		GeneratedAt         string           `json:"generated_at"`
+		EGMs                []egms.EGMRecord `json:"egms"`
+		Groups              []egms.EGMGroup  `json:"groups"`
+		TemplatesReferenced []string         `json:"templates_referenced"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal export: %v", err)
+	}
+	if payload.GeneratedAt == "" || len(payload.EGMs) == 0 || len(payload.Groups) == 0 {
+		t.Fatalf("unexpected export payload: %+v", payload)
+	}
+}
+
+func TestEGMImportRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(http.ResponseWriter, *http.Request) bool { return false })
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/operator/egms/import", strings.NewReader(`{"egms":[],"groups":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=401 body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestEGMImportRejectsMalformedJSON(t *testing.T) {
+	mux := setupOperatorServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/operator/egms/import", strings.NewReader(`{"egms":`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "invalid import JSON") {
+		t.Fatalf("expected malformed JSON error, body=%s", res.Body.String())
+	}
+}
+
+func TestEGMImportUpsertsRecords(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	importJSON := `{
+  "egms": [
+    {
+      "egm_id": "EGM-020",
+      "display_name": "Cabinet 020",
+      "ip_address": "10.20.0.20",
+      "endpoint_path": "/g2s",
+      "vendor": "Generic",
+      "cabinet_family": "Family B",
+      "game_title": "Title B",
+      "software_version": "2.0.0",
+      "zone": "Zone-B",
+      "enabled": true,
+      "emergency_enabled": true,
+      "template_id": "template-generic-g2s-action",
+      "current_action_state": "NORMAL",
+      "notes": "Imported cabinet"
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-east-bank",
+      "name": "East Bank",
+      "description": "East side",
+      "egm_ids": ["EGM-020"]
+    }
+  ]
+}`
+	req := httptest.NewRequest(http.MethodPost, "/operator/egms/import", strings.NewReader(importJSON))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	record, err := st.GetEGMRecord(context.Background(), "EGM-020")
+	if err != nil {
+		t.Fatalf("get imported egm: %v", err)
+	}
+	if record == nil || record.DisplayName != "Cabinet 020" {
+		t.Fatalf("unexpected imported egm: %+v", record)
+	}
+	group, err := st.GetEGMGroup(context.Background(), "group-east-bank")
+	if err != nil {
+		t.Fatalf("get imported group: %v", err)
+	}
+	if group == nil || len(group.EGMIDs) != 1 || group.EGMIDs[0] != "EGM-020" {
+		t.Fatalf("unexpected imported group: %+v", group)
+	}
+}
+
+func TestEGMGroupsShowUnknownMemberWarning(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if err := st.UpsertEGMGroup(ctx, egms.EGMGroup{
+		ID:          "group-unknown",
+		Name:        "Unknown Members",
+		Description: "Contains unknown member",
+		EGMIDs:      []string{"EGM-001", "EGM-999"},
+	}); err != nil {
+		t.Fatalf("upsert group: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/egms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Unknown members: EGM-999") {
+		t.Fatalf("expected unknown member warning, body=%s", res.Body.String())
 	}
 }
 
@@ -2262,6 +2437,15 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 	for _, row := range egmRows {
 		if err := st.UpsertEGMRecord(ctx, row); err != nil {
 			t.Fatalf("upsert egm: %v", err)
+		}
+	}
+	groupRows := []egms.EGMGroup{
+		{ID: "group-main-floor", Name: "Main Floor", Description: "Primary floor cabinets", EGMIDs: []string{"EGM-001", "EGM-002"}},
+		{ID: "group-east-bank", Name: "East Bank", Description: "East-side cabinets", EGMIDs: []string{"EGM-002"}},
+	}
+	for _, row := range groupRows {
+		if err := st.UpsertEGMGroup(ctx, row); err != nil {
+			t.Fatalf("upsert egm group: %v", err)
 		}
 	}
 

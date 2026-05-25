@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -72,6 +73,7 @@ type Store interface {
 	UpsertEGMRecord(ctx context.Context, record egms.EGMRecord) error
 	ListEGMRecords(ctx context.Context) ([]egms.EGMRecord, error)
 	GetEGMGroup(ctx context.Context, id string) (*egms.EGMGroup, error)
+	UpsertEGMGroup(ctx context.Context, group egms.EGMGroup) error
 	ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error)
 
 	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
@@ -143,6 +145,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute("/actions"), s.handleActions)
 	mux.HandleFunc(operatorRoute("/actions/"), s.handleActionByID)
 	mux.HandleFunc(operatorRoute("/egms"), s.handleEGMs)
+	mux.HandleFunc(operatorRoute("/egms/export"), s.handleEGMExport)
+	mux.HandleFunc(operatorRoute("/egms/import"), s.handleEGMImport)
+	mux.HandleFunc(operatorRoute("/egms/groups"), s.handleEGMGroups)
+	mux.HandleFunc(operatorRoute("/egms/groups/"), s.handleEGMGroupByID)
 	mux.HandleFunc(operatorRoute("/egms/"), s.handleEGMByID)
 	mux.HandleFunc(operatorRoute("/templates"), s.handleTemplates)
 	mux.HandleFunc(operatorRoute("/templates/"), s.handleTemplateByID)
@@ -1016,6 +1022,159 @@ func (s *Server) handleEGMByID(w http.ResponseWriter, r *http.Request) {
 	s.renderEGMsPage(w, r, "EGM updated: "+egmID, "", nil)
 }
 
+func (s *Server) handleEGMGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.renderEGMsPage(w, r, "", "invalid form payload", nil)
+		return
+	}
+	groupID := strings.TrimSpace(r.FormValue("group_id"))
+	draft := buildEGMGroupFormData(r, groupID)
+	if groupID == "" {
+		s.renderEGMsPage(w, r, "", "group_id is required", nil)
+		return
+	}
+	if err := s.upsertEGMGroupFromForm(r.Context(), draft); err != nil {
+		s.renderEGMsPage(w, r, "", err.Error(), nil)
+		return
+	}
+	_, _ = s.Store.RecordAuditTimelineEntry(r.Context(), audit.AuditTimelineEntry{
+		OccurredAt: time.Now().UTC(),
+		Severity:   audit.AuditSeverityInfo,
+		EventType:  audit.EventTypeOperatorAction,
+		Summary:    "EGM group upserted",
+		DetailJSON: encodeSummaryJSON(map[string]any{"group_id": groupID, "member_count": len(draft.EGMIDs)}),
+		Operator:   "operator-console",
+	})
+	s.renderEGMsPage(w, r, "Group upserted: "+groupID, "", nil)
+}
+
+func (s *Server) handleEGMGroupByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	groupID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/egms/groups/")))
+	if groupID == "" || strings.Contains(groupID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.renderEGMsPage(w, r, "", "invalid form payload", nil)
+		return
+	}
+	draft := buildEGMGroupFormData(r, groupID)
+	if err := s.upsertEGMGroupFromForm(r.Context(), draft); err != nil {
+		s.renderEGMsPage(w, r, "", err.Error(), nil)
+		return
+	}
+	_, _ = s.Store.RecordAuditTimelineEntry(r.Context(), audit.AuditTimelineEntry{
+		OccurredAt: time.Now().UTC(),
+		Severity:   audit.AuditSeverityInfo,
+		EventType:  audit.EventTypeOperatorAction,
+		Summary:    "EGM group updated",
+		DetailJSON: encodeSummaryJSON(map[string]any{"group_id": groupID, "member_count": len(draft.EGMIDs)}),
+		Operator:   "operator-console",
+	})
+	s.renderEGMsPage(w, r, "Group updated: "+groupID, "", nil)
+}
+
+func (s *Server) handleEGMExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rows, err := s.Store.ListEGMRecords(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	groups, err := s.Store.ListEGMGroups(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	referenced := map[string]struct{}{}
+	for _, row := range rows {
+		if id := strings.TrimSpace(row.TemplateID); id != "" {
+			referenced[id] = struct{}{}
+		}
+	}
+	templateRefs := make([]string, 0, len(referenced))
+	for id := range referenced {
+		templateRefs = append(templateRefs, id)
+	}
+	sort.Strings(templateRefs)
+
+	payload := map[string]any{
+		"generated_at":         time.Now().UTC().Format(time.RFC3339),
+		"egms":                 rows,
+		"groups":               groups,
+		"templates_referenced": templateRefs,
+	}
+	filename := "egm-registry-" + time.Now().UTC().Format("20060102T150405Z") + ".json"
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (s *Server) handleEGMImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	payload, err := parseEGMRegistryImportRequest(r)
+	if err != nil {
+		s.renderEGMsPage(w, r, "", err.Error(), nil)
+		return
+	}
+	if err := s.validateEGMRegistryImport(payload); err != nil {
+		s.renderEGMsPage(w, r, "", err.Error(), nil)
+		return
+	}
+
+	for i := range payload.EGMs {
+		row := payload.EGMs[i]
+		if strings.TrimSpace(string(row.CurrentActionState)) == "" {
+			row.CurrentActionState = egms.EGMActionStateNormal
+		}
+		if err := s.Store.UpsertEGMRecord(r.Context(), row); err != nil {
+			s.renderEGMsPage(w, r, "", err.Error(), nil)
+			return
+		}
+	}
+	for i := range payload.Groups {
+		if err := s.Store.UpsertEGMGroup(r.Context(), payload.Groups[i]); err != nil {
+			s.renderEGMsPage(w, r, "", err.Error(), nil)
+			return
+		}
+	}
+	_, _ = s.Store.RecordAuditTimelineEntry(r.Context(), audit.AuditTimelineEntry{
+		OccurredAt: time.Now().UTC(),
+		Severity:   audit.AuditSeverityInfo,
+		EventType:  audit.EventTypeOperatorAction,
+		Summary:    "EGM registry import completed",
+		DetailJSON: encodeSummaryJSON(map[string]any{
+			"egm_count":   len(payload.EGMs),
+			"group_count": len(payload.Groups),
+		}),
+		Operator: "operator-console",
+	})
+	s.renderEGMsPage(w, r, "Registry import completed", "", nil)
+}
+
 type egmFormData struct {
 	EGMID            string
 	DisplayName      string
@@ -1030,6 +1189,19 @@ type egmFormData struct {
 	EmergencyEnabled bool
 	TemplateID       string
 	Notes            string
+}
+
+type egmGroupFormData struct {
+	ID          string
+	Name        string
+	Description string
+	EGMIDs      []string
+	EGMIDsRaw   string
+}
+
+type egmRegistryImportPayload struct {
+	EGMs   []egms.EGMRecord `json:"egms"`
+	Groups []egms.EGMGroup  `json:"groups"`
 }
 
 func buildEGMFormData(r *http.Request, egmID string) egmFormData {
@@ -1085,6 +1257,105 @@ func (s *Server) upsertEGMFromForm(ctx context.Context, form egmFormData) error 
 	return s.Store.UpsertEGMRecord(ctx, record)
 }
 
+func buildEGMGroupFormData(r *http.Request, groupID string) egmGroupFormData {
+	membersRaw := strings.TrimSpace(r.FormValue("egm_ids"))
+	return egmGroupFormData{
+		ID:          strings.TrimSpace(groupID),
+		Name:        strings.TrimSpace(r.FormValue("name")),
+		Description: strings.TrimSpace(r.FormValue("description")),
+		EGMIDsRaw:   membersRaw,
+		EGMIDs:      parseCommaSeparatedIDs(membersRaw),
+	}
+}
+
+func (s *Server) upsertEGMGroupFromForm(ctx context.Context, form egmGroupFormData) error {
+	row := egms.EGMGroup{
+		ID:          form.ID,
+		Name:        form.Name,
+		Description: form.Description,
+		EGMIDs:      form.EGMIDs,
+	}
+	return s.Store.UpsertEGMGroup(ctx, row)
+}
+
+func parseEGMRegistryImportRequest(r *http.Request) (egmRegistryImportPayload, error) {
+	var payload egmRegistryImportPayload
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.HasPrefix(contentType, "application/json") {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			return payload, fmt.Errorf("invalid import payload")
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return payload, fmt.Errorf("invalid import JSON")
+		}
+		return payload, nil
+	}
+	if err := r.ParseForm(); err != nil {
+		return payload, fmt.Errorf("invalid import payload")
+	}
+	raw := strings.TrimSpace(r.FormValue("registry_json"))
+	if raw == "" {
+		return payload, fmt.Errorf("registry_json is required")
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return payload, fmt.Errorf("invalid import JSON")
+	}
+	return payload, nil
+}
+
+func (s *Server) validateEGMRegistryImport(payload egmRegistryImportPayload) error {
+	seenEGM := map[string]struct{}{}
+	for i := range payload.EGMs {
+		row := payload.EGMs[i]
+		row.EGMID = strings.TrimSpace(row.EGMID)
+		if row.EGMID == "" {
+			return fmt.Errorf("egm_id is required")
+		}
+		if _, ok := seenEGM[row.EGMID]; ok {
+			return fmt.Errorf("duplicate egm_id in import: %s", row.EGMID)
+		}
+		seenEGM[row.EGMID] = struct{}{}
+		if strings.TrimSpace(string(row.CurrentActionState)) == "" {
+			row.CurrentActionState = egms.EGMActionStateNormal
+		}
+		if err := row.Validate(); err != nil {
+			return err
+		}
+	}
+	seenGroup := map[string]struct{}{}
+	for i := range payload.Groups {
+		group := payload.Groups[i]
+		group.ID = strings.TrimSpace(group.ID)
+		if _, ok := seenGroup[group.ID]; ok {
+			return fmt.Errorf("duplicate group id in import: %s", group.ID)
+		}
+		seenGroup[group.ID] = struct{}{}
+		if err := group.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseCommaSeparatedIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
+}
+
 func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message string, errText string, draft *egmFormData) {
 	records, err := s.Store.ListEGMRecords(r.Context())
 	if err != nil {
@@ -1109,6 +1380,30 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
 		return
 	}
+	knownEGMIDs := map[string]struct{}{}
+	for _, record := range records {
+		knownEGMIDs[record.EGMID] = struct{}{}
+	}
+	groupMembershipByEGM := map[string][]string{}
+	groupMissingMembers := map[string][]string{}
+	for _, group := range groups {
+		for _, member := range group.EGMIDs {
+			memberID := strings.TrimSpace(member)
+			if memberID == "" {
+				continue
+			}
+			groupMembershipByEGM[memberID] = append(groupMembershipByEGM[memberID], group.ID)
+			if _, ok := knownEGMIDs[memberID]; !ok {
+				groupMissingMembers[group.ID] = append(groupMissingMembers[group.ID], memberID)
+			}
+		}
+	}
+	for egmID := range groupMembershipByEGM {
+		sort.Strings(groupMembershipByEGM[egmID])
+	}
+	for groupID := range groupMissingMembers {
+		sort.Strings(groupMissingMembers[groupID])
+	}
 
 	formDefaults := egmFormData{Enabled: true, EmergencyEnabled: true}
 	if draft != nil {
@@ -1116,8 +1411,8 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>EGM Registry</h2><table>`)
-	body.WriteString(`<tr><th>EGM ID</th><th>Cabinet</th><th>IP Address</th><th>Endpoint</th><th>Vendor</th><th>Cabinet Family</th><th>Game Title</th><th>Software Version</th><th>Zone</th><th>Enabled</th><th>Emergency Enabled</th><th>Template</th><th>Current Action State</th><th>Last Seen</th><th>Notes</th><th>Status</th><th>Edit</th></tr>`)
+	body.WriteString(`<div class="panel"><h2>EGM Registry</h2><p><a href="/operator/egms/export">Export Registry</a></p><table>`)
+	body.WriteString(`<tr><th>EGM ID</th><th>Cabinet</th><th>IP Address</th><th>Endpoint</th><th>Vendor</th><th>Cabinet Family</th><th>Game Title</th><th>Software Version</th><th>Zone</th><th>Enabled</th><th>Emergency Enabled</th><th>Template</th><th>Groups</th><th>Current Action State</th><th>Last Seen</th><th>Notes</th><th>Status</th><th>Edit</th></tr>`)
 	for _, record := range records {
 		warnings := make([]string, 0, 2)
 		if record.TemplateID != "" && !templateExists[record.TemplateID] {
@@ -1139,6 +1434,7 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 		body.WriteString(`<td>` + yesNo(record.Enabled) + `</td>`)
 		body.WriteString(`<td>` + yesNo(record.EmergencyEnabled) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(record.TemplateID) + `</td>`)
+		body.WriteString(`<td class="mono">` + esc(defaultString(strings.Join(groupMembershipByEGM[record.EGMID], ", "), "-")) + `</td>`)
 		body.WriteString(`<td>` + esc(string(record.CurrentActionState)) + `</td>`)
 		body.WriteString(`<td>` + esc(fmtMaybeTime(record.LastSeenAt)) + `</td>`)
 		body.WriteString(`<td>` + esc(record.Notes) + `</td>`)
@@ -1180,24 +1476,54 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 	}
 	body.WriteString(`</div>`)
 
-	body.WriteString(`<div class="panel"><h3>EGM Groups</h3>`)
+	body.WriteString(`<div class="panel"><h3>Groups</h3>`)
 	if len(groups) == 0 {
 		body.WriteString(`<p>No groups configured.</p>`)
 	} else {
-		body.WriteString(`<table><tr><th>Group ID</th><th>Name</th><th>Member Count</th><th>Members</th></tr>`)
+		body.WriteString(`<table><tr><th>Group ID</th><th>Name</th><th>Description</th><th>Member Count</th><th>Group Members</th><th>Status</th><th>Edit</th></tr>`)
 		for _, group := range groups {
 			members := append([]string(nil), group.EGMIDs...)
 			sort.Strings(members)
+			groupWarnings := []string{}
+			if missing := groupMissingMembers[group.ID]; len(missing) > 0 {
+				groupWarnings = append(groupWarnings, "Unknown members: "+strings.Join(missing, ", "))
+			}
 			body.WriteString(`<tr>`)
 			body.WriteString(`<td class="mono">` + esc(group.ID) + `</td>`)
 			body.WriteString(`<td>` + esc(group.Name) + `</td>`)
+			body.WriteString(`<td>` + esc(group.Description) + `</td>`)
 			body.WriteString(`<td>` + esc(strconv.Itoa(len(members))) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(strings.Join(members, ", ")) + `</td>`)
+			body.WriteString(`<td>`)
+			if len(groupWarnings) == 0 {
+				body.WriteString(`<span class="status-ok">OK</span>`)
+			} else {
+				for i, warning := range groupWarnings {
+					if i > 0 {
+						body.WriteString(`<br>`)
+					}
+					body.WriteString(`<span class="status-warn">` + esc(warning) + `</span>`)
+				}
+			}
+			body.WriteString(`</td>`)
+			body.WriteString(`<td><form class="inline-form" method="post" action="/operator/egms/groups/` + esc(group.ID) + `">`)
+			body.WriteString(`<label>Name <input type="text" name="name" value="` + esc(group.Name) + `" style="width:130px"></label>`)
+			body.WriteString(`<label>Description <input type="text" name="description" value="` + esc(group.Description) + `" style="width:170px"></label><br>`)
+			body.WriteString(`<label>Group Members <input type="text" name="egm_ids" value="` + esc(strings.Join(members, ", ")) + `" style="width:240px"></label>`)
+			body.WriteString(`<button type="submit">Save</button></form></td>`)
 			body.WriteString(`</tr>`)
 		}
 		body.WriteString(`</table>`)
 	}
 	body.WriteString(`</div>`)
+
+	body.WriteString(`<div class="panel"><h3>Add / Upsert Group</h3>`)
+	body.WriteString(`<form method="post" action="/operator/egms/groups">`)
+	body.WriteString(`<label>Group ID <input type="text" name="group_id"></label>`)
+	body.WriteString(`<label>Name <input type="text" name="name"></label>`)
+	body.WriteString(`<label>Description <input type="text" name="description" style="width:220px"></label><br>`)
+	body.WriteString(`<label>Group Members <input type="text" name="egm_ids" style="width:320px"></label>`)
+	body.WriteString(`<button type="submit">Upsert Group</button></form></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert EGM</h3>`)
 	body.WriteString(`<form method="post" action="/operator/egms">`)
@@ -1215,6 +1541,12 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 	body.WriteString(`<label>Template ID <input type="text" name="template_id" value="` + esc(formDefaults.TemplateID) + `"></label><br>`)
 	body.WriteString(`<label>Notes <input type="text" name="notes" value="` + esc(formDefaults.Notes) + `" style="width:320px"></label>`)
 	body.WriteString(`<button type="submit">Upsert EGM</button></form></div>`)
+
+	body.WriteString(`<div class="panel"><h3>Import Registry</h3>`)
+	body.WriteString(`<p>Paste JSON with <span class="mono">egms</span> and optional <span class="mono">groups</span>.</p>`)
+	body.WriteString(`<form method="post" action="/operator/egms/import">`)
+	body.WriteString(`<label style="display:block;">Registry JSON<textarea name="registry_json"></textarea></label>`)
+	body.WriteString(`<button type="submit">Import</button></form></div>`)
 
 	s.renderPage(w, operatorRoute("/egms"), "Operator EGM Registry", body.String(), message, errText)
 }
