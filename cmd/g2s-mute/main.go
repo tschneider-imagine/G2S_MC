@@ -21,6 +21,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/certs"
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
+	"github.com/tschneider-imagine/G2S_MC/internal/fieldtestui"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
@@ -120,6 +121,19 @@ func main() {
 		},
 	}
 	rebuildV2API.RegisterRoutes(mux)
+	fieldTestServer := fieldtestui.NewServer(
+		auditStore,
+		fieldtestui.Options{
+			AppVersion:              "phase-3a-shell",
+			DatabasePath:            cfg.Database.Path,
+			BindAddress:             cfg.WebUI.BindAddress,
+			RealSendDefaultDisabled: true,
+		},
+		func(w http.ResponseWriter, r *http.Request) bool {
+			return requireMutationAuth(w, r, cfg)
+		},
+	)
+	fieldTestServer.RegisterRoutes(mux)
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/api/status", statusHandler(eng, auditStore, cfg, runtimeInfo{
 		ConfigPath:       *configPath,
