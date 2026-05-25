@@ -31,6 +31,7 @@ Use this folder as the active planning entry point for G2S_MC rebuild work.
 - `PHASE_2F1_INPUT_SAFETY_HARDENING.md`
 - `PHASE_2G_CAPTURE_ENDPOINT_SEND_PROOF.md`
 - `PHASE_3A_FIELD_TEST_OPERATOR_CONFIGURATION_SHELL.md`
+- `PHASE_3B_FIELD_TEST_READINESS_REVIEW_EXPORT.md`
 
 ## Archived Old Plans
 

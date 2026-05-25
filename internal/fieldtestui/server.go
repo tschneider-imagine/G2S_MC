@@ -89,6 +89,9 @@ func NewServer(store Store, options Options, authorizeMutation func(http.Respons
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/field-test", s.handleHome)
+	mux.HandleFunc("/field-test/readiness", s.handleReadiness)
+	mux.HandleFunc("/field-test/readiness.json", s.handleReadinessJSON)
+	mux.HandleFunc("/field-test/export", s.handleExport)
 	mux.HandleFunc("/field-test/inputs", s.handleInputs)
 	mux.HandleFunc("/field-test/inputs/", s.handleInputByID)
 	mux.HandleFunc("/field-test/actions", s.handleActions)
@@ -98,7 +101,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/field-test/templates", s.handleTemplates)
 	mux.HandleFunc("/field-test/templates/", s.handleTemplateByID)
 	mux.HandleFunc("/field-test/comms", s.handleComms)
+	mux.HandleFunc("/field-test/comms/export", s.handleCommsExport)
 	mux.HandleFunc("/field-test/audit", s.handleAudit)
+	mux.HandleFunc("/field-test/audit/export", s.handleAuditExport)
 	mux.HandleFunc("/field-test/settings", s.handleSettings)
 	mux.HandleFunc("/field-test/static/field-test.css", s.handleStyles)
 }
@@ -156,6 +161,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<p><span class="badge">REAL SEND IS GATED / DISABLED</span></p>`)
 	body.WriteString(`<p>` + esc(s.Options.TransportGateSummary) + `</p>`)
 	body.WriteString(`<p>` + esc(s.Options.CapturePolicySummary) + `</p>`)
+	body.WriteString(`<p><a href="/field-test/readiness">Open Field-Test Readiness Review</a> | <a href="/field-test/export">Export Field-Test Evidence JSON</a></p>`)
 	body.WriteString(`</div>`)
 
 	body.WriteString(`<div class="panel"><h2>Input Summary</h2>`)
@@ -281,7 +287,7 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 		}
 		lastTransition := "-"
 		if transition, ok := lastTransitionByInput[channel.ID]; ok {
-			lastTransition = fmt.Sprintf("%s %s→%s", fmtTime(transition.TransitionAt), transition.PreviousDerived, transition.NewDerived)
+			lastTransition = fmt.Sprintf("%s %s->%s", fmtTime(transition.TransitionAt), transition.PreviousDerived, transition.NewDerived)
 		}
 		rawState := string(channel.CurrentState)
 		derivedState := string(channel.DerivedState)
@@ -482,10 +488,13 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		body.WriteString(`template <input type="text" name="template_selector" value="` + esc(definition.TemplateSelector) + `" style="width:150px"> `)
 		body.WriteString(`<br>step key <input type="text" name="step_template_action_key" value="` + esc(firstStep) + `" style="width:180px"> `)
 		body.WriteString(`return <input type="text" name="return_action_id" value="` + esc(definition.ReturnActionID) + `" style="width:180px"> `)
+		body.WriteString(`<br>retry json <input type="text" name="retry_policy_json" value="` + esc(definition.RetryPolicyJSON) + `" style="width:280px"> `)
+		body.WriteString(`escalation json <input type="text" name="escalation_policy_json" value="` + esc(definition.EscalationJSON) + `" style="width:280px"> `)
 		body.WriteString(`<button type="submit">Save</button></form></td>`)
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
+	body.WriteString(`<div class="panel"><p>Retry, escalation, and return fields are stored for configuration review; execution behavior is not implemented in this UI phase.</p></div>`)
 
 	body.WriteString(`<div class="panel"><h3>Add / Upsert Action</h3>`)
 	body.WriteString(`<form method="post" action="/field-test/actions">`)
@@ -497,6 +506,8 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 	body.WriteString(`<label>Template Selector <input type="text" name="template_selector" value="template-by-egm" style="width:200px"></label><br>`)
 	body.WriteString(`<label>Step Template Action Key <input type="text" name="step_template_action_key" value="queue_only_no_send" style="width:220px"></label>`)
 	body.WriteString(`<label>Return Action ID <input type="text" name="return_action_id" style="width:220px"></label><br>`)
+	body.WriteString(`<label>Retry Policy JSON <input type="text" name="retry_policy_json" style="width:320px"></label><br>`)
+	body.WriteString(`<label>Escalation Policy JSON <input type="text" name="escalation_policy_json" style="width:320px"></label><br>`)
 	body.WriteString(`<button type="submit">Upsert Action</button></form></div>`)
 
 	s.renderPage(w, "/field-test/actions", "Field-Test Actions", body.String(), message, errText)
@@ -730,11 +741,13 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 			versionID = fmt.Sprintf("%s-v%s", templateID, sanitizeVersionLabel(versionLabel))
 		}
 		row := templates.G2STemplateVersion{
-			ID:           versionID,
-			TemplateID:   templateID,
-			VersionLabel: versionLabel,
-			ActionsJSON:  strings.TrimSpace(r.FormValue("actions_json")),
-			Notes:        strings.TrimSpace(r.FormValue("notes")),
+			ID:                    versionID,
+			TemplateID:            templateID,
+			VersionLabel:          versionLabel,
+			ActionsJSON:           strings.TrimSpace(r.FormValue("actions_json")),
+			ConfirmationRulesJSON: strings.TrimSpace(r.FormValue("confirmation_rules_json")),
+			FailureRulesJSON:      strings.TrimSpace(r.FormValue("failure_rules_json")),
+			Notes:                 strings.TrimSpace(r.FormValue("notes")),
 		}
 		if err := s.Store.UpsertG2STemplateVersion(r.Context(), row); err != nil {
 			s.renderTemplatesPage(w, r, "", err.Error(), nil)
@@ -918,6 +931,8 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 		body.WriteString(`<label>Version Label <input type="text" name="version_label" style="width:90px"></label>`)
 		body.WriteString(`<label>Version ID <input type="text" name="version_id" style="width:150px"></label>`)
 		body.WriteString(`<label>Notes <input type="text" name="notes" style="width:150px"></label><br>`)
+		body.WriteString(`<label style="display:block;">Expected Response Matcher JSON (placeholder) <textarea name="confirmation_rules_json"></textarea></label>`)
+		body.WriteString(`<label style="display:block;">Failure Matcher JSON (placeholder) <textarea name="failure_rules_json"></textarea></label>`)
 		body.WriteString(`<label style="display:block;">ActionsJSON <textarea name="actions_json"></textarea></label>`)
 		body.WriteString(`<button type="submit">Add Version</button></form></td>`)
 		body.WriteString(`</tr>`)
@@ -934,6 +949,7 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 
 	body.WriteString(`<div class="panel"><h3>Render Preview (No Send)</h3>`)
 	body.WriteString(`<p>Supported variables: ` + esc(strings.Join(renderPreviewSupportedVariables, ", ")) + `.</p>`)
+	body.WriteString(`<p>Restore/return guidance: configure return actions in Action Builder Lite with template action keys for normal-state restoration.</p>`)
 	body.WriteString(`<form method="post" action="/field-test/templates/render-preview">`)
 	body.WriteString(`<label>Template ID <input type="text" name="template_id"></label>`)
 	body.WriteString(`<label>Version (optional) <input type="number" name="version" style="width:70px"></label>`)
@@ -980,7 +996,7 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Comms Journal</h2><p><a href="/field-test/comms?export=json">Export JSON</a></p><table>`)
+	body.WriteString(`<div class="panel"><h2>Comms Journal</h2><p><a href="/field-test/comms/export">Export JSON</a></p><table>`)
 	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>EGM</th><th>Action Run</th><th>Template</th><th>Message Type</th><th>Result</th><th>Transport</th><th>HTTP</th><th>Latency(ms)</th><th>Payload</th></tr>`)
 	for _, row := range rows {
 		templateRef := row.TemplateID
@@ -1009,6 +1025,21 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "/field-test/comms", "Field-Test Comms Journal", body.String(), "", "")
 }
 
+func (s *Server) handleCommsExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rows, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: queryLimit(r, 500)})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="field-test-comms.json"`)
+	_ = json.NewEncoder(w).Encode(rows)
+}
+
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1026,7 +1057,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Emergency Audit Timeline</h2><p><a href="/field-test/audit?export=json">Export JSON</a></p><table>`)
+	body.WriteString(`<div class="panel"><h2>Emergency Audit Timeline</h2><p><a href="/field-test/audit/export">Export JSON</a></p><table>`)
 	body.WriteString(`<tr><th>Timestamp</th><th>Severity</th><th>Event</th><th>Summary</th><th>Input Transition</th><th>Action Run</th><th>Message</th><th>Operator</th><th>Details</th></tr>`)
 	for _, row := range rows {
 		body.WriteString(`<tr>`)
@@ -1043,6 +1074,21 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	body.WriteString(`</table></div>`)
 	s.renderPage(w, "/field-test/audit", "Field-Test Audit Timeline", body.String(), "", "")
+}
+
+func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rows, err := s.Store.ListAuditTimelineEntries(r.Context(), store.AuditTimelineListQuery{Limit: queryLimit(r, 500)})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="field-test-audit.json"`)
+	_ = json.NewEncoder(w).Encode(rows)
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -1083,10 +1129,83 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<tr><td>Real Send Default</td><td>disabled/gated</td></tr>`)
 	body.WriteString(`<tr><td>Transport Gate</td><td>` + esc(s.Options.TransportGateSummary) + `</td></tr>`)
 	body.WriteString(`<tr><td>Capture Safety</td><td>` + esc(s.Options.CapturePolicySummary) + `</td></tr>`)
+	body.WriteString(`<tr><td>Current Phase Safety</td><td>No real EGM send approved from field-test UI</td></tr>`)
+	latestMessages, msgErr := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 1})
+	lastSend := "none"
+	if msgErr == nil && len(latestMessages) > 0 {
+		lastSend = string(latestMessages[0].Result)
+	}
+	body.WriteString(`<tr><td>Last Send Result</td><td>` + esc(lastSend) + `</td></tr>`)
 	body.WriteString(`<tr><td>Certificate Status Summary</td><td>` + esc(certSummary) + `</td></tr>`)
 	body.WriteString(`<tr><td>Trust Material</td><td>placeholder/read-only in Phase 3A</td></tr>`)
 	body.WriteString(`</table></div>`)
 	s.renderPage(w, "/field-test/settings", "Field-Test Settings", body.String(), "", "")
+}
+
+func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	report, err := s.buildReadinessReport(r.Context())
+	if err != nil {
+		s.renderError(w, "/field-test/readiness", "Field-Test Readiness Review", err)
+		return
+	}
+	body := strings.Builder{}
+	body.WriteString(`<div class="panel"><h2>Field-Test Readiness Review</h2>`)
+	body.WriteString(`<p>Generated: ` + esc(fmtTime(report.GeneratedAt)) + `</p>`)
+	body.WriteString(`<p><a href="/field-test/readiness.json">Readiness JSON</a> | <a href="/field-test/export">Export Field-Test Evidence JSON</a></p>`)
+	body.WriteString(`</div>`)
+	for _, section := range report.Sections {
+		body.WriteString(`<div class="panel"><h3>` + esc(section.Name) + `</h3><table>`)
+		body.WriteString(`<tr><th>Status</th><th>Code</th><th>Summary</th><th>Detail</th></tr>`)
+		for _, check := range section.Checks {
+			body.WriteString(`<tr>`)
+			body.WriteString(`<td>` + esc(string(check.Status)) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(check.Code) + `</td>`)
+			body.WriteString(`<td>` + esc(check.Summary) + `</td>`)
+			body.WriteString(`<td>` + esc(check.Detail) + `</td>`)
+			body.WriteString(`</tr>`)
+		}
+		body.WriteString(`</table></div>`)
+	}
+	s.renderPage(w, "/field-test/readiness", "Field-Test Readiness Review", body.String(), "", "")
+}
+
+func (s *Server) handleReadinessJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	report, err := s.buildReadinessReport(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(report)
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	report, err := s.buildReadinessReport(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	pkg, err := s.buildExportPackage(r.Context(), report)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	filename := "field-test-evidence-" + time.Now().UTC().Format("20060102T150405Z") + ".json"
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	_ = json.NewEncoder(w).Encode(pkg)
 }
 
 func (s *Server) renderError(w http.ResponseWriter, active string, title string, err error) {
@@ -1101,6 +1220,7 @@ func (s *Server) renderPage(w http.ResponseWriter, active string, title string, 
 	htmlText.WriteString(`</title><link rel="stylesheet" href="/field-test/static/field-test.css"></head><body>`)
 	htmlText.WriteString(`<header><h1>Field-Test Operator Configuration Shell</h1><nav>`)
 	htmlText.WriteString(navLink("/field-test", "Home", active))
+	htmlText.WriteString(navLink("/field-test/readiness", "Readiness", active))
 	htmlText.WriteString(navLink("/field-test/inputs", "Inputs", active))
 	htmlText.WriteString(navLink("/field-test/actions", "Actions", active))
 	htmlText.WriteString(navLink("/field-test/egms", "EGMs", active))
