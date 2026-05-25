@@ -25,7 +25,6 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/operatorui"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
-	"github.com/tschneider-imagine/G2S_MC/internal/ui"
 )
 
 func main() {
@@ -45,7 +44,7 @@ func main() {
 	}
 	log.Printf("loaded config controller_id=%s site=%q checksum=%s", cfg.ControllerID, cfg.SiteName, checksum)
 	log.Printf(
-		"runtime config_path=%s database_path=%s bind_address=%s dashboard_path=/dashboard g2s_host_url=%s g2s_endpoint_path=%s egm_count=%d",
+		"runtime config_path=%s database_path=%s bind_address=%s operator_path=/operator g2s_host_url=%s g2s_endpoint_path=%s egm_count=%d",
 		*configPath,
 		cfg.Database.Path,
 		cfg.WebUI.BindAddress,
@@ -106,12 +105,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	uiServer, err := ui.NewServer()
-	if err != nil {
-		log.Fatalf("create dashboard: %v", err)
-	}
-	uiServer.RegisterRoutes(mux)
-
 	g2sServer := g2s.NewServer(cfg.G2S.HostID, eng)
 	g2sServer.RegisterRoutes(mux, cfg.G2S.EndpointPath)
 	rebuildV2API := &rebuildapi.Server{
@@ -283,6 +276,7 @@ func main() {
 		StartedAt:        startedAt,
 		SimulatedTrigger: *simulateTrigger,
 	}))
+	mux.HandleFunc("/", operatorEntryHandler())
 
 	server := &http.Server{
 		Addr:              cfg.WebUI.BindAddress,
@@ -300,10 +294,10 @@ func main() {
 	go func() {
 		var err error
 		if cfg.G2S.RequireTLS {
-			log.Printf("service ready protocol=https bind_address=%s health=/healthz ready=/readyz status=/api/status dashboard=/dashboard", cfg.WebUI.BindAddress)
+			log.Printf("service ready protocol=https bind_address=%s health=/healthz ready=/readyz status=/api/status operator=/operator", cfg.WebUI.BindAddress)
 			err = server.ListenAndServeTLS(cfg.Crypto.WebServerCertPath, cfg.Crypto.WebServerKeyPath)
 		} else {
-			log.Printf("service ready protocol=http bind_address=%s health=/healthz ready=/readyz status=/api/status dashboard=/dashboard", cfg.WebUI.BindAddress)
+			log.Printf("service ready protocol=http bind_address=%s health=/healthz ready=/readyz status=/api/status operator=/operator", cfg.WebUI.BindAddress)
 			err = server.ListenAndServe()
 		}
 		if err != nil && err != http.ErrServerClosed {
@@ -378,7 +372,7 @@ type runtimeStatus struct {
 	ConfigPath                  string    `json:"config_path"`
 	DatabasePath                string    `json:"database_path"`
 	BindAddress                 string    `json:"bind_address"`
-	DashboardPath               string    `json:"dashboard_path"`
+	OperatorPath                string    `json:"operator_path"`
 	HealthPath                  string    `json:"health_path"`
 	G2SEndpointPath             string    `json:"g2s_endpoint_path"`
 	G2SHostURL                  string    `json:"g2s_host_url"`
@@ -579,7 +573,7 @@ func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo, request *http.Re
 		ConfigPath:                  runtime.ConfigPath,
 		DatabasePath:                cfg.Database.Path,
 		BindAddress:                 cfg.WebUI.BindAddress,
-		DashboardPath:               "/dashboard",
+		OperatorPath:                "/operator",
 		HealthPath:                  "/healthz",
 		G2SEndpointPath:             cfg.G2S.EndpointPath,
 		G2SHostURL:                  cfg.G2S.HostURL,
@@ -593,6 +587,16 @@ func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo, request *http.Re
 		EGMHeartbeatIntervalMS:      cfg.Timeouts.EGMHeartbeatIntervalMS,
 		InputMode:                   "SIMULATED_SOFTWARE_ONLY",
 		SimulatedTrigger:            runtime.SimulatedTrigger,
+	}
+}
+
+func operatorEntryHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/operator", http.StatusSeeOther)
+			return
+		}
+		http.NotFound(w, r)
 	}
 }
 

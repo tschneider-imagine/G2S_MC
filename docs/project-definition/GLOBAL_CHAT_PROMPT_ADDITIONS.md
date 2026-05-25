@@ -35,4 +35,6 @@ Rules:
 - Do not embed project docs into runtime UI.
 - Do not add or retain Readiness/System Check runtime pages unless explicitly approved.
 - Do not use Gate/Safety Gate/Send Gate wording in runtime UI.
+- Do not serve legacy dashboard runtime routes.
+- Do not present fake EGM tooling as product runtime functionality.
 - Keep seeded visible runtime records product-neutral (no smoke/demo/fake naming).

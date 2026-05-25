@@ -45,8 +45,8 @@ go run ./cmd/g2s-gpio-probe
 
 Once running, the development listener exposes:
 
-- `GET /`
-- `GET /dashboard`
+- `GET /` (redirects to `/operator`)
+- `GET /operator`
 - `GET /healthz`
 - `GET /api/status`
 - `GET /api/incidents`

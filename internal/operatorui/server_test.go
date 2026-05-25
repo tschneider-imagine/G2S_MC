@@ -42,6 +42,7 @@ var forbiddenRuntimeTerms = []string{
 	"fake",
 	"simulator",
 	"test harness",
+	"dashboard",
 }
 
 func TestOperatorNavLabelsExact(t *testing.T) {
@@ -53,10 +54,17 @@ func TestOperatorNavLabelsExact(t *testing.T) {
 		t.Fatalf("status=%d", res.Code)
 	}
 	body := res.Body.String()
-	for _, label := range []string{"Live", "Inputs", "Actions", "Comms", "EGMs", "Templates", "Audit", "Settings"} {
-		if !strings.Contains(body, ">"+label+"<") {
+	nav := []string{"Live", "Inputs", "Actions", "Comms", "EGMs", "Templates", "Audit", "Settings"}
+	prev := -1
+	for _, label := range nav {
+		idx := strings.Index(body, ">"+label+"<")
+		if idx < 0 {
 			t.Fatalf("missing nav label %q", label)
 		}
+		if idx <= prev {
+			t.Fatalf("nav label %q is out of order", label)
+		}
+		prev = idx
 	}
 	if strings.Contains(body, ">Home<") {
 		t.Fatal("unexpected Home nav label")
@@ -99,6 +107,9 @@ func TestRemovedRoutesReturnNotFound(t *testing.T) {
 		"/operator/readiness.json",
 		"/operator/settings/system-check",
 		"/operator/settings/system-check.json",
+		"/dashboard",
+		"/static/dashboard.css",
+		"/static/dashboard.js",
 	} {
 		res := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)

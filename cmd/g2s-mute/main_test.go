@@ -1825,3 +1825,28 @@ func TestEGMHistoryHandlerRollupHeartbeatQueryParam(t *testing.T) {
 		t.Fatalf("rolled[3] = %+v, want EGM-01 keepAlive x3 bucket", rolled[3])
 	}
 }
+
+func TestOperatorEntryHandlerRedirectsRootToOperator(t *testing.T) {
+	handler := operatorEntryHandler()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+	if location := rec.Header().Get("Location"); location != "/operator" {
+		t.Fatalf("location = %q, want /operator", location)
+	}
+}
+
+func TestOperatorEntryHandlerReturnsNotFoundForLegacyDashboardRoutes(t *testing.T) {
+	handler := operatorEntryHandler()
+	for _, path := range []string{"/dashboard", "/static/dashboard.css", "/static/dashboard.js", "/field-test"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusNotFound)
+		}
+	}
+}

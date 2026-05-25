@@ -3,6 +3,8 @@
 > Correction note: Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
 >
 > Runtime correction: Readiness and System Check are not approved runtime features. They are removed from runtime scope.
+>
+> Runtime correction: Legacy dashboard routes are not served. Fake EGM tooling is not active product scope.
 
 Runtime product navigation must remain product/operator language only:
 
@@ -15,7 +17,7 @@ Runtime product navigation must remain product/operator language only:
 - Audit
 - Settings
 
-System Check and Evidence Export are operational views, not top-level project-management modules.
+Evidence Export is an operational view, not a top-level project-management module.
 
 ## Scope
 
@@ -42,8 +44,6 @@ This phase advances these field-test must-have sections:
 - `GET /operator/comms`
 - `GET /operator/audit`
 - `GET /operator/settings`
-- `GET /operator/settings/system-check`
-- `GET /operator/settings/system-check.json`
 
 Minimal mutation routes (server-rendered forms):
 
@@ -68,6 +68,7 @@ Minimal mutation routes (server-rendered forms):
 
 - no Readiness page, Readiness JSON, or Readiness export route,
 - no System Check page or System Check JSON route,
+- no legacy dashboard serving (`/dashboard`),
 - no runtime "Gate"/"Safety Gate"/"Send Gate" UI wording,
 - no real G2S send expansion,
 - no LAN allowlist or transport capability broadening,
@@ -76,6 +77,7 @@ Minimal mutation routes (server-rendered forms):
 - no new charts/dashboard polish work,
 - no project docs embedded as runtime product content.
 - no seeded visible runtime records with smoke/demo/queue-only naming.
+- no fake EGM product tooling.
 
 ## Definition Of Done
 

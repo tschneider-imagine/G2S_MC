@@ -6,6 +6,8 @@ Field-test is the milestone name only. The runtime product surface is the Operat
 Runtime UI scope is limited to: Live, Inputs, Actions, Comms, EGMs, Templates, Audit, Settings.
 Readiness/System Check runtime pages are not approved replacements and remain out of runtime scope.
 MVP runtime exports are Comms export and Audit/Evidence export only.
+Legacy dashboard routes are removed from active runtime serving.
+Fake EGM tooling is not active product scope.
 
 Runtime Operator Console navigation contract:
 

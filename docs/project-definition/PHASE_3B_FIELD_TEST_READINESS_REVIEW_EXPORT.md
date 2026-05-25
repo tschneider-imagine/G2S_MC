@@ -3,6 +3,8 @@
 > Correction note: Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
 >
 > Runtime scope correction: Readiness pages/endpoints are superseded and removed from runtime scope. System Check is not an approved replacement.
+>
+> Runtime scope correction: legacy dashboard routes are removed from active serving. Fake EGM tooling is outside product runtime scope.
 
 ## Scope
 
@@ -22,6 +24,7 @@ This phase advances these field-test must-have sections:
 - Readiness runtime pages and JSON endpoints are removed.
 - System Check runtime pages and JSON endpoints are not approved.
 - Runtime UI must not show project/test language or "Gate" wording.
+- Legacy dashboard routes are not served.
 
 ## Export Behavior
 
