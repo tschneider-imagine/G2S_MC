@@ -336,6 +336,7 @@ func TestGetInputsStateReturnsJSON(t *testing.T) {
 		InputID:              "input-1",
 		StableRawState:       inputs.InputStateHigh,
 		DerivedState:         inputs.DerivedStateNormal,
+		LatchActive:          true,
 		StableSince:          time.Now().UTC(),
 		LastObservedRawState: inputs.InputStateHigh,
 		LastObservedAt:       time.Now().UTC(),
@@ -365,6 +366,15 @@ func TestGetInputsStateReturnsJSON(t *testing.T) {
 	if len(states) != 1 || states[0].Channel.ID != "input-1" || states[0].RuntimeState == nil {
 		t.Fatalf("unexpected states: %+v", states)
 	}
+	if states[0].RuntimeState.LastObservedRawState != inputs.InputStateHigh {
+		t.Fatalf("raw_state=%q", states[0].RuntimeState.LastObservedRawState)
+	}
+	if states[0].RuntimeState.DerivedState != inputs.DerivedStateNormal {
+		t.Fatalf("derived_state=%q", states[0].RuntimeState.DerivedState)
+	}
+	if !states[0].RuntimeState.LatchActive {
+		t.Fatalf("latch_active=%v", states[0].RuntimeState.LatchActive)
+	}
 }
 
 func TestGetInputsTransitionsReturnsJSON(t *testing.T) {
@@ -376,6 +386,8 @@ func TestGetInputsTransitionsReturnsJSON(t *testing.T) {
 		PreviousDerived: inputs.DerivedStateNormal,
 		NewDerived:      inputs.DerivedStateTriggered,
 		TransitionAt:    time.Now().UTC(),
+		Reason:          "runtime poll",
+		ActionRunID:     "run-1",
 	}); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
@@ -397,6 +409,12 @@ func TestGetInputsTransitionsReturnsJSON(t *testing.T) {
 	}
 	if len(transitions) != 1 {
 		t.Fatalf("transitions len = %d, want 1", len(transitions))
+	}
+	if transitions[0].InputChannelID != "input-1" || transitions[0].ActionRunID != "run-1" {
+		t.Fatalf("unexpected transition row: %+v", transitions[0])
+	}
+	if transitions[0].Reason != "runtime poll" {
+		t.Fatalf("reason=%q", transitions[0].Reason)
 	}
 }
 

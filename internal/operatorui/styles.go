@@ -111,6 +111,16 @@ button {
 .mono {
   font-family: "Consolas", "Courier New", monospace;
 }
+.live-update-status {
+  margin: 0;
+  font-size: 13px;
+}
+.live-update-status.ok {
+  color: #1f5b2f;
+}
+.live-update-status.warn {
+  color: #8d1e1e;
+}
 .badge {
   display: inline-block;
   border-radius: 999px;

@@ -1131,6 +1131,57 @@ func TestInputsPageRendersExpectedInputsAndStates(t *testing.T) {
 	}
 }
 
+func TestInputsPageIncludesLiveStateMarkers(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/inputs", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Live State",
+		"Current State",
+		`id="inputs-live-status"`,
+		`id="inputs-live-updated"`,
+		`id="inputs-live-latches"`,
+		`data-live-input-id="emergency-broadcast"`,
+		`data-live-field="raw"`,
+		`data-live-field="derived"`,
+		`data-live-field="latch-active"`,
+		`data-live-field="last-observed"`,
+		`data-live-field="last-transition"`,
+		`/api/v2/inputs/state`,
+		`/operator/inputs/fragments/transitions`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in inputs page", expected)
+		}
+	}
+}
+
+func TestInputsTransitionsFragmentRendersRows(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/inputs/fragments/transitions", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		`data-transition-input-id="emergency-broadcast"`,
+		`data-transition-summary="`,
+		"TRIGGERED",
+		"Input transition recorded",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in transition fragment", expected)
+		}
+	}
+}
+
 func TestInputsPageRendersMissingExpectedInputWarning(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t, ctx)

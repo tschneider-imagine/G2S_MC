@@ -116,6 +116,7 @@ func NewServer(store Store, options Options, authorizeMutation func(http.Respons
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute(""), s.handleHome)
 	mux.HandleFunc(operatorRoute("/inputs"), s.handleInputs)
+	mux.HandleFunc(operatorRoute("/inputs/fragments/transitions"), s.handleInputTransitionsFragment)
 	mux.HandleFunc(operatorRoute("/inputs/"), s.handleInputByID)
 	mux.HandleFunc(operatorRoute("/actions"), s.handleActions)
 	mux.HandleFunc(operatorRoute("/actions/"), s.handleActionByID)
@@ -316,16 +317,24 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 	s.renderInputsPage(w, r, "Input updated: "+updated.ID, "")
 }
 
-func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, message string, errText string) {
-	channels, err := s.Store.ListInputChannels(r.Context())
-	if err != nil {
-		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
+func (s *Server) handleInputTransitionsFragment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	transitions, err := s.Store.ListInputTransitions(r.Context(), 200)
+	transitions, auditByTransitionID, _, err := s.loadInputTransitionView(r.Context(), 200, 300)
 	if err != nil {
-		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(renderInputTransitionRows(transitions, auditByTransitionID)))
+}
+
+func (s *Server) loadInputTransitionView(ctx context.Context, transitionLimit int, auditLimit int) ([]inputs.InputTransition, map[int64]audit.AuditTimelineEntry, map[string]inputs.InputTransition, error) {
+	transitions, err := s.Store.ListInputTransitions(ctx, transitionLimit)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	lastTransitionByInput := map[string]inputs.InputTransition{}
 	for _, transition := range transitions {
@@ -333,10 +342,9 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 			lastTransitionByInput[transition.InputChannelID] = transition
 		}
 	}
-	auditRows, err := s.Store.ListAuditTimelineEntries(r.Context(), store.AuditTimelineListQuery{Limit: 300})
+	auditRows, err := s.Store.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: auditLimit})
 	if err != nil {
-		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
-		return
+		return nil, nil, nil, err
 	}
 	auditByTransitionID := map[int64]audit.AuditTimelineEntry{}
 	for _, row := range auditRows {
@@ -345,6 +353,201 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 				auditByTransitionID[row.InputTransitionID] = row
 			}
 		}
+	}
+	return transitions, auditByTransitionID, lastTransitionByInput, nil
+}
+
+func transitionSummary(transition inputs.InputTransition, auditRow audit.AuditTimelineEntry) string {
+	actionQueued := actionQueuedFromTransition(transition, auditRow)
+	return fmt.Sprintf("%s %s->%s action=%s", fmtTime(transition.TransitionAt), transition.PreviousDerived, transition.NewDerived, defaultString(strings.TrimSpace(actionQueued), "-"))
+}
+
+func renderInputTransitionRows(transitions []inputs.InputTransition, auditByTransitionID map[int64]audit.AuditTimelineEntry) string {
+	rows := strings.Builder{}
+	for _, transition := range transitions {
+		auditRow := auditByTransitionID[transition.ID]
+		rawTo := "-"
+		if strings.TrimSpace(auditRow.DetailJSON) != "" {
+			rawTo = defaultString(extractJSONValue(auditRow.DetailJSON, "raw_state"), "-")
+		}
+		actionQueued := actionQueuedFromTransition(transition, auditRow)
+		note := defaultString(strings.TrimSpace(transition.Reason), "-")
+		if strings.TrimSpace(auditRow.Summary) != "" {
+			note = auditRow.Summary
+		}
+		summary := transitionSummary(transition, auditRow)
+		rows.WriteString(`<tr data-transition-input-id="` + esc(transition.InputChannelID) + `" data-transition-summary="` + esc(summary) + `">`)
+		rows.WriteString(`<td>` + esc(fmtTime(transition.TransitionAt)) + `</td>`)
+		rows.WriteString(`<td class="mono">` + esc(transition.InputChannelID) + `</td>`)
+		rows.WriteString(`<td>` + esc(string(transition.PreviousDerived)) + `</td>`)
+		rows.WriteString(`<td>` + esc(string(transition.NewDerived)) + `</td>`)
+		rows.WriteString(`<td>-</td>`)
+		rows.WriteString(`<td>` + esc(rawTo) + `</td>`)
+		rows.WriteString(`<td class="mono">` + esc(defaultString(strings.TrimSpace(actionQueued), "-")) + `</td>`)
+		rows.WriteString(`<td>` + esc(zeroDash64(transition.ID)) + `</td>`)
+		rows.WriteString(`<td>` + esc(zeroDash64(auditRow.ID)) + `</td>`)
+		rows.WriteString(`<td>` + esc(note) + `</td>`)
+		rows.WriteString(`</tr>`)
+	}
+	return rows.String()
+}
+
+func inputsLiveScript() string {
+	return `<script>
+(function () {
+  var stateURL = '/api/v2/inputs/state';
+  var transitionsURL = '/operator/inputs/fragments/transitions';
+  var refreshIntervalMS = 1000;
+  var statusEl = document.getElementById('inputs-live-status');
+  var updatedEl = document.getElementById('inputs-live-updated');
+  var latchEl = document.getElementById('inputs-live-latches');
+  var transitionsBody = document.getElementById('inputs-transitions-body');
+  if (!window.fetch || !statusEl || !updatedEl || !latchEl || !transitionsBody) {
+    return;
+  }
+
+  var rowMap = new Map();
+  var stateRows = document.querySelectorAll('tr[data-live-input-id]');
+  for (var i = 0; i < stateRows.length; i++) {
+    var row = stateRows[i];
+    rowMap.set(row.getAttribute('data-live-input-id'), row);
+  }
+
+  function normalize(value, fallback) {
+    if (typeof value === 'string') {
+      var trimmed = value.trim();
+      if (trimmed !== '') {
+        return trimmed;
+      }
+    }
+    return fallback;
+  }
+
+  function formatTimestamp(value) {
+    if (!value) {
+      return '-';
+    }
+    var ts = new Date(value);
+    if (Number.isNaN(ts.getTime())) {
+      return '-';
+    }
+    return ts.toISOString();
+  }
+
+  function setField(row, field, value) {
+    var cell = row.querySelector('[data-live-field="' + field + '"]');
+    if (cell) {
+      cell.textContent = value;
+    }
+  }
+
+  function setLiveStatus(text, failed) {
+    statusEl.textContent = text;
+    statusEl.className = failed ? 'live-update-status warn' : 'live-update-status ok';
+  }
+
+  function syncLastTransitionSummary() {
+    var seen = {};
+    var rows = transitionsBody.querySelectorAll('tr[data-transition-input-id]');
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var inputID = normalize(row.getAttribute('data-transition-input-id'), '');
+      if (inputID === '' || seen[inputID]) {
+        continue;
+      }
+      seen[inputID] = true;
+      var summary = normalize(row.getAttribute('data-transition-summary'), '-');
+      var inputRow = rowMap.get(inputID);
+      if (inputRow) {
+        setField(inputRow, 'last-transition', summary);
+      }
+    }
+  }
+
+  function updateStateRows(payload) {
+    if (!Array.isArray(payload)) {
+      return;
+    }
+    var activeLatches = [];
+    for (var i = 0; i < payload.length; i++) {
+      var envelope = payload[i] || {};
+      var channel = envelope.channel || {};
+      var runtime = envelope.runtime_state || {};
+      var inputID = normalize(channel.id, '');
+      if (inputID === '') {
+        continue;
+      }
+      var row = rowMap.get(inputID);
+      if (!row) {
+        continue;
+      }
+
+      var rawState = normalize(runtime.last_observed_raw_state, normalize(channel.current_state, 'unknown'));
+      var derivedState = normalize(runtime.derived_state, normalize(channel.derived_state, 'unknown'));
+      var latchActive = runtime.latch_active ? 'yes' : 'no';
+      var lastObserved = formatTimestamp(runtime.last_observed_at);
+
+      setField(row, 'raw', rawState);
+      setField(row, 'derived', derivedState);
+      setField(row, 'latch-active', latchActive);
+      setField(row, 'last-observed', lastObserved);
+
+      if (channel.latching_mode === 'MANUAL_CLEAR' && runtime.latch_active) {
+        activeLatches.push(inputID);
+      }
+    }
+    latchEl.textContent = activeLatches.length > 0 ? activeLatches.join(', ') : 'none';
+  }
+
+  var polling = false;
+  function refreshLiveState() {
+    if (polling) {
+      return;
+    }
+    polling = true;
+    Promise.all([
+      fetch(stateURL, { cache: 'no-store' }).then(function (response) {
+        if (!response.ok) {
+          throw new Error('state');
+        }
+        return response.json();
+      }),
+      fetch(transitionsURL, { cache: 'no-store' }).then(function (response) {
+        if (!response.ok) {
+          throw new Error('transitions');
+        }
+        return response.text();
+      })
+    ]).then(function (results) {
+      updateStateRows(results[0]);
+      transitionsBody.innerHTML = results[1];
+      syncLastTransitionSummary();
+      updatedEl.textContent = new Date().toISOString();
+      setLiveStatus('Live update active', false);
+    }).catch(function () {
+      setLiveStatus('Live update unavailable', true);
+    }).then(function () {
+      polling = false;
+    });
+  }
+
+  setLiveStatus('Live update active', false);
+  refreshLiveState();
+  window.setInterval(refreshLiveState, refreshIntervalMS);
+})();
+</script>`
+}
+
+func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, message string, errText string) {
+	channels, err := s.Store.ListInputChannels(r.Context())
+	if err != nil {
+		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
+		return
+	}
+	transitions, auditByTransitionID, lastTransitionByInput, err := s.loadInputTransitionView(r.Context(), 200, 300)
+	if err != nil {
+		s.renderError(w, "/operator/inputs", "Operator Console Inputs", err)
+		return
 	}
 
 	body := strings.Builder{}
@@ -368,8 +571,14 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 		body.WriteString(`<div class="panel"><h3>Input Coverage</h3><p>Missing configured input channels: <span class="mono">` + esc(strings.Join(missingInputs, ", ")) + `</span></p></div>`)
 	}
 
-	body.WriteString(`<div class="panel"><h2>Configured Inputs</h2><table>`)
-	body.WriteString(`<tr><th>ID</th><th>Name</th><th>GPIO</th><th>Raw</th><th>Derived</th><th>Latch Mode</th><th>Latch Active</th><th>Normal</th><th>Debounce</th><th>Priority</th><th>On Trigger</th><th>On Normal</th><th>Last Transition</th><th>Edit</th></tr>`)
+	body.WriteString(`<div class="panel"><h2>Live State</h2>`)
+	body.WriteString(`<p class="live-update-status ok" id="inputs-live-status">Live update active</p>`)
+	body.WriteString(`<p>Last Updated: <span class="mono" id="inputs-live-updated">-</span></p>`)
+	body.WriteString(`<p>Active Manual Latches: <span class="mono" id="inputs-live-latches">-</span></p>`)
+	body.WriteString(`</div>`)
+
+	body.WriteString(`<div class="panel"><h2>Current State</h2><table>`)
+	body.WriteString(`<tr><th>ID</th><th>Name</th><th>GPIO</th><th>Raw</th><th>Derived</th><th>Latch Mode</th><th>Latch Active</th><th>Last Observed</th><th>Normal</th><th>Debounce</th><th>Priority</th><th>On Trigger</th><th>On Normal</th><th>Last Transition</th><th>Edit</th></tr>`)
 	for _, channel := range channels {
 		runtimeState, err := s.Store.GetInputRuntimeState(r.Context(), channel.ID)
 		if err != nil {
@@ -378,12 +587,12 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 		}
 		lastTransition := "-"
 		if transition, ok := lastTransitionByInput[channel.ID]; ok {
-			actionQueued := actionQueuedFromTransition(transition, auditByTransitionID[transition.ID])
-			lastTransition = fmt.Sprintf("%s %s->%s action=%s", fmtTime(transition.TransitionAt), transition.PreviousDerived, transition.NewDerived, defaultString(strings.TrimSpace(actionQueued), "-"))
+			lastTransition = transitionSummary(transition, auditByTransitionID[transition.ID])
 		}
 		rawState := string(channel.CurrentState)
 		derivedState := string(channel.DerivedState)
 		latchActive := "no"
+		lastObserved := "-"
 		if runtimeState != nil {
 			if runtimeState.LastObservedRawState != "" {
 				rawState = string(runtimeState.LastObservedRawState)
@@ -394,21 +603,23 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 			if runtimeState.LatchActive {
 				latchActive = "yes"
 			}
+			lastObserved = fmtTime(runtimeState.LastObservedAt)
 		}
-		body.WriteString(`<tr>`)
+		body.WriteString(`<tr data-live-input-id="` + esc(channel.ID) + `">`)
 		body.WriteString(`<td class="mono">` + esc(channel.ID) + `</td>`)
 		body.WriteString(`<td>` + esc(channel.Name) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(channel.GPIOChannel) + `</td>`)
-		body.WriteString(`<td>` + esc(rawState) + `</td>`)
-		body.WriteString(`<td>` + esc(derivedState) + `</td>`)
+		body.WriteString(`<td data-live-field="raw">` + esc(defaultString(strings.TrimSpace(rawState), "unknown")) + `</td>`)
+		body.WriteString(`<td data-live-field="derived">` + esc(defaultString(strings.TrimSpace(derivedState), "unknown")) + `</td>`)
 		body.WriteString(`<td>` + esc(string(channel.LatchingMode)) + `</td>`)
-		body.WriteString(`<td>` + esc(latchActive) + `</td>`)
+		body.WriteString(`<td data-live-field="latch-active">` + esc(latchActive) + `</td>`)
+		body.WriteString(`<td class="mono" data-live-field="last-observed">` + esc(lastObserved) + `</td>`)
 		body.WriteString(`<td>` + esc(string(channel.NormalState)) + `</td>`)
 		body.WriteString(`<td>` + esc(strconv.Itoa(channel.DebounceMS)) + `</td>`)
 		body.WriteString(`<td>` + esc(strconv.Itoa(channel.Priority)) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(channel.OnTriggerActionID) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(channel.OnNormalActionID) + `</td>`)
-		body.WriteString(`<td>` + esc(lastTransition) + `</td>`)
+		body.WriteString(`<td data-live-field="last-transition">` + esc(lastTransition) + `</td>`)
 		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/inputs/` + esc(channel.ID) + `">`)
 		body.WriteString(`normal <select name="normal_state"><option value="HIGH"` + selected(string(channel.NormalState), string(inputs.InputStateHigh)) + `>HIGH</option><option value="LOW"` + selected(string(channel.NormalState), string(inputs.InputStateLow)) + `>LOW</option></select> `)
 		body.WriteString(`debounce <input type="number" name="debounce_ms" value="` + esc(strconv.Itoa(channel.DebounceMS)) + `" style="width:76px"> `)
@@ -426,31 +637,11 @@ func (s *Server) renderInputsPage(w http.ResponseWriter, r *http.Request, messag
 
 	body.WriteString(`<div class="panel"><h3>Recent Input Transitions</h3><table>`)
 	body.WriteString(`<tr><th>Timestamp</th><th>Input ID</th><th>From</th><th>To</th><th>Raw From</th><th>Raw To</th><th>Action Queued</th><th>Transition ID</th><th>Related Audit</th><th>Notes</th></tr>`)
-	for _, transition := range transitions {
-		auditRow := auditByTransitionID[transition.ID]
-		rawTo := "-"
-		if strings.TrimSpace(auditRow.DetailJSON) != "" {
-			rawTo = defaultString(extractJSONValue(auditRow.DetailJSON, "raw_state"), "-")
-		}
-		actionQueued := actionQueuedFromTransition(transition, auditRow)
-		note := defaultString(strings.TrimSpace(transition.Reason), "-")
-		if strings.TrimSpace(auditRow.Summary) != "" {
-			note = auditRow.Summary
-		}
-		body.WriteString(`<tr>`)
-		body.WriteString(`<td>` + esc(fmtTime(transition.TransitionAt)) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(transition.InputChannelID) + `</td>`)
-		body.WriteString(`<td>` + esc(string(transition.PreviousDerived)) + `</td>`)
-		body.WriteString(`<td>` + esc(string(transition.NewDerived)) + `</td>`)
-		body.WriteString(`<td>-</td>`)
-		body.WriteString(`<td>` + esc(rawTo) + `</td>`)
-		body.WriteString(`<td class="mono">` + esc(defaultString(strings.TrimSpace(actionQueued), "-")) + `</td>`)
-		body.WriteString(`<td>` + esc(zeroDash64(transition.ID)) + `</td>`)
-		body.WriteString(`<td>` + esc(zeroDash64(auditRow.ID)) + `</td>`)
-		body.WriteString(`<td>` + esc(note) + `</td>`)
-		body.WriteString(`</tr>`)
-	}
+	body.WriteString(`<tbody id="inputs-transitions-body">`)
+	body.WriteString(renderInputTransitionRows(transitions, auditByTransitionID))
+	body.WriteString(`</tbody>`)
 	body.WriteString(`</table></div>`)
+	body.WriteString(inputsLiveScript())
 	s.renderPage(w, operatorRoute("/inputs"), "Operator Inputs", body.String(), message, errText)
 }
 

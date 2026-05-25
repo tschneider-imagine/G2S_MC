@@ -4,6 +4,7 @@ Use this folder as the active planning entry point for G2S_MC rebuild work.
 
 Field-test is the milestone name only. The runtime product surface is the Operator Console and must not use field-test as product identity.
 Runtime UI scope is limited to: Live, Inputs, Actions, Comms, EGMs, Templates, Audit, Settings.
+Electrical Input Monitor behavior is implemented on `/operator/inputs` as a live state display with periodic in-page updates; no new top-level page is added.
 Readiness/System Check runtime pages are not approved replacements and remain out of runtime scope.
 MVP runtime exports are Comms export and Audit/Evidence export only.
 Legacy dashboard routes are removed from active runtime serving.
