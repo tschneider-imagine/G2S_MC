@@ -1002,6 +1002,7 @@ func TestSettingsPageShowsDeliverySettings(t *testing.T) {
 		"Delivery Default",
 		"Approved Delivery",
 		"Delivery Timeout (ms)",
+		"Input Runtime Enabled",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in settings page", expected)
@@ -1334,6 +1335,7 @@ func defaultOperatorOptions() Options {
 		AllowDeliveryDefault:    false,
 		CaptureOnlyDefault:      false,
 		DeliveryTimeoutMS:       5000,
+		InputRuntimeEnabled:     true,
 		StartedAt:               time.Now().UTC().Add(-5 * time.Minute),
 	}
 }

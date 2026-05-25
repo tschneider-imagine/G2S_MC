@@ -95,6 +95,7 @@ type Options struct {
 	AllowDeliveryDefault    bool
 	CaptureOnlyDefault      bool
 	DeliveryTimeoutMS       int
+	InputRuntimeEnabled     bool
 	StartedAt               time.Time
 }
 
@@ -1784,6 +1785,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`</table></div>`)
 
 	body.WriteString(`<div class="panel"><h2>Current Runtime Notes</h2><ul>`)
+	body.WriteString(`<li>Input Runtime Enabled: ` + esc(enabledText(s.Options.InputRuntimeEnabled)) + `.</li>`)
 	body.WriteString(`<li>Settings view is read-only.</li>`)
 	body.WriteString(`<li>Certificate material details are metadata-only; private keys are not displayed.</li>`)
 	body.WriteString(`<li>Message delivery behavior is unchanged in this view.</li>`)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
@@ -1848,5 +1849,51 @@ func TestOperatorEntryHandlerReturnsNotFoundForLegacyDashboardRoutes(t *testing.
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusNotFound)
 		}
+	}
+}
+
+func TestParseDeliveryModeFlag(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    g2stransport.DeliveryMode
+		wantErr bool
+	}{
+		{name: "default disabled", raw: "", want: g2stransport.DeliveryModeDisabled},
+		{name: "disabled uppercase", raw: "DISABLED", want: g2stransport.DeliveryModeDisabled},
+		{name: "http lowercase", raw: "http", want: g2stransport.DeliveryModeHTTP},
+		{name: "invalid", raw: "dry-run", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseDeliveryModeFlag(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q", tc.raw)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDeliveryModeFlag(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("mode=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateInputRuntimeFlags(t *testing.T) {
+	if err := validateInputRuntimeFlags(100*time.Millisecond, g2stransport.DeliveryModeDisabled, false, 5000); err != nil {
+		t.Fatalf("expected valid flags: %v", err)
+	}
+	if err := validateInputRuntimeFlags(0, g2stransport.DeliveryModeDisabled, false, 5000); err == nil {
+		t.Fatal("expected interval validation error")
+	}
+	if err := validateInputRuntimeFlags(100*time.Millisecond, g2stransport.DeliveryModeDisabled, false, -1); err == nil {
+		t.Fatal("expected timeout validation error")
+	}
+	if err := validateInputRuntimeFlags(100*time.Millisecond, g2stransport.DeliveryModeDisabled, true, 5000); err == nil {
+		t.Fatal("expected allow-delivery/mode validation error")
 	}
 }

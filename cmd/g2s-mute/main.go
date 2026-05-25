@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -17,13 +18,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tschneider-imagine/G2S_MC/internal/actionexecutor"
+	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	rebuildapi "github.com/tschneider-imagine/G2S_MC/internal/api"
+	"github.com/tschneider-imagine/G2S_MC/internal/appliance"
 	"github.com/tschneider-imagine/G2S_MC/internal/certs"
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
+	"github.com/tschneider-imagine/G2S_MC/internal/gpioinput"
 	"github.com/tschneider-imagine/G2S_MC/internal/inbound"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputpoller"
+	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/operatorui"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
@@ -33,7 +40,37 @@ func main() {
 	startedAt := time.Now()
 	configPath := flag.String("config", "configs/config.example.json", "path to controller config")
 	simulateTrigger := flag.Bool("simulate-trigger", false, "submit a simulated security line event after boot")
+	inputRuntimeEnabled := flag.Bool("input-runtime", false, "enable runtime input polling loop")
+	inputRuntimeInterval := flag.Duration("input-runtime-interval", 100*time.Millisecond, "runtime input poll interval")
+	inputRuntimeSeedDefaults := flag.Bool("input-runtime-seed-defaults", false, "seed default input channels when runtime loop starts")
+	inputRuntimeExecuteActions := flag.Bool("input-runtime-execute-actions", false, "execute newly queued action runs from runtime input transitions")
+	deliveryModeRaw := flag.String("delivery-mode", "disabled", "delivery mode for runtime action execution: disabled|http")
+	allowDelivery := flag.Bool("allow-delivery", false, "allow configured delivery attempts when runtime action execution is enabled")
+	captureOnly := flag.Bool("capture-only", false, "restrict delivery attempts to localhost capture endpoints")
+	deliveryTimeoutMS := flag.Int("delivery-timeout-ms", 5000, "delivery timeout in milliseconds for runtime action execution")
 	flag.Parse()
+
+	deliveryMode, err := parseDeliveryModeFlag(*deliveryModeRaw)
+	if err != nil {
+		log.Fatalf("invalid runtime delivery mode: %v", err)
+	}
+	if err := validateInputRuntimeFlags(*inputRuntimeInterval, deliveryMode, *allowDelivery, *deliveryTimeoutMS); err != nil {
+		log.Fatalf("invalid runtime input options: %v", err)
+	}
+	deliverySettings := g2stransport.DeliverySettings{
+		Mode:          deliveryMode,
+		AllowDelivery: *allowDelivery,
+		CaptureOnly:   *captureOnly,
+		TimeoutMS:     *deliveryTimeoutMS,
+	}.Normalize()
+	runtimeOptions := appliance.RuntimeOptions{
+		Enabled:           *inputRuntimeEnabled,
+		PollInterval:      *inputRuntimeInterval,
+		SeedDefaultInputs: *inputRuntimeSeedDefaults,
+		ExecuteActions:    *inputRuntimeExecuteActions,
+		DeliverySettings:  deliverySettings,
+		Actor:             "g2s-mute",
+	}
 
 	cfg, err := config.LoadFile(*configPath)
 	if err != nil {
@@ -106,6 +143,37 @@ func main() {
 		}()
 	}
 
+	var runtimeLoop *appliance.Runtime
+	if runtimeOptions.Enabled {
+		reader := gpioinput.NewReader()
+		reader.Consumer = "g2s_mute_runtime"
+		runtimeLoop = &appliance.Runtime{
+			Poller: &inputpoller.Poller{
+				Store:  auditStore,
+				Reader: reader,
+				Evaluator: &inputruntime.Evaluator{
+					Store: auditStore,
+					Clock: time.Now,
+				},
+				Clock: time.Now,
+			},
+			Queuer: &actionruntime.Queuer{
+				Store: auditStore,
+				Clock: time.Now,
+			},
+			Executor: &actionexecutor.Executor{
+				Store:  auditStore,
+				Sender: &g2stransport.HTTPSender{},
+				Clock:  time.Now,
+			},
+			SeedDefaultInputsFn: func(ctx context.Context) error {
+				return inputpoller.EnsureDefaultPi4InputChannels(ctx, auditStore, false)
+			},
+			Logger:  log.Default(),
+			Options: runtimeOptions,
+		}
+	}
+
 	mux := http.NewServeMux()
 	g2sServer := g2s.NewServer(cfg.G2S.HostID, eng)
 	g2sServer.SetInboundProcessor(&inbound.Service{Store: auditStore, Clock: time.Now})
@@ -143,10 +211,11 @@ func main() {
 			CAConfigured:            strings.TrimSpace(cfg.Crypto.G2SCAPath) != "",
 			ClientCertConfigured:    strings.TrimSpace(cfg.Crypto.G2SClientCertPath) != "",
 			ServerCertConfigured:    strings.TrimSpace(cfg.Crypto.WebServerCertPath) != "",
-			DeliveryMode:            string(g2stransport.DeliveryModeDisabled),
-			AllowDeliveryDefault:    false,
-			CaptureOnlyDefault:      false,
-			DeliveryTimeoutMS:       cfg.Timeouts.G2SRequestTimeoutMS,
+			DeliveryMode:            string(deliverySettings.Mode),
+			AllowDeliveryDefault:    deliverySettings.AllowDelivery,
+			CaptureOnlyDefault:      deliverySettings.CaptureOnly,
+			DeliveryTimeoutMS:       deliverySettings.TimeoutMS,
+			InputRuntimeEnabled:     runtimeOptions.Enabled,
 			StartedAt:               startedAt,
 		},
 		func(w http.ResponseWriter, r *http.Request) bool {
@@ -304,6 +373,14 @@ func main() {
 		SimulatedTrigger: *simulateTrigger,
 	}))
 	mux.HandleFunc("/", operatorEntryHandler())
+
+	if runtimeLoop != nil {
+		go func() {
+			if err := runtimeLoop.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("input_runtime stopped error=%v", err)
+			}
+		}()
+	}
 
 	server := &http.Server{
 		Addr:              cfg.WebUI.BindAddress,
@@ -1824,4 +1901,28 @@ func queryBool(r *http.Request, key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func parseDeliveryModeFlag(raw string) (g2stransport.DeliveryMode, error) {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "", "DISABLED":
+		return g2stransport.DeliveryModeDisabled, nil
+	case "HTTP":
+		return g2stransport.DeliveryModeHTTP, nil
+	default:
+		return "", fmt.Errorf("invalid delivery mode %q (use disabled|http)", raw)
+	}
+}
+
+func validateInputRuntimeFlags(interval time.Duration, mode g2stransport.DeliveryMode, allowDelivery bool, timeoutMS int) error {
+	if interval <= 0 {
+		return fmt.Errorf("-input-runtime-interval must be > 0")
+	}
+	if timeoutMS < 0 {
+		return fmt.Errorf("-delivery-timeout-ms must be >= 0")
+	}
+	if allowDelivery && mode != g2stransport.DeliveryModeHTTP {
+		return fmt.Errorf("-allow-delivery requires -delivery-mode http")
+	}
+	return nil
 }

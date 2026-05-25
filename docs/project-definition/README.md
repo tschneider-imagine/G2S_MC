@@ -57,6 +57,7 @@ Visible seed data in Operator Console must remain product-neutral (for example c
 - `PHASE_4B_CONFIGURED_DELIVERY_SETTINGS.md`
 - `PHASE_4C_INPUT_TO_ACTION_EXECUTION.md`
 - `PHASE_4D_INBOUND_MESSAGE_CONFIRMATION_LITE.md`
+- `PHASE_4E_RUNTIME_APPLIANCE_LOOP.md`
 - `TRANSPORT_POLICY_REVIEW.md`
 
 ## Archived Old Plans
