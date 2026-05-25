@@ -67,6 +67,7 @@ type Server struct {
 	AuthorizeMutation       func(http.ResponseWriter, *http.Request) bool
 	ActionSender            g2stransport.Sender
 	DefaultDeliverySettings g2stransport.DeliverySettings
+	EndpointDefaults        g2stransport.EndpointDefaults
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
@@ -244,8 +245,9 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 		delivery = delivery.Normalize()
 
 		executor := actionexecutor.Executor{
-			Store:  s.Store,
-			Sender: s.ActionSender,
+			Store:            s.Store,
+			Sender:           s.ActionSender,
+			EndpointDefaults: s.EndpointDefaults,
 		}
 		result, err := executor.Execute(r.Context(), actionexecutor.ExecuteRequest{
 			ActionRunID: id,

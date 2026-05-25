@@ -5,7 +5,9 @@ Outbound transport boundary for G2S action messages.
 This package owns:
 - transport modes and send gating,
 - disabled/no-send behavior,
-- guarded HTTP transport behavior.
+- guarded HTTP transport behavior,
+- configured endpoint resolution from EGM/template data,
+- configured TLS/mTLS outbound client construction.
 
 This package does not own:
 - action planning,

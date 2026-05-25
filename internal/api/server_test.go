@@ -1243,6 +1243,8 @@ func seedDispatchFixtures(t *testing.T, ctx context.Context, db *store.SQLiteSto
 	if err := db.UpsertEGMRecord(ctx, egms.EGMRecord{
 		EGMID:              "EGM-1",
 		DisplayName:        "Smoke EGM 1",
+		IPAddress:          "127.0.0.1",
+		EndpointPath:       "http://127.0.0.1/g2s",
 		Enabled:            true,
 		EmergencyEnabled:   true,
 		TemplateID:         "template-smoke-no-send",

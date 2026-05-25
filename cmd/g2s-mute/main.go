@@ -144,6 +144,15 @@ func main() {
 		}()
 	}
 
+	endpointDefaults := g2stransport.EndpointDefaultsFromHostURL(cfg.G2S.HostURL)
+	configuredSender := g2stransport.NewConfiguredHTTPSender(g2stransport.HTTPClientConfig{
+		TLSRequired:      cfg.G2S.RequireTLS,
+		RootCAPath:       strings.TrimSpace(cfg.Crypto.G2SCAPath),
+		ClientCertPath:   strings.TrimSpace(cfg.Crypto.G2SClientCertPath),
+		ClientKeyPath:    strings.TrimSpace(cfg.Crypto.G2SClientKeyPath),
+		DefaultTimeoutMS: cfg.Timeouts.G2SRequestTimeoutMS,
+	})
+
 	var runtimeLoop *appliance.Runtime
 	if runtimeOptions.Enabled {
 		reader := gpioinput.NewReader()
@@ -163,9 +172,10 @@ func main() {
 				Clock: time.Now,
 			},
 			Executor: &actionexecutor.Executor{
-				Store:  auditStore,
-				Sender: &g2stransport.HTTPSender{},
-				Clock:  time.Now,
+				Store:            auditStore,
+				Sender:           configuredSender,
+				EndpointDefaults: endpointDefaults,
+				Clock:            time.Now,
 			},
 			IncidentManager: &incidentsvc.Service{
 				Store: auditStore,
@@ -188,13 +198,14 @@ func main() {
 		AuthorizeMutation: func(w http.ResponseWriter, r *http.Request) bool {
 			return requireMutationAuth(w, r, cfg)
 		},
-		ActionSender: &g2stransport.HTTPSender{},
+		ActionSender: configuredSender,
 		DefaultDeliverySettings: g2stransport.DeliverySettings{
 			Mode:          g2stransport.DeliveryModeDisabled,
 			AllowDelivery: false,
 			CaptureOnly:   false,
 			TimeoutMS:     cfg.Timeouts.G2SRequestTimeoutMS,
 		},
+		EndpointDefaults: endpointDefaults,
 	}
 	rebuildV2API.RegisterRoutes(mux)
 	operatorServer := operatorui.NewServer(

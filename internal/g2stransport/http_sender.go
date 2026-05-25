@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -17,6 +18,7 @@ const (
 
 type HTTPSender struct {
 	Client               *http.Client
+	ClientFactory        func(timeoutMS int) (*http.Client, error)
 	Clock                func() time.Time
 	ResponseExcerptBytes int
 }
@@ -50,6 +52,11 @@ func (s *HTTPSender) Send(ctx context.Context, request SendRequest) (SendResult,
 		result.Error = "missing endpoint URL"
 		return result, nil
 	}
+	parsedURL, parseErr := url.Parse(endpointURL)
+	if parseErr != nil || strings.TrimSpace(parsedURL.Scheme) == "" || strings.TrimSpace(parsedURL.Host) == "" {
+		result.Error = "invalid endpoint URL"
+		return result, nil
+	}
 	if request.CaptureOnlySend {
 		allowed, reason := CaptureEndpointAllowed(endpointURL)
 		if !allowed {
@@ -67,8 +74,19 @@ func (s *HTTPSender) Send(ctx context.Context, request SendRequest) (SendResult,
 	if timeoutMS <= 0 {
 		timeoutMS = defaultTimeoutMS
 	}
-	client := s.Client
-	if client == nil {
+	var client *http.Client
+	if s.ClientFactory != nil {
+		factoryClient, factoryErr := s.ClientFactory(timeoutMS)
+		if factoryErr != nil {
+			result.Error = fmt.Sprintf("http client configuration failed: %v", factoryErr)
+			return result, nil
+		}
+		client = factoryClient
+	} else if s.Client != nil {
+		clone := *s.Client
+		clone.Timeout = time.Duration(timeoutMS) * time.Millisecond
+		client = &clone
+	} else {
 		client = &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond}
 	}
 

@@ -650,7 +650,12 @@ func TestRunClearLatchExecuteUsesConfiguredDeliveryAndCanSucceed(t *testing.T) {
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	sender := &monitorSenderOK{}
-	executor := &actionexecutor.Executor{Store: st, Sender: sender, Clock: time.Now}
+	executor := &actionexecutor.Executor{
+		Store:            st,
+		Sender:           sender,
+		EndpointDefaults: g2stransport.EndpointDefaults{Scheme: "http", Port: 80},
+		Clock:            time.Now,
+	}
 	delivery := g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP, AllowDelivery: true, TimeoutMS: 5000}
 
 	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {

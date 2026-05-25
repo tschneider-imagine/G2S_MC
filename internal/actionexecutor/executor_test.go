@@ -495,6 +495,90 @@ func TestExecuteUsesConfiguredDeliverySettings(t *testing.T) {
 	}
 }
 
+func TestExecuteDoesNotUseFallbackEndpointWhenSchemeDefaultsMissing(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	record := st.egmsByID["EGM-001"]
+	record.IPAddress = "10.1.2.3"
+	record.EndpointPath = "/g2s"
+	st.egmsByID["EGM-001"] = record
+
+	sendCalls := 0
+	executor := Executor{
+		Store: st,
+		Sender: &fakeSender{sendFn: func(_ context.Context, _ g2stransport.SendRequest) (g2stransport.SendResult, error) {
+			sendCalls++
+			return g2stransport.SendResult{}, nil
+		}},
+		Clock: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	}
+
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Delivery:    enabledDeliverySettings(),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if sendCalls != 0 {
+		t.Fatalf("expected no sender calls, got %d", sendCalls)
+	}
+	if result.ActionRun.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
+	}
+	if len(result.TargetResults) == 0 || !strings.Contains(strings.ToLower(result.TargetResults[0].LastError), "missing configured delivery scheme") {
+		t.Fatalf("unexpected target error: %+v", result.TargetResults)
+	}
+}
+
+func TestExecuteAppliesTemplateEndpointQuirks(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	version := st.versions["template-generic-g2s-action"]
+	version.EndpointQuirksJSON = `{"method":"PUT","content_type":"application/soap+xml","headers":{"SOAPAction":"urn:g2s:test"},"timeout_ms":3333}`
+	st.versions["template-generic-g2s-action"] = version
+
+	captured := g2stransport.SendRequest{}
+	executor := Executor{
+		Store: st,
+		Sender: &fakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
+			captured = req
+			return g2stransport.SendResult{
+				MessageID:       req.MessageID,
+				EGMID:           req.EGMID,
+				TransportMode:   req.TransportMode,
+				Sent:            true,
+				HTTPStatusCode:  200,
+				ResponseExcerpt: "<ack>accepted</ack>",
+				CompletedAt:     now,
+			}, nil
+		}},
+		Clock: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	}
+
+	_, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Delivery:    enabledDeliverySettings(),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if captured.Method != "PUT" {
+		t.Fatalf("method=%q", captured.Method)
+	}
+	if captured.ContentType != "application/soap+xml" {
+		t.Fatalf("content_type=%q", captured.ContentType)
+	}
+	if captured.Headers["SOAPAction"] != "urn:g2s:test" {
+		t.Fatalf("headers=%v", captured.Headers)
+	}
+	if captured.TimeoutMS != 3333 {
+		t.Fatalf("timeout=%d", captured.TimeoutMS)
+	}
+}
+
 func TestExecuteRestoreActionUsesSamePath(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
@@ -609,7 +693,7 @@ func newFakeStore(now time.Time) *fakeStore {
 				EGMID:              "EGM-001",
 				DisplayName:        "Cabinet 001",
 				IPAddress:          "127.0.0.1",
-				EndpointPath:       "/capture",
+				EndpointPath:       "http://127.0.0.1/capture",
 				Enabled:            true,
 				EmergencyEnabled:   true,
 				TemplateID:         "template-generic-g2s-action",

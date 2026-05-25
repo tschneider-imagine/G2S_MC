@@ -11,17 +11,17 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
-	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 )
 
 type Executor struct {
-	Store  Store
-	Sender g2stransport.Sender
-	Clock  func() time.Time
-	Sleep  func(time.Duration)
+	Store            Store
+	Sender           g2stransport.Sender
+	EndpointDefaults g2stransport.EndpointDefaults
+	Clock            func() time.Time
+	Sleep            func(time.Duration)
 }
 
 func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (ExecuteResult, error) {
@@ -170,7 +170,27 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 			continue
 		}
 
-		endpointURL := endpointURLFromEGM(egmRecord)
+		deliveryTarget, targetErr := g2stransport.ResolveDeliveryTarget(g2stransport.DeliveryTargetResolveRequest{
+			EGMRecord:           egmRecord,
+			TemplateVersion:     activeVersion,
+			FallbackMethod:      httpMethodFromMessageType(""),
+			FallbackContentType: "",
+			FallbackTimeoutMS:   delivery.TimeoutMS,
+			Defaults:            e.EndpointDefaults,
+		})
+		if targetErr != nil {
+			target.AttemptCount++
+			target.Status = actions.TargetStatusFailed
+			target.LastError = targetErr.Error()
+			target.LastResultAt = &targetNow
+			if err := e.Store.UpdateActionTargetResult(ctx, target); err != nil {
+				return ExecuteResult{}, err
+			}
+			targetRows[i] = target
+			totalFailed++
+			warnings = append(warnings, target.LastError)
+			continue
+		}
 		totalAttempts := retryPolicy.Count + 1
 		if totalAttempts < 1 {
 			totalAttempts = 1
@@ -244,7 +264,7 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 					TemplateID:        templateID,
 					TemplateVersion:   activeVersion.VersionLabel,
 					MessageType:       rendered.MessageType,
-					ToEndpoint:        endpointURL,
+					ToEndpoint:        deliveryTarget.EndpointURL,
 					RawPayload:        rendered.RawPayload,
 					ParsedSummaryJSON: string(summaryJSON),
 					Result:            g2sengine.MessageResultSendAttempted,
@@ -285,20 +305,24 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 					break
 				}
 
+				sendTimeoutMS := deliveryTarget.TimeoutMS
+				if sendTimeoutMS <= 0 {
+					sendTimeoutMS = delivery.TimeoutMS
+				}
 				sendResult, sendErr := e.Sender.Send(ctx, g2stransport.SendRequest{
 					MessageID:       messageID,
 					ActionRunID:     run.ID,
 					EGMID:           target.TargetEGMID,
-					EndpointURL:     endpointURL,
-					Method:          httpMethodFromMessageType(rendered.MessageType),
-					ContentType:     rendered.ContentType,
-					Headers:         rendered.Headers,
+					EndpointURL:     deliveryTarget.EndpointURL,
+					Method:          nonEmpty(deliveryTarget.Method, httpMethodFromMessageType(rendered.MessageType)),
+					ContentType:     nonEmpty(deliveryTarget.ContentType, rendered.ContentType),
+					Headers:         g2stransport.MergeHeaders(rendered.Headers, deliveryTarget.Headers),
 					RawPayload:      rendered.RawPayload,
 					AllowRealSend:   delivery.AllowDelivery,
 					TransportMode:   delivery.TransportMode(),
 					RequestedAt:     stepNow,
 					CaptureOnlySend: delivery.CaptureOnly,
-					TimeoutMS:       delivery.TimeoutMS,
+					TimeoutMS:       sendTimeoutMS,
 				})
 				if sendErr != nil {
 					sendResult.Error = sendErr.Error()
@@ -614,24 +638,6 @@ func parseEscalationPolicy(raw string) escalationPolicy {
 		policy.AfterAttempts = 0
 	}
 	return policy
-}
-
-func endpointURLFromEGM(record *egms.EGMRecord) string {
-	if record == nil {
-		return ""
-	}
-	endpointPath := strings.TrimSpace(record.EndpointPath)
-	if strings.HasPrefix(strings.ToLower(endpointPath), "http://") || strings.HasPrefix(strings.ToLower(endpointPath), "https://") {
-		return endpointPath
-	}
-	ipAddress := strings.TrimSpace(record.IPAddress)
-	if ipAddress == "" || endpointPath == "" {
-		return ""
-	}
-	if !strings.HasPrefix(endpointPath, "/") {
-		endpointPath = "/" + endpointPath
-	}
-	return "http://" + ipAddress + endpointPath
 }
 
 func parseTemplateVersionInt(versionLabel string) int {

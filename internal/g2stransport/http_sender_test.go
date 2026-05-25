@@ -2,6 +2,7 @@ package g2stransport
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,6 +157,47 @@ func TestHTTPSenderCaptureProofBlocksNonLocalEndpoint(t *testing.T) {
 	}
 }
 
+func TestHTTPSenderNonCaptureModeDoesNotApplyLoopbackRestriction(t *testing.T) {
+	calls := int32(0)
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&calls, 1)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("ok")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	sender := &HTTPSender{Client: client}
+	result, err := sender.Send(context.Background(), SendRequest{
+		MessageID:       55,
+		EGMID:           "EGM-55",
+		EndpointURL:     "http://10.20.30.40:8080/g2s",
+		RawPayload:      "<send/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: false,
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if result.Blocked {
+		t.Fatalf("result should not be blocked in non-capture mode: %+v", result)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("expected one transport call, got %d", got)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestHTTPSenderMissingEndpointFailsClearly(t *testing.T) {
 	sender := &HTTPSender{}
 	result, err := sender.Send(context.Background(), SendRequest{
@@ -178,5 +220,58 @@ func TestHTTPSenderMissingEndpointFailsClearly(t *testing.T) {
 	}
 	if result.Error == "" || !strings.Contains(strings.ToLower(result.Error), "missing endpoint") {
 		t.Fatalf("unexpected error: %q", result.Error)
+	}
+}
+
+func TestHTTPSenderInvalidEndpointFailsClearly(t *testing.T) {
+	sender := &HTTPSender{}
+	result, err := sender.Send(context.Background(), SendRequest{
+		MessageID:       7,
+		EGMID:           "EGM-7",
+		EndpointURL:     "://bad-url",
+		RawPayload:      "<send/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: false,
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if result.Sent || result.Blocked {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if !strings.Contains(strings.ToLower(result.Error), "invalid endpoint") {
+		t.Fatalf("unexpected error: %q", result.Error)
+	}
+}
+
+func TestHTTPSenderNon2xxReturnsFailedResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream failure"))
+	}))
+	defer server.Close()
+
+	sender := &HTTPSender{}
+	result, err := sender.Send(context.Background(), SendRequest{
+		MessageID:       8,
+		EGMID:           "EGM-8",
+		EndpointURL:     server.URL,
+		RawPayload:      "<send/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: false,
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if result.Sent {
+		t.Fatalf("expected failed result: %+v", result)
+	}
+	if result.HTTPStatusCode != http.StatusBadGateway {
+		t.Fatalf("status=%d", result.HTTPStatusCode)
+	}
+	if !strings.Contains(result.ResponseExcerpt, "upstream failure") {
+		t.Fatalf("excerpt=%q", result.ResponseExcerpt)
 	}
 }
