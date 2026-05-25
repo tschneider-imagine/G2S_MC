@@ -14,11 +14,13 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/deliverycheck"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
+	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
@@ -60,6 +62,20 @@ type Store interface {
 	UpdateMessageJournalResult(ctx context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error
 	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 	ListAuditTimelineEntries(ctx context.Context, query store.AuditTimelineListQuery) ([]audit.AuditTimelineEntry, error)
+	ListCertificateInventory(ctx context.Context) ([]model.CertificateInventory, error)
+}
+
+type RuntimeInfo struct {
+	Version       string
+	Revision      string
+	RevisionShort string
+	Modified      bool
+	BuildTime     string
+	GoVersion     string
+	StartedAt     time.Time
+	ConfigPath    string
+	DatabasePath  string
+	BindAddress   string
 }
 
 type Server struct {
@@ -68,6 +84,9 @@ type Server struct {
 	ActionSender            g2stransport.Sender
 	DefaultDeliverySettings g2stransport.DeliverySettings
 	EndpointDefaults        g2stransport.EndpointDefaults
+	DeliveryClientConfig    g2stransport.HTTPClientConfig
+	DeliveryMode            string
+	RuntimeInfo             RuntimeInfo
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
@@ -90,6 +109,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/v2/comms/messages", s.handleMessages)
 	mux.HandleFunc("/api/v2/audit/timeline", s.handleTimeline)
+	mux.HandleFunc("/api/v2/runtime", s.handleRuntime)
+	mux.HandleFunc("/api/v2/settings/message-delivery-check", s.handleMessageDeliveryCheck)
 }
 
 func (s *Server) handleActionRuns(w http.ResponseWriter, r *http.Request) {
@@ -701,6 +722,64 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+func (s *Server) handleRuntime(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, RuntimeInfoResponse{
+		Version:       strings.TrimSpace(s.RuntimeInfo.Version),
+		Revision:      strings.TrimSpace(s.RuntimeInfo.Revision),
+		RevisionShort: strings.TrimSpace(s.RuntimeInfo.RevisionShort),
+		Modified:      s.RuntimeInfo.Modified,
+		BuildTime:     strings.TrimSpace(s.RuntimeInfo.BuildTime),
+		GoVersion:     strings.TrimSpace(s.RuntimeInfo.GoVersion),
+		StartedAt:     s.RuntimeInfo.StartedAt,
+		ConfigPath:    strings.TrimSpace(s.RuntimeInfo.ConfigPath),
+		DatabasePath:  strings.TrimSpace(s.RuntimeInfo.DatabasePath),
+		BindAddress:   strings.TrimSpace(s.RuntimeInfo.BindAddress),
+	})
+}
+
+func (s *Server) handleMessageDeliveryCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req MessageDeliveryCheckRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.IncludeNetworkCheck || req.IncludeTLSCheck {
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+	}
+	service := deliverycheck.Service{
+		Store: s.Store,
+		Options: deliverycheck.Options{
+			EndpointDefaults: s.EndpointDefaults,
+			ClientConfig:     s.DeliveryClientConfig,
+			DeliveryMode:     s.DeliveryMode,
+			DefaultTimeoutMS: s.DefaultDeliverySettings.Normalize().TimeoutMS,
+		},
+	}
+	result, err := service.Check(r.Context(), deliverycheck.CheckRequest{
+		EGMID:               strings.TrimSpace(req.EGMID),
+		ActionID:            strings.TrimSpace(req.ActionID),
+		TemplateID:          strings.TrimSpace(req.TemplateID),
+		TemplateActionKey:   strings.TrimSpace(req.TemplateActionKey),
+		IncludeNetworkCheck: req.IncludeNetworkCheck,
+		IncludeTLSCheck:     req.IncludeTLSCheck,
+		TimeoutMS:           req.TimeoutMS,
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) authorizeMutation(w http.ResponseWriter, r *http.Request) bool {

@@ -1,8 +1,11 @@
 package api
 
 import (
+	"time"
+
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/deliverycheck"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
@@ -59,6 +62,31 @@ type ActionRunExecuteRequest struct {
 	CaptureOnly   bool   `json:"capture_only"`
 	TimeoutMS     int    `json:"timeout_ms,omitempty"`
 }
+
+type MessageDeliveryCheckRequest struct {
+	EGMID               string `json:"egm_id"`
+	ActionID            string `json:"action_id,omitempty"`
+	TemplateID          string `json:"template_id,omitempty"`
+	TemplateActionKey   string `json:"template_action_key,omitempty"`
+	IncludeNetworkCheck bool   `json:"include_network_check"`
+	IncludeTLSCheck     bool   `json:"include_tls_check"`
+	TimeoutMS           int    `json:"timeout_ms,omitempty"`
+}
+
+type RuntimeInfoResponse struct {
+	Version       string    `json:"version"`
+	Revision      string    `json:"revision"`
+	RevisionShort string    `json:"revision_short"`
+	Modified      bool      `json:"modified"`
+	BuildTime     string    `json:"build_time"`
+	GoVersion     string    `json:"go_version"`
+	StartedAt     time.Time `json:"started_at"`
+	ConfigPath    string    `json:"config_path"`
+	DatabasePath  string    `json:"database_path"`
+	BindAddress   string    `json:"bind_address"`
+}
+
+type MessageDeliveryCheckResponse = deliverycheck.CheckResult
 
 type TemplatesListResponse struct {
 	Templates []templates.G2STemplate `json:"templates"`

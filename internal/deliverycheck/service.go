@@ -310,7 +310,7 @@ func buildCertificateSummary(rows []model.CertificateInventory) []CertificateChe
 			})
 			continue
 		}
-		status := strings.ToUpper(strings.TrimSpace(row.Status))
+		status := statusKeyFromInventory(row.Status)
 		check := CertificateCheck{
 			Role:               role,
 			Configured:         strings.TrimSpace(row.Path) != "",
@@ -325,6 +325,21 @@ func buildCertificateSummary(rows []model.CertificateInventory) []CertificateChe
 		out = append(out, check)
 	}
 	return out
+}
+
+func statusKeyFromInventory(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "UNKNOWN"
+	}
+	if idx := strings.Index(trimmed, ":"); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
+	}
+	upper := strings.ToUpper(trimmed)
+	if strings.Contains(upper, "PRIVATE KEY") {
+		return "INVALID"
+	}
+	return upper
 }
 
 func parseStatusFromInventory(status string) string {

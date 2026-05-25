@@ -100,6 +100,10 @@ type Store interface {
 
 type Options struct {
 	AppVersion               string
+	RuntimeVersion           string
+	BuildRevision            string
+	BuildTime                string
+	GoVersion                string
 	ControllerID             string
 	SiteName                 string
 	DatabasePath             string
@@ -3348,6 +3352,10 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 	body.WriteString(`<tr><td>Controller</td><td class="mono">` + esc(defaultString(s.Options.ControllerID, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Site</td><td>` + esc(defaultString(s.Options.SiteName, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Application Version</td><td>` + esc(defaultString(s.Options.AppVersion, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Runtime Version</td><td class="mono">` + esc(defaultString(s.Options.RuntimeVersion, "dev")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Build Revision</td><td class="mono">` + esc(defaultString(s.Options.BuildRevision, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Build Time</td><td class="mono">` + esc(defaultString(s.Options.BuildTime, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Go Version</td><td class="mono">` + esc(defaultString(s.Options.GoVersion, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Config Path</td><td class="mono">` + esc(defaultString(s.Options.ConfigPath, "unknown")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Started At</td><td class="mono">` + esc(fmtTime(s.Options.StartedAt)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Current Time</td><td class="mono">` + esc(fmtTime(time.Now().UTC())) + `</td></tr>`)

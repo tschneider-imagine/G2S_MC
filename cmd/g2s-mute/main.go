@@ -22,6 +22,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	rebuildapi "github.com/tschneider-imagine/G2S_MC/internal/api"
 	"github.com/tschneider-imagine/G2S_MC/internal/appliance"
+	"github.com/tschneider-imagine/G2S_MC/internal/buildinfo"
 	"github.com/tschneider-imagine/G2S_MC/internal/certs"
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
@@ -39,6 +40,7 @@ import (
 
 func main() {
 	startedAt := time.Now()
+	build := buildinfo.Current()
 	configPath := flag.String("config", "configs/config.example.json", "path to controller config")
 	simulateTrigger := flag.Bool("simulate-trigger", false, "submit a simulated security line event after boot")
 	inputRuntimeEnabled := flag.Bool("input-runtime", false, "enable runtime input polling loop")
@@ -199,6 +201,26 @@ func main() {
 			return requireMutationAuth(w, r, cfg)
 		},
 		ActionSender: configuredSender,
+		DeliveryClientConfig: g2stransport.HTTPClientConfig{
+			TLSRequired:      cfg.G2S.RequireTLS,
+			RootCAPath:       strings.TrimSpace(cfg.Crypto.G2SCAPath),
+			ClientCertPath:   strings.TrimSpace(cfg.Crypto.G2SClientCertPath),
+			ClientKeyPath:    strings.TrimSpace(cfg.Crypto.G2SClientKeyPath),
+			DefaultTimeoutMS: cfg.Timeouts.G2SRequestTimeoutMS,
+		},
+		DeliveryMode: string(deliverySettings.Mode),
+		RuntimeInfo: rebuildapi.RuntimeInfo{
+			Version:       build.Version,
+			Revision:      build.Revision,
+			RevisionShort: build.RevisionShort,
+			Modified:      build.Modified,
+			BuildTime:     build.BuildTime,
+			GoVersion:     build.GoVersion,
+			StartedAt:     startedAt,
+			ConfigPath:    *configPath,
+			DatabasePath:  cfg.Database.Path,
+			BindAddress:   cfg.WebUI.BindAddress,
+		},
 		DefaultDeliverySettings: g2stransport.DeliverySettings{
 			Mode:          g2stransport.DeliveryModeDisabled,
 			AllowDelivery: false,
@@ -212,6 +234,10 @@ func main() {
 		auditStore,
 		operatorui.Options{
 			AppVersion:               "operator-console",
+			RuntimeVersion:           build.Version,
+			BuildRevision:            build.RevisionShort,
+			BuildTime:                build.BuildTime,
+			GoVersion:                build.GoVersion,
 			ControllerID:             cfg.ControllerID,
 			SiteName:                 cfg.SiteName,
 			DatabasePath:             cfg.Database.Path,
@@ -252,11 +278,13 @@ func main() {
 		ConfigPath:       *configPath,
 		StartedAt:        startedAt,
 		SimulatedTrigger: *simulateTrigger,
+		Build:            build,
 	}))
 	mux.HandleFunc("/readyz", readinessHandler(eng, auditStore, cfg, runtimeInfo{
 		ConfigPath:       *configPath,
 		StartedAt:        startedAt,
 		SimulatedTrigger: *simulateTrigger,
+		Build:            build,
 	}))
 	mux.HandleFunc("/api/incidents", incidentsHandler(auditStore))
 	mux.HandleFunc("/api/egms/history", egmHistoryHandler(auditStore))
@@ -313,6 +341,7 @@ func main() {
 		ConfigPath:       *configPath,
 		StartedAt:        startedAt,
 		SimulatedTrigger: *simulateTrigger,
+		Build:            build,
 	}))
 	mux.HandleFunc("/api/runtime-overrides/snapshot", runtimeOverridesSnapshotHandler(auditStore, cfg))
 	mux.HandleFunc(
@@ -395,6 +424,7 @@ func main() {
 		ConfigPath:       *configPath,
 		StartedAt:        startedAt,
 		SimulatedTrigger: *simulateTrigger,
+		Build:            build,
 	}))
 	mux.HandleFunc("/", operatorEntryHandler())
 
@@ -474,6 +504,7 @@ type runtimeInfo struct {
 	ConfigPath       string
 	StartedAt        time.Time
 	SimulatedTrigger bool
+	Build            buildinfo.RuntimeInfo
 }
 
 type applianceStatus struct {
@@ -497,6 +528,12 @@ type readinessResponse struct {
 type runtimeStatus struct {
 	StartedAt                   time.Time `json:"started_at"`
 	UptimeSeconds               int64     `json:"uptime_seconds"`
+	Version                     string    `json:"version"`
+	BuildRevision               string    `json:"build_revision"`
+	BuildRevisionShort          string    `json:"build_revision_short"`
+	BuildModified               bool      `json:"build_modified"`
+	BuildTime                   string    `json:"build_time"`
+	GoVersion                   string    `json:"go_version"`
 	ConfigPath                  string    `json:"config_path"`
 	DatabasePath                string    `json:"database_path"`
 	BindAddress                 string    `json:"bind_address"`
@@ -698,6 +735,12 @@ func buildRuntimeStatus(cfg config.Config, runtime runtimeInfo, request *http.Re
 	return runtimeStatus{
 		StartedAt:                   runtime.StartedAt,
 		UptimeSeconds:               int64(time.Since(runtime.StartedAt).Seconds()),
+		Version:                     runtime.Build.Version,
+		BuildRevision:               runtime.Build.Revision,
+		BuildRevisionShort:          runtime.Build.RevisionShort,
+		BuildModified:               runtime.Build.Modified,
+		BuildTime:                   runtime.Build.BuildTime,
+		GoVersion:                   runtime.Build.GoVersion,
 		ConfigPath:                  runtime.ConfigPath,
 		DatabasePath:                cfg.Database.Path,
 		BindAddress:                 cfg.WebUI.BindAddress,

@@ -19,6 +19,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
+	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
@@ -1031,6 +1032,241 @@ func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
 	}
 }
 
+func TestGetRuntimeReturnsBuildAndRuntimeFields(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		RuntimeInfo: RuntimeInfo{
+			Version:       "dev",
+			Revision:      "1234567890abcdef",
+			RevisionShort: "1234567890ab",
+			Modified:      true,
+			BuildTime:     "2026-05-25T00:00:00Z",
+			GoVersion:     "go1.test",
+			StartedAt:     time.Now().UTC().Add(-time.Minute),
+			ConfigPath:    "/etc/g2s-mute/config.json",
+			DatabasePath:  "/var/lib/g2s-mute/controller.db",
+			BindAddress:   "0.0.0.0:8444",
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/runtime", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var payload RuntimeInfoResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode runtime response: %v", err)
+	}
+	if payload.RevisionShort != "1234567890ab" || payload.ConfigPath != "/etc/g2s-mute/config.json" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestPostMessageDeliveryCheckReadOnlyReturnsJSONAndIsNonMutating(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+
+	beforeRuns, err := db.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list runs before: %v", err)
+	}
+	beforeMessages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list messages before: %v", err)
+	}
+	beforeAudit, err := db.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list audit before: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		EndpointDefaults:  g2stransport.EndpointDefaults{Scheme: "http", Port: 8444},
+		DeliveryMode:      "DISABLED",
+		DefaultDeliverySettings: g2stransport.DeliverySettings{
+			Mode:          g2stransport.DeliveryModeDisabled,
+			AllowDelivery: false,
+			CaptureOnly:   false,
+			TimeoutMS:     5000,
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"egm_id":"EGM-001","template_id":"template-generic-g2s-action","template_action_key":"emergency_broadcast_silence"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/settings/message-delivery-check", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var result MessageDeliveryCheckResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode check result: %v", err)
+	}
+	if result.EGMID != "EGM-001" {
+		t.Fatalf("unexpected check result: %+v", result)
+	}
+
+	afterRuns, err := db.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list runs after: %v", err)
+	}
+	afterMessages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list messages after: %v", err)
+	}
+	afterAudit, err := db.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 500})
+	if err != nil {
+		t.Fatalf("list audit after: %v", err)
+	}
+	if len(beforeRuns) != len(afterRuns) || len(beforeMessages) != len(afterMessages) || len(beforeAudit) != len(afterAudit) {
+		t.Fatalf("read-only delivery check mutated data: runs %d->%d messages %d->%d audit %d->%d", len(beforeRuns), len(afterRuns), len(beforeMessages), len(afterMessages), len(beforeAudit), len(afterAudit))
+	}
+}
+
+func TestPostMessageDeliveryCheckNetworkRequiresAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+		EndpointDefaults: g2stransport.EndpointDefaults{Scheme: "http", Port: 8444},
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"egm_id":"EGM-001","include_network_check":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/settings/message-delivery-check", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d want 1", calls)
+	}
+}
+
+func TestPostMessageDeliveryCheckTLSRequiresAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+		EndpointDefaults: g2stransport.EndpointDefaults{Scheme: "https", Port: 8444},
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"egm_id":"EGM-001","include_tls_check":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/settings/message-delivery-check", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d want 1", calls)
+	}
+}
+
+func TestPostMessageDeliveryCheckDoesNotExposePrivateKeyMaterial(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+	now := time.Now().UTC()
+	if err := db.ReplaceCertificateInventory(ctx, []model.CertificateInventory{
+		{
+			Role:          "g2s_client_key",
+			Path:          "/certs/client.key",
+			Status:        "INVALID",
+			Error:         "failed parse: -----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+			LastCheckedAt: now,
+		},
+	}); err != nil {
+		t.Fatalf("replace certificate inventory: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		EndpointDefaults:  g2stransport.EndpointDefaults{Scheme: "http", Port: 8444},
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"egm_id":"EGM-001"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/settings/message-delivery-check", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	responseText := res.Body.String()
+	for _, forbidden := range []string{"BEGIN PRIVATE KEY", "END PRIVATE KEY", "abc123"} {
+		if strings.Contains(responseText, forbidden) {
+			t.Fatalf("response leaked private key material: %q", forbidden)
+		}
+	}
+}
+
+func TestPostMessageDeliveryCheckMissingEGMReturnsJSONResult(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		EndpointDefaults:  g2stransport.EndpointDefaults{Scheme: "http", Port: 8444},
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"egm_id":"UNKNOWN"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/settings/message-delivery-check", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var result MessageDeliveryCheckResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result.OverallStatus != "ERROR" || len(result.Errors) == 0 {
+		t.Fatalf("expected error result for missing EGM, got %+v", result)
+	}
+}
+
 func TestPostTemplatesRenderPreviewReturnsJSON(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
@@ -1251,5 +1487,49 @@ func seedDispatchFixtures(t *testing.T, ctx context.Context, db *store.SQLiteSto
 		CurrentActionState: egms.EGMActionStateNormal,
 	}); err != nil {
 		t.Fatalf("seed egm: %v", err)
+	}
+}
+
+func seedDeliveryCheckFixtures(t *testing.T, ctx context.Context, db *store.SQLiteStore) {
+	t.Helper()
+	if err := db.UpsertG2STemplate(ctx, templates.G2STemplate{
+		ID:     "template-generic-g2s-action",
+		Name:   "Generic G2S Action Template",
+		Vendor: "Generic",
+		Status: templates.TemplateStatusActive,
+	}); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	if err := db.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{
+		ID:           "template-generic-g2s-action-v1",
+		TemplateID:   "template-generic-g2s-action",
+		VersionLabel: "1",
+		ActionsJSON:  `{"actions":{"emergency_broadcast_silence":{"message_type":"NOTICE","content_type":"application/xml","payload_template":"<message action=\"{{.ActionID}}\" egm=\"{{.EGMID}}\"/>"}}}`,
+	}); err != nil {
+		t.Fatalf("seed template version: %v", err)
+	}
+	if err := db.SetActiveG2STemplateVersion(ctx, "template-generic-g2s-action", 1); err != nil {
+		t.Fatalf("set active template version: %v", err)
+	}
+	if err := db.UpsertEGMRecord(ctx, egms.EGMRecord{
+		EGMID:              "EGM-001",
+		DisplayName:        "Cabinet 001",
+		IPAddress:          "127.0.0.1",
+		EndpointPath:       "http://127.0.0.1:8444/g2s",
+		Enabled:            true,
+		EmergencyEnabled:   true,
+		TemplateID:         "template-generic-g2s-action",
+		CurrentActionState: egms.EGMActionStateNormal,
+	}); err != nil {
+		t.Fatalf("seed egm: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := db.ReplaceCertificateInventory(ctx, []model.CertificateInventory{
+		{Role: "g2s_ca_cert", Path: "/certs/ca.crt", Status: "VALID", LastCheckedAt: now},
+		{Role: "g2s_client_cert", Path: "/certs/client.crt", Status: "VALID", LastCheckedAt: now},
+		{Role: "g2s_client_key", Path: "/certs/client.key", Status: "VALID", LastCheckedAt: now},
+		{Role: "web_server_cert", Path: "/certs/web.crt", Status: "VALID", LastCheckedAt: now},
+	}); err != nil {
+		t.Fatalf("seed cert inventory: %v", err)
 	}
 }

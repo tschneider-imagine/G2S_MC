@@ -80,7 +80,7 @@ trap 'rm -rf "${BUILD_DIR}"' EXIT
 
 cd "${REPO_ROOT}"
 go test ./...
-go build -buildvcs=false -trimpath -o "${BUILD_DIR}/g2s-mute" ./cmd/g2s-mute
+go build -trimpath -o "${BUILD_DIR}/g2s-mute" ./cmd/g2s-mute
 
 if ! getent group "${APP_GROUP}" >/dev/null 2>&1; then
   run_cmd groupadd --system "${APP_GROUP}"

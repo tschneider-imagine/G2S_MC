@@ -1755,6 +1755,10 @@ func TestSettingsPageReturnsOKAndRendersIdentity(t *testing.T) {
 		"controller-test",
 		"Site",
 		"Site Alpha",
+		"Runtime Version",
+		"Build Revision",
+		"Build Time",
+		"Go Version",
 		"Network Listener",
 		"Operator Console URL",
 		"Runtime",
@@ -2582,6 +2586,10 @@ func setupOperatorServerWithStore(t *testing.T) (*http.ServeMux, *store.SQLiteSt
 func defaultOperatorOptions() Options {
 	return Options{
 		AppVersion:               "operator-console",
+		RuntimeVersion:           "dev",
+		BuildRevision:            "abcdef123456",
+		BuildTime:                "2026-05-25T00:00:00Z",
+		GoVersion:                "go1.test",
 		ControllerID:             "controller-test",
 		SiteName:                 "Site Alpha",
 		DatabasePath:             `C:\\data\\g2s.db`,

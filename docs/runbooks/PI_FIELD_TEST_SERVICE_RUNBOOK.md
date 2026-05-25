@@ -37,6 +37,12 @@ journalctl -u g2s-mute.service -n 120 --no-pager
 ./packaging/install/verify-pi-field-test.sh
 ```
 
+Strict revision mismatch check:
+
+```bash
+./packaging/install/verify-pi-field-test.sh --strict
+```
+
 Expected key results:
 
 - `200 /healthz`
@@ -70,6 +76,34 @@ Inspect recent runtime and transition logs:
 ```bash
 journalctl -u g2s-mute.service -n 200 --no-pager
 ```
+
+## Verify Running Service Revision
+
+Check service runtime fingerprint from the running appliance:
+
+```bash
+curl -s http://127.0.0.1:8444/api/v2/runtime
+```
+
+Compare with local repository head:
+
+```bash
+git rev-parse --short HEAD
+```
+
+If they differ, the running service is likely an older installed binary and should be rebuilt/restarted.
+
+## Read-Only Message Delivery Check API
+
+Run a service-side read-only delivery check (no G2S payload send):
+
+```bash
+curl -s -X POST http://127.0.0.1:8444/api/v2/settings/message-delivery-check \
+  -H 'Content-Type: application/json' \
+  -d '{"egm_id":"EGM-001","template_id":"template-generic-g2s-action","template_action_key":"emergency_broadcast_silence","include_network_check":false,"include_tls_check":false,"timeout_ms":5000}'
+```
+
+This check uses the running service context and does not require shell read access to service-owned config/database files.
 
 ## Delivery and Execution Defaults
 
