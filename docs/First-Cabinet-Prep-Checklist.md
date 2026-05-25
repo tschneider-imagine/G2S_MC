@@ -6,8 +6,8 @@ Freeze the first real-cabinet integration assumptions before booking cabinet tim
 
 Related docs:
 
-- [G2S First Cabinet Lab Runbook](./G2S_First_Cabinet_Lab_Runbook.md)
-- [G2S Pre-Next-Step Readiness Check](./G2S_Pre_NextStep_Readiness_Check.md)
+- [Active Project Definition Index](./project-definition/README.md)
+- [Archived Old Plans](./archive/old-plans/README.md)
 - [Raspberry Pi Bring-Up](./raspberry-pi.md)
 
 ## Profile Persistence And Precedence

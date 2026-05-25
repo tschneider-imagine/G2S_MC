@@ -57,20 +57,21 @@ Once running, the development listener exposes:
 - `GET /api/certificates`
 - `POST /g2s`
 
-Current project documentation lives in:
+Active planning entry point:
 
-- `docs/G2S_Complete_Executable_Project_Plan.md`
-- `docs/G2S_First_Cabinet_Lab_Runbook.md`
-- `docs/G2S_Pre_NextStep_Readiness_Check.md`
+- `docs/project-definition/README.md`
+
+Current documentation:
+
+- `docs/project-definition/G2S_MC_REBUILD_PROJECT_DEFINITION_AND_GUARDRAILS.md`
+- `docs/project-definition/GLOBAL_CHAT_PROMPT_ADDITIONS.md`
 - `docs/development.md`
 - `docs/raspberry-pi.md`
 - `docs/setup-windows.md`
 
-Recommended first implementation target:
+Archived historical planning docs:
 
-1. Run the Pi installer and smoke test on the target Pi.
-2. Add Raspberry Pi GPIO adapters once the pinout is confirmed.
-3. Continue real-cabinet readiness around host registration, payload mapping, and certificate source.
+- `docs/archive/old-plans/`
 
 ## Verification
 
