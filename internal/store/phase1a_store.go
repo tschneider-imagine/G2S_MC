@@ -43,6 +43,11 @@ type ActionRunListQuery struct {
 	InputTransitionID  int64
 }
 
+type HandlerRuleListQuery struct {
+	EnabledOnly bool
+	Limit       int
+}
+
 func (s *SQLiteStore) UpsertInputChannel(ctx context.Context, channel inputs.InputChannel) error {
 	if err := channel.Validate(); err != nil {
 		return err
@@ -1114,6 +1119,85 @@ func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sen
 	return result.LastInsertId()
 }
 
+func (s *SQLiteStore) GetMessageJournalEntry(ctx context.Context, id int64) (*g2sengine.MessageJournalEntry, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("message journal id is required")
+	}
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, timestamp, direction, COALESCE(from_endpoint, ''), COALESCE(to_endpoint, ''), COALESCE(egm_id, ''),
+		        COALESCE(action_run_id, ''), COALESCE(action_step_id, ''), input_transition_id,
+		        COALESCE(template_id, ''), COALESCE(template_version, ''), COALESCE(handler_rule_id, ''), COALESCE(message_type, ''),
+		        raw_payload, COALESCE(parsed_summary_json, ''), result, COALESCE(error, ''),
+		        COALESCE(http_status_code, 0), COALESCE(latency_ms, 0), COALESCE(response_excerpt, ''),
+		        sent_at, completed_at, COALESCE(transport_mode, '')
+		   FROM message_journal
+		  WHERE id = ?`,
+		id,
+	)
+	var entry g2sengine.MessageJournalEntry
+	var inputTransitionID sql.NullInt64
+	var sentAt sql.NullTime
+	var completedAt sql.NullTime
+	if err := row.Scan(
+		&entry.ID,
+		&entry.Timestamp,
+		&entry.Direction,
+		&entry.FromEndpoint,
+		&entry.ToEndpoint,
+		&entry.EGMID,
+		&entry.ActionRunID,
+		&entry.ActionStepID,
+		&inputTransitionID,
+		&entry.TemplateID,
+		&entry.TemplateVersion,
+		&entry.HandlerRuleID,
+		&entry.MessageType,
+		&entry.RawPayload,
+		&entry.ParsedSummaryJSON,
+		&entry.Result,
+		&entry.Error,
+		&entry.HTTPStatusCode,
+		&entry.LatencyMS,
+		&entry.ResponseExcerpt,
+		&sentAt,
+		&completedAt,
+		&entry.TransportMode,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if inputTransitionID.Valid {
+		entry.InputTransitionID = inputTransitionID.Int64
+	}
+	if sentAt.Valid {
+		value := sentAt.Time
+		entry.SentAt = &value
+	}
+	if completedAt.Valid {
+		value := completedAt.Time
+		entry.CompletedAt = &value
+	}
+	return &entry, nil
+}
+
+func (s *SQLiteStore) UpdateMessageJournalHandlerRule(ctx context.Context, id int64, handlerRuleID string) error {
+	if id <= 0 {
+		return fmt.Errorf("message journal id is required")
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE message_journal
+		    SET handler_rule_id = ?
+		  WHERE id = ?`,
+		nullableTrimmed(handlerRuleID),
+		id,
+	)
+	return err
+}
+
 func (s *SQLiteStore) UpdateMessageJournalResult(
 	ctx context.Context,
 	id int64,
@@ -1251,6 +1335,171 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 		result = append(result, entry)
 	}
 	return result, rows.Err()
+}
+
+func (s *SQLiteStore) UpsertHandlerRule(ctx context.Context, rule g2sengine.HandlerRule) error {
+	rule.Direction = g2sengine.HandlerRuleDirection(strings.ToUpper(strings.TrimSpace(string(rule.Direction))))
+	if strings.TrimSpace(string(rule.Direction)) == "" {
+		rule.Direction = g2sengine.HandlerRuleDirectionAny
+	}
+	rule.Outcome = g2sengine.HandlerRuleOutcome(strings.ToUpper(strings.TrimSpace(string(rule.Outcome))))
+	if strings.TrimSpace(string(rule.Outcome)) == "" {
+		rule.Outcome = g2sengine.HandlerRuleOutcomeNote
+	}
+	if strings.TrimSpace(rule.HandleJSON) == "" {
+		payload, err := json.Marshal(map[string]string{"outcome": string(rule.Outcome)})
+		if err == nil {
+			rule.HandleJSON = string(payload)
+		}
+	}
+	if err := rule.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO handler_rules (
+		    id, name, enabled, direction, template_id, message_type, egm_id, action_id, action_step_id,
+		    match_json, outcome, handle_json, notes, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+		    name = excluded.name,
+		    enabled = excluded.enabled,
+		    direction = excluded.direction,
+		    template_id = excluded.template_id,
+		    message_type = excluded.message_type,
+		    egm_id = excluded.egm_id,
+		    action_id = excluded.action_id,
+		    action_step_id = excluded.action_step_id,
+		    match_json = excluded.match_json,
+		    outcome = excluded.outcome,
+		    handle_json = excluded.handle_json,
+		    notes = excluded.notes,
+		    updated_at = CURRENT_TIMESTAMP`,
+		strings.TrimSpace(rule.ID),
+		strings.TrimSpace(rule.Name),
+		boolToInt(rule.Enabled),
+		strings.ToUpper(strings.TrimSpace(string(rule.Direction))),
+		nullableTrimmed(rule.TemplateID),
+		nullableTrimmed(rule.MessageType),
+		nullableTrimmed(rule.EGMID),
+		nullableTrimmed(rule.ActionID),
+		nullableTrimmed(rule.ActionStepID),
+		strings.TrimSpace(rule.MatchJSON),
+		strings.ToUpper(strings.TrimSpace(string(rule.Outcome))),
+		nullableTrimmed(rule.HandleJSON),
+		nullableTrimmed(rule.Notes),
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetHandlerRule(ctx context.Context, id string) (*g2sengine.HandlerRule, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, name, enabled, COALESCE(direction, 'ANY'), COALESCE(template_id, ''), COALESCE(message_type, ''), COALESCE(egm_id, ''),
+		        COALESCE(action_id, ''), COALESCE(action_step_id, ''), COALESCE(match_json, ''), COALESCE(outcome, 'NOTE'),
+		        COALESCE(handle_json, ''), COALESCE(notes, ''), created_at, updated_at
+		   FROM handler_rules
+		  WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	var result g2sengine.HandlerRule
+	var enabledInt int
+	if err := row.Scan(
+		&result.ID,
+		&result.Name,
+		&enabledInt,
+		&result.Direction,
+		&result.TemplateID,
+		&result.MessageType,
+		&result.EGMID,
+		&result.ActionID,
+		&result.ActionStepID,
+		&result.MatchJSON,
+		&result.Outcome,
+		&result.HandleJSON,
+		&result.Notes,
+		&result.CreatedAt,
+		&result.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	result.Enabled = enabledInt == 1
+	return &result, nil
+}
+
+func (s *SQLiteStore) ListHandlerRules(ctx context.Context, query HandlerRuleListQuery) ([]g2sengine.HandlerRule, error) {
+	limit := normalizeLimit(query.Limit)
+	where := ""
+	args := []any{}
+	if query.EnabledOnly {
+		where = " WHERE enabled = 1"
+	}
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, name, enabled, COALESCE(direction, 'ANY'), COALESCE(template_id, ''), COALESCE(message_type, ''), COALESCE(egm_id, ''),
+		        COALESCE(action_id, ''), COALESCE(action_step_id, ''), COALESCE(match_json, ''), COALESCE(outcome, 'NOTE'),
+		        COALESCE(handle_json, ''), COALESCE(notes, ''), created_at, updated_at
+		   FROM handler_rules`+where+`
+		  ORDER BY updated_at DESC, id ASC
+		  LIMIT ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []g2sengine.HandlerRule{}
+	for rows.Next() {
+		var row g2sengine.HandlerRule
+		var enabledInt int
+		if err := rows.Scan(
+			&row.ID,
+			&row.Name,
+			&enabledInt,
+			&row.Direction,
+			&row.TemplateID,
+			&row.MessageType,
+			&row.EGMID,
+			&row.ActionID,
+			&row.ActionStepID,
+			&row.MatchJSON,
+			&row.Outcome,
+			&row.HandleJSON,
+			&row.Notes,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		row.Enabled = enabledInt == 1
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) ListEnabledHandlerRules(ctx context.Context, limit int) ([]g2sengine.HandlerRule, error) {
+	return s.ListHandlerRules(ctx, HandlerRuleListQuery{EnabledOnly: true, Limit: limit})
+}
+
+func (s *SQLiteStore) DisableHandlerRule(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("handler rule id is required")
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE handler_rules
+		    SET enabled = 0,
+		        updated_at = CURRENT_TIMESTAMP
+		  WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	return err
 }
 
 func (s *SQLiteStore) RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error) {

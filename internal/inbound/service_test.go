@@ -20,6 +20,7 @@ type fakeStore struct {
 	defs      map[string]actions.ActionDefinition
 	egms      map[string]egms.EGMRecord
 	versions  map[string]templates.G2STemplateVersion
+	rules     []g2sengine.HandlerRule
 	messages  []g2sengine.MessageJournalEntry
 	auditRows []audit.AuditTimelineEntry
 }
@@ -28,6 +29,15 @@ func (f *fakeStore) RecordMessageJournalEntry(_ context.Context, entry g2sengine
 	entry.ID = int64(len(f.messages) + 1)
 	f.messages = append(f.messages, entry)
 	return entry.ID, nil
+}
+
+func (f *fakeStore) UpdateMessageJournalHandlerRule(_ context.Context, id int64, handlerRuleID string) error {
+	for i := range f.messages {
+		if f.messages[i].ID == id {
+			f.messages[i].HandlerRuleID = handlerRuleID
+		}
+	}
+	return nil
 }
 
 func (f *fakeStore) RecordAuditTimelineEntry(_ context.Context, entry audit.AuditTimelineEntry) (int64, error) {
@@ -103,6 +113,16 @@ func (f *fakeStore) GetActiveG2STemplateVersion(_ context.Context, templateID st
 	}
 	copy := row
 	return &copy, nil
+}
+
+func (f *fakeStore) ListEnabledHandlerRules(_ context.Context, _ int) ([]g2sengine.HandlerRule, error) {
+	rows := []g2sengine.HandlerRule{}
+	for _, row := range f.rules {
+		if row.Enabled {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
 }
 
 func TestInboundJournalsMessageEvenWhenParsingFails(t *testing.T) {
@@ -277,6 +297,101 @@ func TestInboundAmbiguousCorrelationJournalsButDoesNotUpdate(t *testing.T) {
 	}
 }
 
+func TestInboundHandlerRuleConfirmationConfirmsTarget(t *testing.T) {
+	store := newInboundStoreFixture()
+	store.rules = []g2sengine.HandlerRule{
+		{
+			ID:        "rule-confirm",
+			Name:      "Confirm ACK",
+			Enabled:   true,
+			Direction: g2sengine.HandlerRuleDirectionInbound,
+			MatchJSON: `{"contains":["accepted"]}`,
+			Outcome:   g2sengine.HandlerRuleOutcomeConfirmation,
+		},
+	}
+	svc := &Service{Store: store, Clock: fixedClock()}
+
+	result, err := svc.Process(context.Background(), InboundMessage{
+		RawPayload:  `<ack status="accepted"/>`,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		MessageType: "ACK",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !result.TargetUpdated || result.TargetStatus != string(actions.TargetStatusConfirmed) {
+		t.Fatalf("expected confirmed target update, got %+v", result)
+	}
+	if store.messages[0].HandlerRuleID != "rule-confirm" {
+		t.Fatalf("handler_rule_id=%q", store.messages[0].HandlerRuleID)
+	}
+}
+
+func TestInboundHandlerRuleFailureFailsTarget(t *testing.T) {
+	store := newInboundStoreFixture()
+	store.rules = []g2sengine.HandlerRule{
+		{
+			ID:        "rule-fail",
+			Name:      "Fail ACK",
+			Enabled:   true,
+			Direction: g2sengine.HandlerRuleDirectionInbound,
+			MatchJSON: `{"contains":["rejected"]}`,
+			Outcome:   g2sengine.HandlerRuleOutcomeFailure,
+		},
+	}
+	svc := &Service{Store: store, Clock: fixedClock()}
+
+	result, err := svc.Process(context.Background(), InboundMessage{
+		RawPayload:  `<ack status="rejected"/>`,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		MessageType: "ACK",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !result.TargetUpdated || result.TargetStatus != string(actions.TargetStatusFailed) {
+		t.Fatalf("expected failed target update, got %+v", result)
+	}
+}
+
+func TestInboundHandlerRuleIgnoreDoesNotMutateTarget(t *testing.T) {
+	store := newInboundStoreFixture()
+	store.rules = []g2sengine.HandlerRule{
+		{
+			ID:        "rule-ignore",
+			Name:      "Ignore pending",
+			Enabled:   true,
+			Direction: g2sengine.HandlerRuleDirectionInbound,
+			MatchJSON: `{"contains":["pending"]}`,
+			Outcome:   g2sengine.HandlerRuleOutcomeIgnore,
+		},
+	}
+	svc := &Service{Store: store, Clock: fixedClock()}
+	before := store.targets["run-1"][0].Status
+
+	result, err := svc.Process(context.Background(), InboundMessage{
+		RawPayload:  `<ack status="pending"/>`,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		MessageType: "ACK",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if result.TargetUpdated {
+		t.Fatalf("target unexpectedly updated: %+v", result)
+	}
+	after := store.targets["run-1"][0].Status
+	if before != after {
+		t.Fatalf("target status changed: before=%q after=%q", before, after)
+	}
+	if store.messages[0].HandlerRuleID != "rule-ignore" {
+		t.Fatalf("handler_rule_id=%q", store.messages[0].HandlerRuleID)
+	}
+}
+
 func TestInboundAuditEntriesRecordedForReceiveAndOutcome(t *testing.T) {
 	store := newInboundStoreFixture()
 	svc := &Service{Store: store, Clock: fixedClock()}
@@ -357,6 +472,7 @@ func newInboundStoreFixture() *fakeStore {
 				FailureRulesJSON:      `{"rules":[{"id":"bad","contains":["rejected"]}]}`,
 			},
 		},
+		rules: []g2sengine.HandlerRule{},
 	}
 }
 

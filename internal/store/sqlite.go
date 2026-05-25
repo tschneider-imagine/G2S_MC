@@ -126,11 +126,62 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if err := s.ensurePhase2FMessageJournalSendSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureHandlerRuleSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureEGMGroupMembershipSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureHeartbeatPolicyOverrideSchema(ctx); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ensureHandlerRuleSchema(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(handler_rules)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	type columnDef struct {
+		name string
+		def  string
+	}
+	defs := []columnDef{
+		{name: "direction", def: "TEXT NOT NULL DEFAULT 'ANY'"},
+		{name: "template_id", def: "TEXT"},
+		{name: "message_type", def: "TEXT"},
+		{name: "egm_id", def: "TEXT"},
+		{name: "action_id", def: "TEXT"},
+		{name: "action_step_id", def: "TEXT"},
+		{name: "outcome", def: "TEXT NOT NULL DEFAULT 'NOTE'"},
+	}
+	for _, def := range defs {
+		if existing[def.name] {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE handler_rules ADD COLUMN "+def.name+" "+def.def); err != nil {
+			return err
+		}
 	}
 	return nil
 }

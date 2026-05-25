@@ -657,6 +657,8 @@ func TestCommsPageRendersMessageEvidence(t *testing.T) {
 	for _, expected := range []string{
 		"Message Journal",
 		"/operator/comms/export",
+		"/operator/comms/handler-rules",
+		"Create Handler Rule",
 		"from://controller",
 		"to://cabinet/EGM-001",
 		"run-1",
@@ -671,6 +673,170 @@ func TestCommsPageRendersMessageEvidence(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in comms page", expected)
 		}
+	}
+}
+
+func TestCommsHandlerRulesListRenders(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if err := st.UpsertHandlerRule(ctx, g2sengine.HandlerRule{
+		ID:        "rule-ack",
+		Name:      "ACK Confirmation",
+		Enabled:   true,
+		Direction: g2sengine.HandlerRuleDirectionInbound,
+		MatchJSON: `{"contains":["accepted"]}`,
+		Outcome:   g2sengine.HandlerRuleOutcomeConfirmation,
+	}); err != nil {
+		t.Fatalf("upsert handler rule: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms/handler-rules", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"Handler Rules", "rule-ack", "ACK Confirmation"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in handler rules page", expected)
+		}
+	}
+}
+
+func TestCommsHandlerRuleNewPrefillsFromMessage(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("expected seeded message")
+	}
+	messageID := rows[0].ID
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms/handler-rules/new?message_id="+strconv.FormatInt(messageID, 10), nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"Selected Message", "Direction", "Message Payload", "Match Preview"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q on new handler rule page", expected)
+		}
+	}
+}
+
+func TestCommsHandlerRulePreviewShowsMatch(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("expected seeded message")
+	}
+	messageID := rows[0].ID
+	body := url.Values{
+		"id":           {"preview-rule"},
+		"name":         {"Preview Rule"},
+		"enabled":      {"true"},
+		"direction":    {"OUTBOUND"},
+		"outcome":      {"NOTE"},
+		"message_id":   {strconv.FormatInt(messageID, 10)},
+		"match_json":   {`{"contains":["emergency-broadcast-trigger"]}`},
+		"template_id":  {"template-generic-g2s-action"},
+		"message_type": {"emergency_broadcast_silence"},
+		"egm_id":       {"EGM-001"},
+		"mode":         {"preview"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/comms/handler-rules", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Match: <span class=\"mono\">yes</span>") {
+		t.Fatalf("expected preview match yes, body=%s", res.Body.String())
+	}
+}
+
+func TestCommsHandlerRulePostRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(http.ResponseWriter, *http.Request) bool { return false })
+	server.RegisterRoutes(mux)
+
+	body := url.Values{
+		"id":         {"rule-auth"},
+		"name":       {"Auth Rule"},
+		"enabled":    {"true"},
+		"direction":  {"INBOUND"},
+		"outcome":    {"NOTE"},
+		"match_json": {`{"contains":["accepted"]}`},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/comms/handler-rules", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=401 body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestCommsHandlerRulePostCreatesRuleAndAuditEntry(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	body := url.Values{
+		"id":           {"rule-create"},
+		"name":         {"Created Rule"},
+		"enabled":      {"true"},
+		"direction":    {"INBOUND"},
+		"outcome":      {"FAILURE"},
+		"match_json":   {`{"contains":["rejected"]}`},
+		"template_id":  {"template-generic-g2s-action"},
+		"message_type": {"ACK"},
+		"egm_id":       {"EGM-001"},
+		"action_id":    {"emergency-broadcast-trigger"},
+		"mode":         {"save"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/comms/handler-rules", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	row, err := st.GetHandlerRule(ctx, "rule-create")
+	if err != nil {
+		t.Fatalf("get handler rule: %v", err)
+	}
+	if row == nil || row.Name != "Created Rule" || row.Outcome != g2sengine.HandlerRuleOutcomeFailure {
+		t.Fatalf("unexpected handler rule: %+v", row)
+	}
+	auditRows, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 200})
+	if err != nil {
+		t.Fatalf("list audit rows: %v", err)
+	}
+	found := false
+	for _, auditRow := range auditRows {
+		if auditRow.EventType == audit.EventTypeHandlerRule && strings.Contains(auditRow.Summary, "Handler Rule") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected handler rule audit event in rows: %+v", auditRows)
 	}
 }
 

@@ -45,6 +45,7 @@ func TestPhase1AMigrationIdempotent(t *testing.T) {
 	}
 
 	assertMessageJournalSendColumns(t, store)
+	assertHandlerRulesColumns(t, store)
 }
 
 func TestInputChannelUpsertGetList(t *testing.T) {
@@ -448,6 +449,93 @@ func TestMessageJournalUpdateResultPersistsSendFields(t *testing.T) {
 	}
 }
 
+func TestMessageJournalUpdateHandlerRule(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	messageID, err := store.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionInbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		MessageType: "ACK",
+		RawPayload:  "<ack/>",
+		Result:      g2sengine.MessageResultReceived,
+	})
+	if err != nil {
+		t.Fatalf("record message: %v", err)
+	}
+	if err := store.UpdateMessageJournalHandlerRule(ctx, messageID, "rule-1"); err != nil {
+		t.Fatalf("update message handler_rule_id: %v", err)
+	}
+	row, err := store.GetMessageJournalEntry(ctx, messageID)
+	if err != nil {
+		t.Fatalf("get message: %v", err)
+	}
+	if row == nil || row.HandlerRuleID != "rule-1" {
+		t.Fatalf("unexpected handler rule linkage: %+v", row)
+	}
+}
+
+func TestHandlerRuleUpsertGetListAndDisable(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	rule := g2sengine.HandlerRule{
+		ID:          "handler-1",
+		Name:        "Accept ACK",
+		Enabled:     true,
+		Direction:   g2sengine.HandlerRuleDirectionInbound,
+		TemplateID:  "template-generic-g2s-action",
+		MessageType: "ACK",
+		EGMID:       "EGM-001",
+		ActionID:    "emergency-broadcast-trigger",
+		MatchJSON:   `{"contains":["accepted"]}`,
+		Outcome:     g2sengine.HandlerRuleOutcomeConfirmation,
+		Notes:       "operator note",
+	}
+	if err := store.UpsertHandlerRule(ctx, rule); err != nil {
+		t.Fatalf("upsert handler rule: %v", err)
+	}
+
+	fetched, err := store.GetHandlerRule(ctx, "handler-1")
+	if err != nil {
+		t.Fatalf("get handler rule: %v", err)
+	}
+	if fetched == nil || fetched.Name != "Accept ACK" || fetched.Outcome != g2sengine.HandlerRuleOutcomeConfirmation {
+		t.Fatalf("unexpected fetched handler rule: %+v", fetched)
+	}
+
+	allRules, err := store.ListHandlerRules(ctx, HandlerRuleListQuery{Limit: 20})
+	if err != nil {
+		t.Fatalf("list handler rules: %v", err)
+	}
+	if len(allRules) != 1 {
+		t.Fatalf("handler rule count=%d want=1", len(allRules))
+	}
+
+	enabledRules, err := store.ListEnabledHandlerRules(ctx, 20)
+	if err != nil {
+		t.Fatalf("list enabled handler rules: %v", err)
+	}
+	if len(enabledRules) != 1 {
+		t.Fatalf("enabled rule count=%d want=1", len(enabledRules))
+	}
+
+	if err := store.DisableHandlerRule(ctx, "handler-1"); err != nil {
+		t.Fatalf("disable handler rule: %v", err)
+	}
+	enabledRules, err = store.ListEnabledHandlerRules(ctx, 20)
+	if err != nil {
+		t.Fatalf("list enabled handler rules after disable: %v", err)
+	}
+	if len(enabledRules) != 0 {
+		t.Fatalf("enabled rule count=%d want=0", len(enabledRules))
+	}
+}
+
 func TestAuditTimelineRecordAndList(t *testing.T) {
 	ctx := context.Background()
 	store := newPhaseStore(t, ctx)
@@ -579,6 +667,37 @@ func assertMessageJournalSendColumns(t *testing.T, store *SQLiteStore) {
 	for _, column := range []string{"http_status_code", "latency_ms", "response_excerpt", "sent_at", "completed_at", "transport_mode"} {
 		if !found[column] {
 			t.Fatalf("expected message_journal column %q", column)
+		}
+	}
+}
+
+func assertHandlerRulesColumns(t *testing.T, store *SQLiteStore) {
+	t.Helper()
+	rows, err := store.db.Query(`PRAGMA table_info(handler_rules)`)
+	if err != nil {
+		t.Fatalf("table_info(handler_rules): %v", err)
+	}
+	defer rows.Close()
+
+	found := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan table_info row: %v", err)
+		}
+		found[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("table_info rows: %v", err)
+	}
+	for _, column := range []string{"direction", "template_id", "message_type", "egm_id", "action_id", "action_step_id", "outcome"} {
+		if !found[column] {
+			t.Fatalf("expected handler_rules column %q", column)
 		}
 	}
 }

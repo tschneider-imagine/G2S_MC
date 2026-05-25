@@ -41,6 +41,7 @@ type ProcessResult struct {
 
 type Store interface {
 	RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error)
+	UpdateMessageJournalHandlerRule(ctx context.Context, id int64, handlerRuleID string) error
 	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 	GetActionRun(ctx context.Context, id string) (*actions.ActionRun, error)
 	UpdateActionRun(ctx context.Context, run actions.ActionRun) error
@@ -50,6 +51,7 @@ type Store interface {
 	GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error)
 	GetEGMRecord(ctx context.Context, egmID string) (*egms.EGMRecord, error)
 	GetActiveG2STemplateVersion(ctx context.Context, templateID string) (*templates.G2STemplateVersion, error)
+	ListEnabledHandlerRules(ctx context.Context, limit int) ([]g2sengine.HandlerRule, error)
 }
 
 type Service struct {

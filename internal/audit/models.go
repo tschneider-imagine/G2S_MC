@@ -29,6 +29,7 @@ const (
 	EventTypeActionStep               = "ACTION_STEP"
 	EventTypeMessageSent              = "MESSAGE_SENT"
 	EventTypeMessageReceived          = "MESSAGE_RECEIVED"
+	EventTypeHandlerRule              = "HANDLER_RULE"
 	EventTypeConfirmation             = "CONFIRMATION"
 	EventTypeRetry                    = "RETRY"
 	EventTypeEscalation               = "ESCALATION"

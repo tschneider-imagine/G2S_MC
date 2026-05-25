@@ -75,14 +75,21 @@ func (m MessageJournalEntry) Validate() error {
 }
 
 type HandlerRule struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Enabled    bool      `json:"enabled"`
-	MatchJSON  string    `json:"match_json"`
-	HandleJSON string    `json:"handle_json"`
-	Notes      string    `json:"notes,omitempty"`
-	CreatedAt  time.Time `json:"created_at,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Enabled      bool                 `json:"enabled"`
+	Direction    HandlerRuleDirection `json:"direction"`
+	TemplateID   string               `json:"template_id,omitempty"`
+	MessageType  string               `json:"message_type,omitempty"`
+	EGMID        string               `json:"egm_id,omitempty"`
+	ActionID     string               `json:"action_id,omitempty"`
+	ActionStepID string               `json:"action_step_id,omitempty"`
+	MatchJSON    string               `json:"match_json"`
+	Outcome      HandlerRuleOutcome   `json:"outcome"`
+	HandleJSON   string               `json:"handle_json,omitempty"`
+	Notes        string               `json:"notes,omitempty"`
+	CreatedAt    time.Time            `json:"created_at,omitempty"`
+	UpdatedAt    time.Time            `json:"updated_at,omitempty"`
 }
 
 func (r HandlerRule) Validate() error {
@@ -95,8 +102,60 @@ func (r HandlerRule) Validate() error {
 	if strings.TrimSpace(r.MatchJSON) == "" {
 		return fmt.Errorf("match_json is required")
 	}
-	if strings.TrimSpace(r.HandleJSON) == "" {
-		return fmt.Errorf("handle_json is required")
+	switch normalizeHandlerRuleDirection(r.Direction) {
+	case HandlerRuleDirectionAny, HandlerRuleDirectionInbound, HandlerRuleDirectionOutbound:
+	default:
+		return fmt.Errorf("direction is invalid")
+	}
+	switch normalizeHandlerRuleOutcome(r.Outcome) {
+	case HandlerRuleOutcomeConfirmation, HandlerRuleOutcomeFailure, HandlerRuleOutcomeIgnore, HandlerRuleOutcomeNote:
+	default:
+		return fmt.Errorf("outcome is invalid")
 	}
 	return nil
+}
+
+type HandlerRuleDirection string
+
+const (
+	HandlerRuleDirectionAny      HandlerRuleDirection = "ANY"
+	HandlerRuleDirectionInbound  HandlerRuleDirection = "INBOUND"
+	HandlerRuleDirectionOutbound HandlerRuleDirection = "OUTBOUND"
+)
+
+type HandlerRuleOutcome string
+
+const (
+	HandlerRuleOutcomeConfirmation HandlerRuleOutcome = "CONFIRMATION"
+	HandlerRuleOutcomeFailure      HandlerRuleOutcome = "FAILURE"
+	HandlerRuleOutcomeIgnore       HandlerRuleOutcome = "IGNORE"
+	HandlerRuleOutcomeNote         HandlerRuleOutcome = "NOTE"
+)
+
+func normalizeHandlerRuleDirection(value HandlerRuleDirection) HandlerRuleDirection {
+	normalized := strings.ToUpper(strings.TrimSpace(string(value)))
+	switch normalized {
+	case string(HandlerRuleDirectionInbound):
+		return HandlerRuleDirectionInbound
+	case string(HandlerRuleDirectionOutbound):
+		return HandlerRuleDirectionOutbound
+	default:
+		return HandlerRuleDirectionAny
+	}
+}
+
+func normalizeHandlerRuleOutcome(value HandlerRuleOutcome) HandlerRuleOutcome {
+	normalized := strings.ToUpper(strings.TrimSpace(string(value)))
+	switch normalized {
+	case string(HandlerRuleOutcomeConfirmation):
+		return HandlerRuleOutcomeConfirmation
+	case string(HandlerRuleOutcomeFailure):
+		return HandlerRuleOutcomeFailure
+	case string(HandlerRuleOutcomeIgnore):
+		return HandlerRuleOutcomeIgnore
+	case string(HandlerRuleOutcomeNote):
+		return HandlerRuleOutcomeNote
+	default:
+		return ""
+	}
 }

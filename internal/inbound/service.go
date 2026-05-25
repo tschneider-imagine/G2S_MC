@@ -84,6 +84,24 @@ func (s *Service) Process(ctx context.Context, message InboundMessage) (ProcessR
 		return result, err
 	}
 	result.AuditEntryIDs = append(result.AuditEntryIDs, receiveAuditID)
+
+	handlerApplied, handlerResult, err := s.applyHandlerRules(ctx, now, messageID, resolved, correlation, message.RawPayload, summaryJSON)
+	if err != nil {
+		return result, err
+	}
+	if handlerApplied {
+		result.MatchOutcome = handlerResult.Outcome
+		result.TargetUpdated = handlerResult.TargetUpdated
+		result.TargetStatus = handlerResult.TargetStatus
+		result.AuditEntryIDs = append(result.AuditEntryIDs, handlerResult.AuditEntryIDs...)
+		result.Warnings = append(result.Warnings, handlerResult.Warnings...)
+		if correlation.HasTarget {
+			result.Correlated = true
+			result.CorrelationRef = correlation.Target.TargetEGMID
+		}
+		return result, nil
+	}
+
 	if !correlation.HasTarget {
 		if correlation.Warning != "" {
 			result.Warnings = append(result.Warnings, correlation.Warning)
@@ -439,6 +457,102 @@ func (s *Service) applyMatcher(ctx context.Context, occurredAt time.Time, messag
 		result.AuditEntryIDs = append(result.AuditEntryIDs, id)
 	}
 	return result, nil
+}
+
+func (s *Service) applyHandlerRules(ctx context.Context, occurredAt time.Time, messageID int64, resolved resolvedMetadata, correlation correlation, rawPayload string, summaryJSON string) (bool, matcherResult, error) {
+	result := matcherResult{Outcome: "NO_MATCH"}
+	rules, err := s.Store.ListEnabledHandlerRules(ctx, 200)
+	if err != nil {
+		return false, result, err
+	}
+	if len(rules) == 0 {
+		return false, result, nil
+	}
+
+	var templateID string
+	var actionID string
+	if correlation.Run != nil {
+		actionID = correlation.Run.ActionDefinitionID
+	}
+	if correlation.Target != nil {
+		egmRecord, egmErr := s.Store.GetEGMRecord(ctx, correlation.Target.TargetEGMID)
+		if egmErr != nil {
+			return false, result, egmErr
+		}
+		if egmRecord != nil {
+			templateID = strings.TrimSpace(egmRecord.TemplateID)
+		}
+	}
+	selection, err := g2sengine.EvaluateHandlerRules(
+		rules,
+		g2sengine.DirectionInbound,
+		templateID,
+		resolved.MessageType,
+		resolved.EGMID,
+		actionID,
+		"",
+		rawPayload,
+		summaryJSON,
+	)
+	if err != nil {
+		result.Warnings = append(result.Warnings, "handler rule error: "+err.Error())
+		return false, result, nil
+	}
+	if selection == nil {
+		return false, result, nil
+	}
+	if err := s.Store.UpdateMessageJournalHandlerRule(ctx, messageID, selection.Rule.ID); err != nil {
+		return false, result, err
+	}
+
+	auditID, err := s.recordAudit(ctx, audit.AuditTimelineEntry{
+		OccurredAt:       occurredAt,
+		Severity:         audit.AuditSeverityInfo,
+		EventType:        audit.EventTypeHandlerRule,
+		Summary:          "Handler Rule matched inbound message",
+		DetailJSON:       encodeSummaryJSON(map[string]any{"handler_rule_id": selection.Rule.ID, "outcome": selection.Outcome, "reason": selection.Reason}),
+		ActionRunID:      resolved.ActionRunID,
+		MessageJournalID: messageID,
+	})
+	if err != nil {
+		return false, result, err
+	}
+	result.AuditEntryIDs = append(result.AuditEntryIDs, auditID)
+
+	switch selection.Outcome {
+	case g2sengine.HandlerRuleOutcomeFailure:
+		result.Outcome = string(g2sengine.MatchOutcomeFailure)
+	case g2sengine.HandlerRuleOutcomeConfirmation:
+		result.Outcome = string(g2sengine.MatchOutcomeExpected)
+	case g2sengine.HandlerRuleOutcomeIgnore:
+		result.Outcome = string(g2sengine.HandlerRuleOutcomeIgnore)
+	default:
+		result.Outcome = string(g2sengine.HandlerRuleOutcomeNote)
+	}
+
+	if (selection.Outcome == g2sengine.HandlerRuleOutcomeConfirmation || selection.Outcome == g2sengine.HandlerRuleOutcomeFailure) && correlation.HasTarget {
+		now := s.now()
+		if selection.Outcome == g2sengine.HandlerRuleOutcomeConfirmation {
+			correlation.Target.Status = actions.TargetStatusConfirmed
+			correlation.Target.LastError = ""
+		} else {
+			correlation.Target.Status = actions.TargetStatusFailed
+			correlation.Target.LastError = defaultString(selection.Reason, "handler rule matched failure")
+		}
+		correlation.Target.LastResultAt = &now
+		if err := s.Store.UpdateActionTargetResult(ctx, *correlation.Target); err != nil {
+			return false, result, err
+		}
+		result.TargetUpdated = true
+		result.TargetStatus = string(correlation.Target.Status)
+		if err := s.refreshRunState(ctx, correlation.Run, occurredAt); err != nil {
+			return false, result, err
+		}
+	}
+	if (selection.Outcome == g2sengine.HandlerRuleOutcomeConfirmation || selection.Outcome == g2sengine.HandlerRuleOutcomeFailure) && !correlation.HasTarget {
+		result.Warnings = append(result.Warnings, "handler rule matched but no correlated target result")
+	}
+	return true, result, nil
 }
 
 func (s *Service) refreshRunState(ctx context.Context, run *actions.ActionRun, occurredAt time.Time) error {

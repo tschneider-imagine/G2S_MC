@@ -75,6 +75,13 @@ type Store interface {
 	ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error)
 
 	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
+	GetMessageJournalEntry(ctx context.Context, id int64) (*g2sengine.MessageJournalEntry, error)
+	UpdateMessageJournalHandlerRule(ctx context.Context, id int64, handlerRuleID string) error
+	UpsertHandlerRule(ctx context.Context, rule g2sengine.HandlerRule) error
+	GetHandlerRule(ctx context.Context, id string) (*g2sengine.HandlerRule, error)
+	ListHandlerRules(ctx context.Context, query store.HandlerRuleListQuery) ([]g2sengine.HandlerRule, error)
+	ListEnabledHandlerRules(ctx context.Context, limit int) ([]g2sengine.HandlerRule, error)
+	DisableHandlerRule(ctx context.Context, id string) error
 	ListAuditTimelineEntries(ctx context.Context, query store.AuditTimelineListQuery) ([]audit.AuditTimelineEntry, error)
 	GetIncidentRecord(ctx context.Context, id int64) (*incidents.IncidentRecord, error)
 	GetOpenIncidentByInput(ctx context.Context, inputID string) (*incidents.IncidentRecord, error)
@@ -141,6 +148,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute("/templates/"), s.handleTemplateByID)
 	mux.HandleFunc(operatorRoute("/comms"), s.handleComms)
 	mux.HandleFunc(operatorRoute("/comms/export"), s.handleCommsExport)
+	mux.HandleFunc(operatorRoute("/comms/handler-rules"), s.handleCommsHandlerRules)
+	mux.HandleFunc(operatorRoute("/comms/handler-rules/"), s.handleCommsHandlerRuleByID)
+	mux.HandleFunc(operatorRoute("/comms/handler-rules/new"), s.handleCommsHandlerRuleNew)
 	mux.HandleFunc(operatorRoute("/audit"), s.handleAudit)
 	mux.HandleFunc(operatorRoute("/audit/notes"), s.handleAuditNotes)
 	mux.HandleFunc(operatorRoute("/audit/export"), s.handleAuditExport)
@@ -1715,8 +1725,8 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Message Journal</h2><p><a href="/operator/comms/export">Export JSON</a></p><table>`)
-	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Input Transition</th><th>Template</th><th>Message</th><th>Result</th><th>Match</th><th>Delivery</th><th>Error</th><th>Payload</th><th>Summary</th></tr>`)
+	body.WriteString(`<div class="panel"><h2>Message Journal</h2><p><a href="/operator/comms/export">Export JSON</a> | <a href="/operator/comms/handler-rules">Handler Rules</a></p><table>`)
+	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Input Transition</th><th>Template</th><th>Message</th><th>Result</th><th>Match</th><th>Rule</th><th>Delivery</th><th>Error</th><th>Payload</th><th>Summary</th></tr>`)
 	versionCache := map[string]*templates.G2STemplateVersion{}
 	for _, row := range rows {
 		templateRef := row.TemplateID
@@ -1739,6 +1749,9 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		body.WriteString(`<td class="mono">` + esc(row.MessageType) + `</td>`)
 		body.WriteString(`<td>` + esc(string(row.Result)) + `</td>`)
 		body.WriteString(`<td>` + esc(s.commsMatcherOutcome(r.Context(), row, versionCache)) + `</td>`)
+		createRuleLink := `/operator/comms/handler-rules/new?message_id=` + strconv.FormatInt(row.ID, 10)
+		ruleSummary := defaultString(strings.TrimSpace(row.HandlerRuleID), "-")
+		body.WriteString(`<td><span class="mono">` + esc(ruleSummary) + `</span><br><a href="` + esc(createRuleLink) + `">Create Handler Rule</a></td>`)
 		body.WriteString(`<td>` + esc(deliverySummary(row)) + `</td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.Error, "-")) + `</pre></details></td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(payload) + `</pre></details></td>`)
@@ -1760,6 +1773,343 @@ func (s *Server) handleCommsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeCommsExport(w, rows)
+}
+
+type commsHandlerRulePageModel struct {
+	Rule         g2sengine.HandlerRule
+	Message      *g2sengine.MessageJournalEntry
+	MessageID    int64
+	Preview      *g2sengine.HandlerRuleMatchResult
+	PreviewError string
+	FormError    string
+	FormMessage  string
+}
+
+func (s *Server) handleCommsHandlerRules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rules, err := s.Store.ListHandlerRules(r.Context(), store.HandlerRuleListQuery{Limit: queryLimit(r, 200)})
+		if err != nil {
+			s.renderError(w, operatorRoute("/comms"), "Operator Message Journal", err)
+			return
+		}
+		body := strings.Builder{}
+		body.WriteString(`<div class="panel"><h2>Handler Rules</h2><p><a href="/operator/comms">Back to Message Journal</a> | <a href="/operator/comms/handler-rules/new">New Handler Rule</a></p><table>`)
+		body.WriteString(`<tr><th>ID</th><th>Name</th><th>Enabled</th><th>Direction</th><th>Outcome</th><th>Template</th><th>Message Type</th><th>EGM ID</th><th>Action</th><th>Updated</th><th>Notes</th></tr>`)
+		for _, rule := range rules {
+			body.WriteString(`<tr>`)
+			body.WriteString(`<td class="mono"><a href="/operator/comms/handler-rules/` + esc(rule.ID) + `">` + esc(rule.ID) + `</a></td>`)
+			body.WriteString(`<td>` + esc(rule.Name) + `</td>`)
+			body.WriteString(`<td>` + esc(yesNo(rule.Enabled)) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(strings.TrimSpace(string(rule.Direction)), "ANY")) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(strings.TrimSpace(string(rule.Outcome)), "NOTE")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(rule.TemplateID, "-")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(rule.MessageType, "-")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(rule.EGMID, "-")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(rule.ActionID, "-")) + `</td>`)
+			body.WriteString(`<td>` + esc(fmtTime(rule.UpdatedAt)) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(rule.Notes, "-")) + `</td>`)
+			body.WriteString(`</tr>`)
+		}
+		body.WriteString(`</table></div>`)
+		s.renderPage(w, operatorRoute("/comms"), "Operator Message Journal", body.String(), "", "")
+	case http.MethodPost:
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		s.saveCommsHandlerRule(w, r, "")
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleCommsHandlerRuleNew(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		model := commsHandlerRulePageModel{
+			Rule: g2sengine.HandlerRule{
+				Enabled:   true,
+				Direction: g2sengine.HandlerRuleDirectionAny,
+				Outcome:   g2sengine.HandlerRuleOutcomeNote,
+			},
+		}
+		messageID, ok := parseOptionalInt64(r.URL.Query().Get("message_id"))
+		if ok {
+			model.MessageID = messageID
+			row, err := s.Store.GetMessageJournalEntry(r.Context(), messageID)
+			if err != nil {
+				s.renderError(w, operatorRoute("/comms"), "Operator Message Journal", err)
+				return
+			}
+			model.Message = row
+			if row != nil {
+				model.Rule.Direction = g2sengine.HandlerRuleDirection(strings.ToUpper(strings.TrimSpace(string(row.Direction))))
+				model.Rule.TemplateID = row.TemplateID
+				model.Rule.MessageType = row.MessageType
+				model.Rule.EGMID = row.EGMID
+				model.Rule.MatchJSON = `{"contains":[]}`
+				model.Rule.Name = "Rule from message " + strconv.FormatInt(row.ID, 10)
+				if strings.TrimSpace(row.ActionRunID) != "" {
+					run, err := s.Store.GetActionRun(r.Context(), row.ActionRunID)
+					if err == nil && run != nil {
+						model.Rule.ActionID = run.ActionDefinitionID
+					}
+				}
+				preview, previewErr := s.previewCommsHandlerRule(model.Rule, row)
+				model.Preview = preview
+				if previewErr != nil {
+					model.PreviewError = previewErr.Error()
+				}
+			}
+		}
+		s.renderCommsHandlerRuleForm(w, r, model)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleCommsHandlerRuleByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, operatorRoute("/comms/handler-rules/")))
+	if path == "" || strings.Contains(path, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		row, err := s.Store.GetHandlerRule(r.Context(), path)
+		if err != nil {
+			s.renderError(w, operatorRoute("/comms"), "Operator Message Journal", err)
+			return
+		}
+		if row == nil {
+			http.NotFound(w, r)
+			return
+		}
+		model := commsHandlerRulePageModel{Rule: *row}
+		messageID, ok := parseOptionalInt64(r.URL.Query().Get("message_id"))
+		if ok {
+			model.MessageID = messageID
+			model.Message, _ = s.Store.GetMessageJournalEntry(r.Context(), messageID)
+			if model.Message != nil {
+				preview, previewErr := s.previewCommsHandlerRule(model.Rule, model.Message)
+				model.Preview = preview
+				if previewErr != nil {
+					model.PreviewError = previewErr.Error()
+				}
+			}
+		}
+		s.renderCommsHandlerRuleForm(w, r, model)
+	case http.MethodPost:
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(r.FormValue("action")), "disable") {
+			if err := s.Store.DisableHandlerRule(r.Context(), path); err != nil {
+				s.renderCommsHandlerRuleForm(w, r, commsHandlerRulePageModel{
+					Rule:      g2sengine.HandlerRule{ID: path},
+					FormError: err.Error(),
+				})
+				return
+			}
+			_, _ = s.Store.RecordAuditTimelineEntry(r.Context(), audit.AuditTimelineEntry{
+				OccurredAt: time.Now().UTC(),
+				Severity:   audit.AuditSeverityInfo,
+				EventType:  audit.EventTypeHandlerRule,
+				Summary:    "Handler Rule disabled",
+				DetailJSON: encodeSummaryJSON(map[string]any{"handler_rule_id": path}),
+				Operator:   "operator-console",
+			})
+			http.Redirect(w, r, operatorRoute("/comms/handler-rules"), http.StatusSeeOther)
+			return
+		}
+		s.saveCommsHandlerRule(w, r, path)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) saveCommsHandlerRule(w http.ResponseWriter, r *http.Request, pathID string) {
+	if err := r.ParseForm(); err != nil {
+		s.renderCommsHandlerRuleForm(w, r, commsHandlerRulePageModel{
+			Rule:      g2sengine.HandlerRule{Enabled: true, Direction: g2sengine.HandlerRuleDirectionAny, Outcome: g2sengine.HandlerRuleOutcomeNote},
+			FormError: "invalid form payload",
+		})
+		return
+	}
+
+	ruleID := strings.TrimSpace(r.FormValue("id"))
+	if pathID != "" {
+		ruleID = pathID
+	}
+	rule := g2sengine.HandlerRule{
+		ID:           ruleID,
+		Name:         strings.TrimSpace(r.FormValue("name")),
+		Enabled:      parseFormBool(r.FormValue("enabled")),
+		Direction:    g2sengine.HandlerRuleDirection(strings.ToUpper(strings.TrimSpace(r.FormValue("direction")))),
+		TemplateID:   strings.TrimSpace(r.FormValue("template_id")),
+		MessageType:  strings.TrimSpace(r.FormValue("message_type")),
+		EGMID:        strings.TrimSpace(r.FormValue("egm_id")),
+		ActionID:     strings.TrimSpace(r.FormValue("action_id")),
+		ActionStepID: strings.TrimSpace(r.FormValue("action_step_id")),
+		MatchJSON:    strings.TrimSpace(r.FormValue("match_json")),
+		Outcome:      g2sengine.HandlerRuleOutcome(strings.ToUpper(strings.TrimSpace(r.FormValue("outcome")))),
+		Notes:        strings.TrimSpace(r.FormValue("notes")),
+	}
+	if rule.Direction == "" {
+		rule.Direction = g2sengine.HandlerRuleDirectionAny
+	}
+	if rule.Outcome == "" {
+		rule.Outcome = g2sengine.HandlerRuleOutcomeNote
+	}
+	messageID, _ := parseOptionalInt64(r.FormValue("message_id"))
+	model := commsHandlerRulePageModel{
+		Rule:      rule,
+		MessageID: messageID,
+	}
+	if messageID > 0 {
+		message, _ := s.Store.GetMessageJournalEntry(r.Context(), messageID)
+		model.Message = message
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(r.FormValue("mode")))
+	if mode == "preview" {
+		preview, previewErr := s.previewCommsHandlerRule(rule, model.Message)
+		model.Preview = preview
+		if previewErr != nil {
+			model.PreviewError = previewErr.Error()
+		}
+		s.renderCommsHandlerRuleForm(w, r, model)
+		return
+	}
+
+	if err := rule.Validate(); err != nil {
+		model.FormError = err.Error()
+		s.renderCommsHandlerRuleForm(w, r, model)
+		return
+	}
+	if _, err := g2sengine.ParseHandlerRuleMatchDocument(rule.MatchJSON); err != nil {
+		model.FormError = err.Error()
+		s.renderCommsHandlerRuleForm(w, r, model)
+		return
+	}
+	if err := s.Store.UpsertHandlerRule(r.Context(), rule); err != nil {
+		model.FormError = err.Error()
+		s.renderCommsHandlerRuleForm(w, r, model)
+		return
+	}
+	if messageID > 0 {
+		_ = s.Store.UpdateMessageJournalHandlerRule(r.Context(), messageID, rule.ID)
+	}
+	summary := "Handler Rule created"
+	if pathID != "" {
+		summary = "Handler Rule updated"
+	}
+	_, _ = s.Store.RecordAuditTimelineEntry(r.Context(), audit.AuditTimelineEntry{
+		OccurredAt: time.Now().UTC(),
+		Severity:   audit.AuditSeverityInfo,
+		EventType:  audit.EventTypeHandlerRule,
+		Summary:    summary,
+		DetailJSON: encodeSummaryJSON(map[string]any{
+			"handler_rule_id": rule.ID,
+			"outcome":         rule.Outcome,
+			"direction":       rule.Direction,
+			"template_id":     rule.TemplateID,
+			"message_type":    rule.MessageType,
+			"egm_id":          rule.EGMID,
+			"action_id":       rule.ActionID,
+			"action_step_id":  rule.ActionStepID,
+		}),
+		Operator: "operator-console",
+	})
+	http.Redirect(w, r, operatorRoute("/comms/handler-rules"), http.StatusSeeOther)
+}
+
+func (s *Server) previewCommsHandlerRule(rule g2sengine.HandlerRule, message *g2sengine.MessageJournalEntry) (*g2sengine.HandlerRuleMatchResult, error) {
+	if message == nil {
+		return nil, nil
+	}
+	actionID := ""
+	if strings.TrimSpace(message.ActionRunID) != "" {
+		run, err := s.Store.GetActionRun(context.Background(), message.ActionRunID)
+		if err == nil && run != nil {
+			actionID = run.ActionDefinitionID
+		}
+	}
+	result, err := g2sengine.MatchHandlerRule(
+		rule,
+		message.Direction,
+		message.TemplateID,
+		message.MessageType,
+		message.EGMID,
+		actionID,
+		message.ActionStepID,
+		message.RawPayload,
+		message.ParsedSummaryJSON,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (s *Server) renderCommsHandlerRuleForm(w http.ResponseWriter, r *http.Request, model commsHandlerRulePageModel) {
+	body := strings.Builder{}
+	body.WriteString(`<div class="panel"><h2>Handler Rule</h2><p><a href="/operator/comms">Back to Message Journal</a> | <a href="/operator/comms/handler-rules">View Handler Rules</a></p>`)
+	if model.Message != nil {
+		body.WriteString(`<h3>Selected Message</h3><p>ID: <span class="mono">` + esc(strconv.FormatInt(model.Message.ID, 10)) + `</span></p>`)
+		body.WriteString(`<p>Direction: <span class="mono">` + esc(string(model.Message.Direction)) + `</span> | EGM: <span class="mono">` + esc(defaultString(model.Message.EGMID, "-")) + `</span> | Action Run: <span class="mono">` + esc(defaultString(model.Message.ActionRunID, "-")) + `</span></p>`)
+		body.WriteString(`<details><summary>Message Payload</summary><pre>` + esc(defaultString(model.Message.RawPayload, "-")) + `</pre></details>`)
+		body.WriteString(`<details><summary>Message Summary</summary><pre>` + esc(defaultString(model.Message.ParsedSummaryJSON, "-")) + `</pre></details>`)
+	}
+	actionURL := "/operator/comms/handler-rules"
+	if strings.TrimSpace(model.Rule.ID) != "" {
+		actionURL = "/operator/comms/handler-rules/" + strings.TrimSpace(model.Rule.ID)
+	}
+	body.WriteString(`<form method="post" action="` + esc(actionURL) + `">`)
+	if strings.TrimSpace(model.Rule.ID) != "" {
+		body.WriteString(`<p>Rule ID: <span class="mono">` + esc(model.Rule.ID) + `</span></p>`)
+		body.WriteString(`<input type="hidden" name="id" value="` + esc(model.Rule.ID) + `">`)
+	} else {
+		body.WriteString(`<label>Rule ID <input type="text" name="id" value="` + esc(model.Rule.ID) + `"></label>`)
+	}
+	body.WriteString(`<label>Name <input type="text" name="name" value="` + esc(model.Rule.Name) + `"></label>`)
+	body.WriteString(`<label>Direction <select name="direction">`)
+	for _, dir := range []g2sengine.HandlerRuleDirection{g2sengine.HandlerRuleDirectionAny, g2sengine.HandlerRuleDirectionInbound, g2sengine.HandlerRuleDirectionOutbound} {
+		body.WriteString(`<option value="` + esc(string(dir)) + `"` + selected(string(model.Rule.Direction), string(dir)) + `>` + esc(string(dir)) + `</option>`)
+	}
+	body.WriteString(`</select></label>`)
+	body.WriteString(`<label>Outcome <select name="outcome">`)
+	for _, outcome := range []g2sengine.HandlerRuleOutcome{g2sengine.HandlerRuleOutcomeConfirmation, g2sengine.HandlerRuleOutcomeFailure, g2sengine.HandlerRuleOutcomeIgnore, g2sengine.HandlerRuleOutcomeNote} {
+		body.WriteString(`<option value="` + esc(string(outcome)) + `"` + selected(string(model.Rule.Outcome), string(outcome)) + `>` + esc(handlerRuleOutcomeLabel(outcome)) + `</option>`)
+	}
+	body.WriteString(`</select></label>`)
+	body.WriteString(`<label>Enabled <input type="checkbox" name="enabled" value="true"` + checked(model.Rule.Enabled) + `></label>`)
+	body.WriteString(`<label>Related Template <input type="text" name="template_id" value="` + esc(model.Rule.TemplateID) + `"></label>`)
+	body.WriteString(`<label>Message Type <input type="text" name="message_type" value="` + esc(model.Rule.MessageType) + `"></label>`)
+	body.WriteString(`<label>EGM ID <input type="text" name="egm_id" value="` + esc(model.Rule.EGMID) + `"></label>`)
+	body.WriteString(`<label>Related Action <input type="text" name="action_id" value="` + esc(model.Rule.ActionID) + `"></label>`)
+	body.WriteString(`<label>Action Step ID <input type="text" name="action_step_id" value="` + esc(model.Rule.ActionStepID) + `"></label>`)
+	body.WriteString(`<label style="display:block;">Match JSON<textarea name="match_json">` + esc(defaultString(model.Rule.MatchJSON, `{"contains":[]}`)) + `</textarea></label>`)
+	body.WriteString(`<label style="display:block;">Operator Note<textarea name="notes">` + esc(model.Rule.Notes) + `</textarea></label>`)
+	if model.MessageID > 0 {
+		body.WriteString(`<input type="hidden" name="message_id" value="` + esc(strconv.FormatInt(model.MessageID, 10)) + `">`)
+	}
+	body.WriteString(`<button type="submit" name="mode" value="preview">Preview Match</button> <button type="submit" name="mode" value="save">Save Handler Rule</button>`)
+	if strings.TrimSpace(model.Rule.ID) != "" {
+		body.WriteString(` <button type="submit" name="action" value="disable">Disable</button>`)
+	}
+	body.WriteString(`</form>`)
+	if model.Preview != nil {
+		body.WriteString(`<h3>Match Preview</h3>`)
+		body.WriteString(`<p>Match: <span class="mono">` + esc(yesNo(model.Preview.Matched)) + `</span></p>`)
+		body.WriteString(`<p>Outcome: <span class="mono">` + esc(defaultString(string(model.Rule.Outcome), "NOTE")) + `</span></p>`)
+		body.WriteString(`<p>Reason: ` + esc(defaultString(model.Preview.Reason, "-")) + `</p>`)
+	}
+	if model.PreviewError != "" {
+		body.WriteString(`<p class="error">` + esc(model.PreviewError) + `</p>`)
+	}
+	body.WriteString(`</div>`)
+	s.renderPage(w, operatorRoute("/comms"), "Operator Message Journal", body.String(), model.FormMessage, model.FormError)
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
@@ -2542,6 +2892,14 @@ func extractJSONValue(detail string, keys ...string) string {
 	return ""
 }
 
+func encodeSummaryJSON(payload map[string]any) string {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -3188,6 +3546,19 @@ func configuredText(value bool) string {
 		return "configured"
 	}
 	return "not configured"
+}
+
+func handlerRuleOutcomeLabel(value g2sengine.HandlerRuleOutcome) string {
+	switch value {
+	case g2sengine.HandlerRuleOutcomeConfirmation:
+		return "Confirmation"
+	case g2sengine.HandlerRuleOutcomeFailure:
+		return "Failure"
+	case g2sengine.HandlerRuleOutcomeIgnore:
+		return "Ignore"
+	default:
+		return "Note"
+	}
 }
 
 func daysUntilExpiryText(notAfter *time.Time) string {

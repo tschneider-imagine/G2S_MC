@@ -22,12 +22,23 @@ func TestMessageJournalEntryValidate(t *testing.T) {
 }
 
 func TestHandlerRuleValidate(t *testing.T) {
-	rule := HandlerRule{ID: "rule-1", Name: "Ack rule", MatchJSON: "{}", HandleJSON: "{}"}
+	rule := HandlerRule{
+		ID:        "rule-1",
+		Name:      "Ack rule",
+		Direction: HandlerRuleDirectionInbound,
+		MatchJSON: "{}",
+		Outcome:   HandlerRuleOutcomeConfirmation,
+	}
 	if err := rule.Validate(); err != nil {
 		t.Fatalf("validate handler rule: %v", err)
 	}
 	rule.MatchJSON = ""
 	if err := rule.Validate(); err == nil {
 		t.Fatal("expected validation error for missing match_json")
+	}
+	rule.MatchJSON = "{}"
+	rule.Outcome = ""
+	if err := rule.Validate(); err == nil {
+		t.Fatal("expected validation error for missing outcome")
 	}
 }
