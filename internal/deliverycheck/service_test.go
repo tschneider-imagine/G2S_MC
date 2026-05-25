@@ -80,7 +80,7 @@ func TestCheckMissingEGMReturnsError(t *testing.T) {
 	}
 }
 
-func TestCheckMissingEndpointReturnsError(t *testing.T) {
+func TestCheckHostListenerMissingEndpointReturnsWarn(t *testing.T) {
 	st := seedStore(t)
 	row := st.egms["EGM-001"]
 	row.EndpointPath = ""
@@ -91,8 +91,57 @@ func TestCheckMissingEndpointReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "missing endpoint") {
-		t.Fatalf("expected missing endpoint error: %+v", result)
+	if result.OverallStatus != "WARN" {
+		t.Fatalf("expected WARN result for host listener missing endpoint: %+v", result)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("did not expect errors for host listener missing endpoint: %+v", result)
+	}
+	if result.EndpointRequired {
+		t.Fatalf("expected endpoint_required=false for host listener: %+v", result)
+	}
+	if !containsJoined(result.Warnings, "not required for host listener delivery") {
+		t.Fatalf("expected host listener warning, got %+v", result)
+	}
+}
+
+func TestCheckHostListenerMissingEndpointSkipsNetworkAndTLSChecks(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.EndpointPath = ""
+	st.egms["EGM-001"] = row
+
+	service := Service{Store: st, Options: seedOptions()}
+	result, err := service.Check(context.Background(), CheckRequest{
+		EGMID:               "EGM-001",
+		IncludeNetworkCheck: true,
+		IncludeTLSCheck:     true,
+	})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.NetworkCheck.Status != "SKIPPED" || !containsJoined([]string{result.NetworkCheck.Detail}, "not required for host listener delivery") {
+		t.Fatalf("expected network check skipped for host listener: %+v", result.NetworkCheck)
+	}
+	if result.TLSCheck.Status != "SKIPPED" || !containsJoined([]string{result.TLSCheck.Detail}, "not required for host listener delivery") {
+		t.Fatalf("expected tls check skipped for host listener: %+v", result.TLSCheck)
+	}
+}
+
+func TestCheckHostListenerIncludesListenerAndHostID(t *testing.T) {
+	options := seedOptions()
+	options.ListenerURL = "https://controller.local/g2s"
+	options.HostID = "HOST-1"
+	service := Service{Store: seedStore(t), Options: options}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.DeliveryTopology != string(g2stransport.DeliveryTopologyHostListener) {
+		t.Fatalf("topology=%q", result.DeliveryTopology)
+	}
+	if result.ListenerURL != "https://controller.local/g2s" || result.HostID != "HOST-1" {
+		t.Fatalf("expected listener/host in result, got %+v", result)
 	}
 }
 
@@ -104,6 +153,19 @@ func TestCheckFullEndpointResolves(t *testing.T) {
 	}
 	if !result.EndpointConfigured || result.EndpointURL == "" {
 		t.Fatalf("expected resolved endpoint: %+v", result)
+	}
+}
+
+func TestCheckOutboundEndpointWithEndpointBehavesAsExpected(t *testing.T) {
+	options := seedOptions()
+	options.DeliveryTopology = string(g2stransport.DeliveryTopologyOutboundEndpoint)
+	service := Service{Store: seedStore(t), Options: options}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.OverallStatus != "OK" || !result.EndpointRequired || !result.EndpointConfigured {
+		t.Fatalf("expected outbound endpoint check to succeed: %+v", result)
 	}
 }
 
@@ -160,13 +222,15 @@ func TestCheckTemplateEndpointPathQuirksApplied(t *testing.T) {
 	}
 }
 
-func TestCheckInvalidEndpointURLReturnsError(t *testing.T) {
+func TestCheckOutboundInvalidEndpointURLReturnsError(t *testing.T) {
 	st := seedStore(t)
 	row := st.egms["EGM-001"]
 	row.EndpointPath = "http://example.com/%zz"
 	st.egms["EGM-001"] = row
 
-	service := Service{Store: st, Options: seedOptions()}
+	options := seedOptions()
+	options.DeliveryTopology = string(g2stransport.DeliveryTopologyOutboundEndpoint)
+	service := Service{Store: st, Options: options}
 	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
 	if err != nil {
 		t.Fatalf("check: %v", err)
@@ -176,7 +240,7 @@ func TestCheckInvalidEndpointURLReturnsError(t *testing.T) {
 	}
 }
 
-func TestCheckEndpointPathWithoutDefaultsReturnsError(t *testing.T) {
+func TestCheckHostListenerEndpointPathWithoutDefaultsReturnsWarn(t *testing.T) {
 	st := seedStore(t)
 	row := st.egms["EGM-001"]
 	row.IPAddress = "10.1.2.3"
@@ -198,12 +262,43 @@ func TestCheckEndpointPathWithoutDefaultsReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
+	if result.OverallStatus != "WARN" {
+		t.Fatalf("expected host listener warning status: %+v", result)
+	}
+	if !containsJoined(result.Warnings, "host listener delivery") {
+		t.Fatalf("expected host listener warning, got %+v", result)
+	}
+}
+
+func TestCheckOutboundEndpointPathWithoutDefaultsReturnsError(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.IPAddress = "10.1.2.3"
+	row.EndpointPath = "/g2s"
+	st.egms["EGM-001"] = row
+
+	service := Service{
+		Store: st,
+		Options: Options{
+			DeliveryTopology: string(g2stransport.DeliveryTopologyOutboundEndpoint),
+			EndpointDefaults: g2stransport.EndpointDefaults{},
+			ClientConfig: g2stransport.HTTPClientConfig{
+				DefaultTimeoutMS: 3000,
+			},
+			DeliveryMode:     "DISABLED",
+			DefaultTimeoutMS: 3000,
+		},
+	}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
 	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "missing configured delivery scheme") {
 		t.Fatalf("expected missing scheme error: %+v", result)
 	}
 }
 
-func TestCheckDoesNotUseFallbackEndpointWhenEndpointMissing(t *testing.T) {
+func TestCheckHostListenerDoesNotUseFallbackEndpointWhenEndpointMissing(t *testing.T) {
 	st := seedStore(t)
 	row := st.egms["EGM-001"]
 	row.IPAddress = "10.1.2.3"
@@ -225,12 +320,47 @@ func TestCheckDoesNotUseFallbackEndpointWhenEndpointMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
+	if result.EndpointConfigured {
+		t.Fatalf("expected no fallback endpoint in host listener mode: %+v", result)
+	}
+	if result.OverallStatus == "ERROR" || len(result.Errors) != 0 {
+		t.Fatalf("expected no error for host listener missing endpoint: %+v", result)
+	}
+}
+
+func TestCheckOutboundMissingEndpointReturnsError(t *testing.T) {
+	st := seedStore(t)
+	row := st.egms["EGM-001"]
+	row.EndpointPath = ""
+	st.egms["EGM-001"] = row
+
+	options := seedOptions()
+	options.DeliveryTopology = string(g2stransport.DeliveryTopologyOutboundEndpoint)
+	service := Service{Store: st, Options: options}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
 	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "missing endpoint") {
 		t.Fatalf("expected missing endpoint error: %+v", result)
 	}
 }
 
-func TestCheckInvalidTemplateQuirksJSONReturnsError(t *testing.T) {
+func TestCheckCaptureEndpointMissingEndpointReturnsError(t *testing.T) {
+	options := seedOptions()
+	options.DeliveryTopology = string(g2stransport.DeliveryTopologyCaptureEndpoint)
+	options.CaptureEndpoint = ""
+	service := Service{Store: seedStore(t), Options: options}
+	result, err := service.Check(context.Background(), CheckRequest{EGMID: "EGM-001"})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "capture endpoint") {
+		t.Fatalf("expected capture endpoint error: %+v", result)
+	}
+}
+
+func TestCheckHostListenerInvalidTemplateQuirksJSONReturnsWarn(t *testing.T) {
 	st := seedStore(t)
 	version := st.versions["template-generic-g2s-action"]
 	version.EndpointQuirksJSON = `{"method":"POST",`
@@ -241,8 +371,23 @@ func TestCheckInvalidTemplateQuirksJSONReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "endpoint quirks") {
-		t.Fatalf("expected quirks error: %+v", result)
+	if result.OverallStatus != "WARN" || !containsJoined(result.Warnings, "endpoint quirks") {
+		t.Fatalf("expected quirks warning: %+v", result)
+	}
+}
+
+func TestCheckHostListenerMissingTemplateActionKeyReturnsError(t *testing.T) {
+	service := Service{Store: seedStore(t), Options: seedOptions()}
+	result, err := service.Check(context.Background(), CheckRequest{
+		EGMID:             "EGM-001",
+		TemplateID:        "template-generic-g2s-action",
+		TemplateActionKey: "missing_action_key",
+	})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.OverallStatus != "ERROR" || !containsJoined(result.Errors, "not found in template") {
+		t.Fatalf("expected missing action key error: %+v", result)
 	}
 }
 

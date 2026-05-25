@@ -14,6 +14,7 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
@@ -53,6 +54,10 @@ type CheckResult struct {
 	TemplateID         string             `json:"template_id,omitempty"`
 	TemplateVersion    string             `json:"template_version,omitempty"`
 	TemplateActionKey  string             `json:"template_action_key,omitempty"`
+	DeliveryTopology   string             `json:"delivery_topology"`
+	EndpointRequired   bool               `json:"endpoint_required"`
+	ListenerURL        string             `json:"listener_url,omitempty"`
+	HostID             string             `json:"host_id,omitempty"`
 	EndpointURL        string             `json:"endpoint_url,omitempty"`
 	Method             string             `json:"method,omitempty"`
 	ContentType        string             `json:"content_type,omitempty"`
@@ -73,6 +78,10 @@ type Options struct {
 	EndpointDefaults g2stransport.EndpointDefaults
 	ClientConfig     g2stransport.HTTPClientConfig
 	DeliveryMode     string
+	DeliveryTopology string
+	CaptureEndpoint  string
+	ListenerURL      string
+	HostID           string
 	DefaultTimeoutMS int
 }
 
@@ -106,16 +115,25 @@ func (s *Service) Check(ctx context.Context, request CheckRequest) (CheckResult,
 		timeoutMS = 5000
 	}
 
+	topology, topologyValid := g2stransport.NormalizeDeliveryTopology(s.Options.DeliveryTopology)
 	result := CheckResult{
-		CheckedAt:     now,
-		EGMID:         strings.TrimSpace(request.EGMID),
-		ActionID:      strings.TrimSpace(request.ActionID),
-		TemplateID:    strings.TrimSpace(request.TemplateID),
-		DeliveryMode:  defaultText(strings.TrimSpace(s.Options.DeliveryMode), "DISABLED"),
-		Headers:       map[string]string{},
-		NetworkCheck:  ResultItem{Status: "SKIPPED", Detail: "Network check not requested"},
-		TLSCheck:      ResultItem{Status: "SKIPPED", Detail: "TLS check not requested"},
-		OverallStatus: "OK",
+		CheckedAt:         now,
+		EGMID:             strings.TrimSpace(request.EGMID),
+		ActionID:          strings.TrimSpace(request.ActionID),
+		TemplateID:        strings.TrimSpace(request.TemplateID),
+		TemplateActionKey: strings.TrimSpace(request.TemplateActionKey),
+		DeliveryMode:      defaultText(strings.TrimSpace(s.Options.DeliveryMode), "DISABLED"),
+		DeliveryTopology:  string(topology),
+		EndpointRequired:  topology != g2stransport.DeliveryTopologyHostListener,
+		ListenerURL:       strings.TrimSpace(s.Options.ListenerURL),
+		HostID:            strings.TrimSpace(s.Options.HostID),
+		Headers:           map[string]string{},
+		NetworkCheck:      ResultItem{Status: "SKIPPED", Detail: "Network check not requested"},
+		TLSCheck:          ResultItem{Status: "SKIPPED", Detail: "TLS check not requested"},
+		OverallStatus:     "OK",
+	}
+	if !topologyValid {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Unknown delivery topology %q; using host listener.", strings.TrimSpace(s.Options.DeliveryTopology)))
 	}
 
 	certRows, certErr := s.Store.ListCertificateInventory(ctx)
@@ -184,31 +202,115 @@ func (s *Service) Check(ctx context.Context, request CheckRequest) (CheckResult,
 		return result, nil
 	}
 	result.TemplateVersion = strings.TrimSpace(activeVersion.VersionLabel)
-
-	deliveryTarget, targetErr := g2stransport.ResolveDeliveryTarget(g2stransport.DeliveryTargetResolveRequest{
-		EGMRecord:           egmRow,
-		TemplateVersion:     activeVersion,
-		FallbackMethod:      "POST",
-		FallbackContentType: "",
-		FallbackTimeoutMS:   timeoutMS,
-		Defaults:            s.Options.EndpointDefaults,
-	})
-	if targetErr != nil {
-		result.Errors = append(result.Errors, sanitizeDetail(targetErr.Error()))
-		result.OverallStatus = "ERROR"
-		return result, nil
+	if strings.TrimSpace(result.TemplateActionKey) != "" {
+		templateDoc, parseErr := g2sengine.ParseActionTemplateDocument(strings.TrimSpace(activeVersion.ActionsJSON))
+		if parseErr != nil {
+			result.Errors = append(result.Errors, "Template ActionsJSON is invalid")
+			result.OverallStatus = "ERROR"
+			return result, nil
+		}
+		if _, ok := templateDoc.Actions[strings.TrimSpace(result.TemplateActionKey)]; !ok {
+			result.Errors = append(result.Errors, fmt.Sprintf("Template action key %s not found in template %s", strings.TrimSpace(result.TemplateActionKey), result.TemplateID))
+			result.OverallStatus = "ERROR"
+			return result, nil
+		}
 	}
-	result.EndpointConfigured = true
-	result.EndpointURL = strings.TrimSpace(deliveryTarget.EndpointURL)
-	result.Method = strings.TrimSpace(deliveryTarget.Method)
-	result.ContentType = strings.TrimSpace(deliveryTarget.ContentType)
-	result.Headers = g2stransport.MergeHeaders(map[string]string{}, deliveryTarget.Headers)
 
-	if request.IncludeNetworkCheck {
-		result.NetworkCheck = checkTCPConnectivity(result.EndpointURL, timeoutMS)
-	}
-	if request.IncludeTLSCheck {
-		result.TLSCheck = checkTLSConnectivity(result.EndpointURL, timeoutMS, s.Options.ClientConfig)
+	switch topology {
+	case g2stransport.DeliveryTopologyHostListener:
+		deliveryTarget, targetErr := g2stransport.ResolveDeliveryTarget(g2stransport.DeliveryTargetResolveRequest{
+			EGMRecord:           egmRow,
+			TemplateVersion:     activeVersion,
+			FallbackMethod:      "POST",
+			FallbackContentType: "",
+			FallbackTimeoutMS:   timeoutMS,
+			Defaults:            s.Options.EndpointDefaults,
+		})
+		if targetErr == nil {
+			result.EndpointConfigured = true
+			result.EndpointURL = strings.TrimSpace(deliveryTarget.EndpointURL)
+			result.Method = strings.TrimSpace(deliveryTarget.Method)
+			result.ContentType = strings.TrimSpace(deliveryTarget.ContentType)
+			result.Headers = g2stransport.MergeHeaders(map[string]string{}, deliveryTarget.Headers)
+		} else {
+			targetErrText := sanitizeDetail(targetErr.Error())
+			if strings.Contains(strings.ToLower(targetErrText), "missing endpoint") {
+				result.Warnings = append(result.Warnings, "Outbound endpoint is not configured; not required for host listener delivery.")
+			} else {
+				result.Warnings = append(result.Warnings, "Outbound endpoint could not be resolved for host listener delivery: "+targetErrText)
+			}
+		}
+
+		if request.IncludeNetworkCheck {
+			if result.EndpointConfigured {
+				result.NetworkCheck = checkTCPConnectivity(result.EndpointURL, timeoutMS)
+			} else {
+				result.NetworkCheck = ResultItem{
+					Status: "SKIPPED",
+					Detail: "Network check skipped; outbound endpoint is not required for host listener delivery.",
+				}
+			}
+		}
+		if request.IncludeTLSCheck {
+			if result.EndpointConfigured {
+				result.TLSCheck = checkTLSConnectivity(result.EndpointURL, timeoutMS, s.Options.ClientConfig)
+			} else {
+				result.TLSCheck = ResultItem{
+					Status: "SKIPPED",
+					Detail: "TLS check skipped; outbound endpoint is not required for host listener delivery.",
+				}
+			}
+		}
+	case g2stransport.DeliveryTopologyOutboundEndpoint:
+		deliveryTarget, targetErr := g2stransport.ResolveDeliveryTarget(g2stransport.DeliveryTargetResolveRequest{
+			EGMRecord:           egmRow,
+			TemplateVersion:     activeVersion,
+			FallbackMethod:      "POST",
+			FallbackContentType: "",
+			FallbackTimeoutMS:   timeoutMS,
+			Defaults:            s.Options.EndpointDefaults,
+		})
+		if targetErr != nil {
+			result.Errors = append(result.Errors, sanitizeDetail(targetErr.Error()))
+			result.OverallStatus = "ERROR"
+			return result, nil
+		}
+		result.EndpointConfigured = true
+		result.EndpointURL = strings.TrimSpace(deliveryTarget.EndpointURL)
+		result.Method = strings.TrimSpace(deliveryTarget.Method)
+		result.ContentType = strings.TrimSpace(deliveryTarget.ContentType)
+		result.Headers = g2stransport.MergeHeaders(map[string]string{}, deliveryTarget.Headers)
+
+		if request.IncludeNetworkCheck {
+			result.NetworkCheck = checkTCPConnectivity(result.EndpointURL, timeoutMS)
+		}
+		if request.IncludeTLSCheck {
+			result.TLSCheck = checkTLSConnectivity(result.EndpointURL, timeoutMS, s.Options.ClientConfig)
+		}
+	case g2stransport.DeliveryTopologyCaptureEndpoint:
+		captureEndpoint := strings.TrimSpace(s.Options.CaptureEndpoint)
+		if captureEndpoint == "" {
+			result.Errors = append(result.Errors, "Missing configured capture endpoint URL.")
+			result.OverallStatus = "ERROR"
+			return result, nil
+		}
+		if _, err := endpointHostPort(captureEndpoint); err != nil {
+			result.Errors = append(result.Errors, sanitizeDetail(err.Error()))
+			result.OverallStatus = "ERROR"
+			return result, nil
+		}
+		result.EndpointConfigured = true
+		result.EndpointURL = captureEndpoint
+		result.Method = "POST"
+		if request.IncludeNetworkCheck {
+			result.NetworkCheck = checkTCPConnectivity(result.EndpointURL, timeoutMS)
+		}
+		if request.IncludeTLSCheck {
+			result.TLSCheck = checkTLSConnectivity(result.EndpointURL, timeoutMS, s.Options.ClientConfig)
+		}
+	default:
+		result.Warnings = append(result.Warnings, "Unknown delivery topology; host listener behavior applied.")
+		result.EndpointRequired = false
 	}
 
 	result.OverallStatus = deriveOverallStatus(result)

@@ -1854,6 +1854,10 @@ func TestPostSettingsMessageDeliveryCheckReadOnly(t *testing.T) {
 	for _, expected := range []string{
 		"Message Delivery Check completed.",
 		"Result",
+		"Delivery Topology",
+		"Endpoint Required",
+		"Listener",
+		"Host ID",
 		"Endpoint",
 		"Certificate Status",
 	} {
@@ -2060,6 +2064,10 @@ func TestPostSettingsMessageDeliveryCheckRendersSelectedFieldsAndTLSResult(t *te
 		"emergency_broadcast_silence",
 		"Template",
 		"template-generic-g2s-action",
+		"Delivery Topology",
+		"HOST_LISTENER",
+		"Endpoint Required",
+		"no",
 		"Endpoint",
 		"TLS Check",
 		"TLS check skipped for non-HTTPS endpoint",
@@ -2067,6 +2075,49 @@ func TestPostSettingsMessageDeliveryCheckRendersSelectedFieldsAndTLSResult(t *te
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in response body", expected)
 		}
+	}
+}
+
+func TestPostSettingsMessageDeliveryCheckHostListenerWithoutEndpointShowsWarningNotError(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	row, err := st.GetEGMRecord(ctx, "EGM-001")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	if row == nil {
+		t.Fatal("missing EGM-001")
+	}
+	row.EndpointPath = ""
+	if err := st.UpsertEGMRecord(ctx, *row); err != nil {
+		t.Fatalf("upsert egm: %v", err)
+	}
+
+	form := url.Values{
+		"egm_id":              {"EGM-001"},
+		"template_id":         {"template-generic-g2s-action"},
+		"template_action_key": {"emergency_broadcast_silence"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/settings/message-delivery-check", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"HOST_LISTENER",
+		"Endpoint Required",
+		"no",
+		"Outbound endpoint is not configured; not required for host listener delivery.",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in response body", expected)
+		}
+	}
+	if strings.Contains(strings.ToLower(body), "missing endpoint url") {
+		t.Fatalf("expected no missing-endpoint error in host listener mode, body=%s", body)
 	}
 }
 
@@ -2606,6 +2657,7 @@ func defaultOperatorOptions() Options {
 		ClientCertConfigured:     true,
 		ServerCertConfigured:     true,
 		DeliveryMode:             "DISABLED",
+		DeliveryTopology:         string(g2stransport.DeliveryTopologyHostListener),
 		AllowDeliveryDefault:     false,
 		CaptureOnlyDefault:       false,
 		DeliveryTimeoutMS:        5000,

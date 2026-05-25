@@ -1136,6 +1136,109 @@ func TestPostMessageDeliveryCheckReadOnlyReturnsJSONAndIsNonMutating(t *testing.
 	}
 }
 
+func TestPostMessageDeliveryCheckHostListenerWithoutEndpointReturnsNonError(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+
+	egmRow, err := db.GetEGMRecord(ctx, "EGM-001")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	if egmRow == nil {
+		t.Fatal("expected EGM-001")
+	}
+	egmRow.EndpointPath = ""
+	if err := db.UpsertEGMRecord(ctx, *egmRow); err != nil {
+		t.Fatalf("upsert egm: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		EndpointDefaults:  g2stransport.EndpointDefaults{Scheme: "http", Port: 8444},
+		DeliveryMode:      "DISABLED",
+		DeliveryTopology:  string(g2stransport.DeliveryTopologyHostListener),
+		G2SHostURL:        "https://host.local/g2s",
+		G2SHostID:         "HOST-1",
+		DefaultDeliverySettings: g2stransport.DeliverySettings{
+			Mode:          g2stransport.DeliveryModeDisabled,
+			AllowDelivery: false,
+			CaptureOnly:   false,
+			TimeoutMS:     5000,
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"egm_id":"EGM-001","template_id":"template-generic-g2s-action","template_action_key":"emergency_broadcast_silence"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/settings/message-delivery-check", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	var result MessageDeliveryCheckResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode check result: %v", err)
+	}
+	if result.DeliveryTopology != string(g2stransport.DeliveryTopologyHostListener) || result.EndpointRequired || result.EndpointConfigured {
+		t.Fatalf("unexpected host listener result: %+v", result)
+	}
+	if result.OverallStatus == "ERROR" || containsAny(result.Errors, "missing endpoint") {
+		t.Fatalf("missing endpoint must not error in host listener topology: %+v", result)
+	}
+	if !containsAny(result.Warnings, "not required for host listener delivery") {
+		t.Fatalf("expected host listener warning: %+v", result)
+	}
+}
+
+func TestPostMessageDeliveryCheckOutboundWithoutEndpointReturnsError(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+
+	egmRow, err := db.GetEGMRecord(ctx, "EGM-001")
+	if err != nil {
+		t.Fatalf("get egm: %v", err)
+	}
+	if egmRow == nil {
+		t.Fatal("expected EGM-001")
+	}
+	egmRow.EndpointPath = ""
+	if err := db.UpsertEGMRecord(ctx, *egmRow); err != nil {
+		t.Fatalf("upsert egm: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		EndpointDefaults:  g2stransport.EndpointDefaults{Scheme: "http", Port: 8444},
+		DeliveryTopology:  string(g2stransport.DeliveryTopologyOutboundEndpoint),
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"egm_id":"EGM-001","template_id":"template-generic-g2s-action","template_action_key":"emergency_broadcast_silence"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/settings/message-delivery-check", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	var result MessageDeliveryCheckResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode check result: %v", err)
+	}
+	if result.OverallStatus != "ERROR" || !containsAny(result.Errors, "missing endpoint") {
+		t.Fatalf("expected outbound missing endpoint error: %+v", result)
+	}
+}
+
 func TestPostMessageDeliveryCheckNetworkRequiresAuth(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
@@ -1376,6 +1479,11 @@ func TestGetActionRunMessagesReturnsJSON(t *testing.T) {
 }
 
 func allowMutation(_ http.ResponseWriter, _ *http.Request) bool { return true }
+
+func containsAny(rows []string, fragment string) bool {
+	joined := strings.ToLower(strings.Join(rows, " "))
+	return strings.Contains(joined, strings.ToLower(fragment))
+}
 
 type apiFakeSender struct {
 	sendFn func(context.Context, g2stransport.SendRequest) (g2stransport.SendResult, error)

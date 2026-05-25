@@ -120,6 +120,8 @@ type Options struct {
 	ClientCertConfigured     bool
 	ServerCertConfigured     bool
 	DeliveryMode             string
+	DeliveryTopology         string
+	DeliveryCaptureEndpoint  string
 	AllowDeliveryDefault     bool
 	CaptureOnlyDefault       bool
 	DeliveryTimeoutMS        int
@@ -3299,6 +3301,10 @@ func (s *Server) handleMessageDeliveryCheck(w http.ResponseWriter, r *http.Reque
 			EndpointDefaults: s.Options.DeliveryEndpointDefaults,
 			ClientConfig:     s.Options.DeliveryClientConfig,
 			DeliveryMode:     s.Options.DeliveryMode,
+			DeliveryTopology: s.Options.DeliveryTopology,
+			CaptureEndpoint:  s.Options.DeliveryCaptureEndpoint,
+			ListenerURL:      s.Options.G2SHostURL,
+			HostID:           s.Options.G2SHostID,
 			DefaultTimeoutMS: s.Options.DeliveryTimeoutMS,
 		},
 	}
@@ -3449,6 +3455,10 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 		body.WriteString(`<tr><td>Template</td><td class="mono">` + esc(defaultString(checkResult.TemplateID, "-")) + `</td></tr>`)
 		body.WriteString(`<tr><td>Template Version</td><td class="mono">` + esc(defaultString(checkResult.TemplateVersion, "-")) + `</td></tr>`)
 		body.WriteString(`<tr><td>Template Action Key</td><td class="mono">` + esc(defaultString(checkResult.TemplateActionKey, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Delivery Topology</td><td class="mono">` + esc(defaultString(checkResult.DeliveryTopology, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Endpoint Required</td><td>` + esc(yesNo(checkResult.EndpointRequired)) + `</td></tr>`)
+		body.WriteString(`<tr><td>Listener</td><td class="mono">` + esc(defaultString(checkResult.ListenerURL, "-")) + `</td></tr>`)
+		body.WriteString(`<tr><td>Host ID</td><td class="mono">` + esc(defaultString(checkResult.HostID, "-")) + `</td></tr>`)
 		body.WriteString(`<tr><td>Endpoint</td><td class="mono">` + esc(defaultString(checkResult.EndpointURL, "-")) + `</td></tr>`)
 		body.WriteString(`<tr><td>Method</td><td class="mono">` + esc(defaultString(checkResult.Method, "-")) + `</td></tr>`)
 		body.WriteString(`<tr><td>Content Type</td><td class="mono">` + esc(defaultString(checkResult.ContentType, "-")) + `</td></tr>`)

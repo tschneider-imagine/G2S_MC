@@ -86,6 +86,10 @@ type Server struct {
 	EndpointDefaults        g2stransport.EndpointDefaults
 	DeliveryClientConfig    g2stransport.HTTPClientConfig
 	DeliveryMode            string
+	DeliveryTopology        string
+	DeliveryCaptureEndpoint string
+	G2SHostURL              string
+	G2SHostID               string
 	RuntimeInfo             RuntimeInfo
 }
 
@@ -763,6 +767,10 @@ func (s *Server) handleMessageDeliveryCheck(w http.ResponseWriter, r *http.Reque
 			EndpointDefaults: s.EndpointDefaults,
 			ClientConfig:     s.DeliveryClientConfig,
 			DeliveryMode:     s.DeliveryMode,
+			DeliveryTopology: s.DeliveryTopology,
+			CaptureEndpoint:  s.DeliveryCaptureEndpoint,
+			ListenerURL:      s.G2SHostURL,
+			HostID:           s.G2SHostID,
 			DefaultTimeoutMS: s.DefaultDeliverySettings.Normalize().TimeoutMS,
 		},
 	}

@@ -23,6 +23,14 @@ const (
 	DeliveryModeHTTP     DeliveryMode = "HTTP"
 )
 
+type DeliveryTopology string
+
+const (
+	DeliveryTopologyHostListener     DeliveryTopology = "HOST_LISTENER"
+	DeliveryTopologyOutboundEndpoint DeliveryTopology = "OUTBOUND_ENDPOINT"
+	DeliveryTopologyCaptureEndpoint  DeliveryTopology = "CAPTURE_ENDPOINT"
+)
+
 type DeliverySettings struct {
 	Mode          DeliveryMode `json:"mode"`
 	AllowDelivery bool         `json:"allow_delivery"`
@@ -54,6 +62,18 @@ func (s DeliverySettings) TransportMode() Mode {
 		return ModeHTTP
 	default:
 		return ModeDisabled
+	}
+}
+
+func NormalizeDeliveryTopology(raw string) (DeliveryTopology, bool) {
+	normalized := DeliveryTopology(strings.ToUpper(strings.TrimSpace(raw)))
+	switch normalized {
+	case "":
+		return DeliveryTopologyHostListener, true
+	case DeliveryTopologyHostListener, DeliveryTopologyOutboundEndpoint, DeliveryTopologyCaptureEndpoint:
+		return normalized, true
+	default:
+		return normalized, false
 	}
 }
 
