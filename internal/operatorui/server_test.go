@@ -1031,6 +1031,41 @@ func TestSettingsPageRendersCertificateInventoryRows(t *testing.T) {
 	}
 }
 
+func TestSettingsPageDoesNotExposeCertificateSubjectOrIssuer(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	now := time.Now().UTC()
+	if err := st.ReplaceCertificateInventory(context.Background(), []model.CertificateInventory{
+		{
+			Role:          "g2s_client_cert",
+			Path:          "/certs/client.crt",
+			Status:        "VALID",
+			Subject:       "CN=fake-egm,OU=lab",
+			Issuer:        "CN=Lab CA",
+			LastCheckedAt: now,
+		},
+	}); err != nil {
+		t.Fatalf("replace cert inventory: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, forbidden := range []string{
+		">Subject<",
+		">Issuer<",
+		"CN=fake-egm",
+		"CN=Lab CA",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("settings page must not render certificate subject/issuer values: found %q", forbidden)
+		}
+	}
+}
+
 func TestSettingsPageDoesNotExposePrivateKeyMaterial(t *testing.T) {
 	mux := setupOperatorServer(t)
 	res := httptest.NewRecorder()

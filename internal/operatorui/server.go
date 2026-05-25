@@ -1739,14 +1739,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if len(certs) == 0 {
 		body.WriteString(`<p>No certificate inventory recorded.</p>`)
 	} else {
-		body.WriteString(`<table><tr><th>Role</th><th>Path</th><th>Status</th><th>Subject</th><th>Issuer</th><th>Fingerprint</th><th>Not Before</th><th>Not After</th><th>Days Until Expiry</th><th>Last Checked</th><th>Runtime Note</th></tr>`)
+		body.WriteString(`<table><tr><th>Role</th><th>Path</th><th>Status</th><th>Fingerprint</th><th>Not Before</th><th>Not After</th><th>Days Until Expiry</th><th>Last Checked</th><th>Runtime Note</th></tr>`)
 		for _, row := range certs {
 			body.WriteString(`<tr>`)
 			body.WriteString(`<td class="mono">` + esc(row.Role) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(defaultString(row.Path, "-")) + `</td>`)
 			body.WriteString(`<td>` + esc(defaultString(row.Status, "-")) + `</td>`)
-			body.WriteString(`<td class="mono">` + esc(defaultString(row.Subject, "-")) + `</td>`)
-			body.WriteString(`<td class="mono">` + esc(defaultString(row.Issuer, "-")) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(defaultString(row.SHA256Fingerprint, "-")) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.NotBefore)) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.NotAfter)) + `</td>`)
