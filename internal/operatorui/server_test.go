@@ -775,6 +775,112 @@ func TestTemplateRenderPreviewMissingActionKeyShowsError(t *testing.T) {
 	}
 }
 
+func TestSettingsPageReturnsOKAndRendersIdentity(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Appliance",
+		"Controller",
+		"controller-test",
+		"Site",
+		"Site Alpha",
+		"Network Listener",
+		"Operator Console URL",
+		"Runtime",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/settings", expected)
+		}
+	}
+}
+
+func TestSettingsPageRendersBindAndDatabase(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"127.0.0.1:8444",
+		"C:\\\\data\\\\g2s.db",
+		"https://127.0.0.1:8444/operator",
+		"https://127.0.0.1:8444/g2s",
+		"/g2s",
+		"HOST-1",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in settings page", expected)
+		}
+	}
+}
+
+func TestSettingsPageRendersCertificateInventoryRows(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Certificates",
+		"web_server_cert",
+		"/certs/web.crt",
+		"OK",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in certificate section", expected)
+		}
+	}
+}
+
+func TestSettingsPageDoesNotExposePrivateKeyMaterial(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, forbidden := range []string{
+		"BEGIN PRIVATE KEY",
+		"PRIVATE KEY",
+		"/certs/web.key",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("settings page must not expose private key material: found %q", forbidden)
+		}
+	}
+}
+
+func TestSettingsPageHandlesEmptyCertificateInventory(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	if err := st.ReplaceCertificateInventory(context.Background(), nil); err != nil {
+		t.Fatalf("clear cert inventory: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "No certificate inventory recorded.") {
+		t.Fatalf("expected empty certificate inventory message, body=%s", res.Body.String())
+	}
+}
+
 func setupOperatorServer(t *testing.T) *http.ServeMux {
 	mux, _ := setupOperatorServerWithStore(t)
 	return mux
@@ -788,9 +894,31 @@ func setupOperatorServerWithStore(t *testing.T) (*http.ServeMux, *store.SQLiteSt
 	seedOperatorData(t, ctx, st)
 
 	mux := http.NewServeMux()
-	server := NewServer(st, Options{}, allowMutation)
+	server := NewServer(st, defaultOperatorOptions(), allowMutation)
 	server.RegisterRoutes(mux)
 	return mux, st
+}
+
+func defaultOperatorOptions() Options {
+	return Options{
+		AppVersion:              "operator-console",
+		ControllerID:            "controller-test",
+		SiteName:                "Site Alpha",
+		DatabasePath:            `C:\\data\\g2s.db`,
+		ConfigPath:              `C:\\configs\\g2s.json`,
+		BindAddress:             "127.0.0.1:8444",
+		G2SHostURL:              "https://127.0.0.1:8444/g2s",
+		G2SEndpointPath:         "/g2s",
+		G2SHostID:               "HOST-1",
+		TLSRequired:             true,
+		ClientCertRequired:      true,
+		WebLoginRequired:        true,
+		AdminClientCertRequired: true,
+		CAConfigured:            true,
+		ClientCertConfigured:    true,
+		ServerCertConfigured:    true,
+		StartedAt:               time.Now().UTC().Add(-5 * time.Minute),
+	}
 }
 
 func allowMutation(_ http.ResponseWriter, _ *http.Request) bool { return true }

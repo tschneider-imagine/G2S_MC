@@ -72,9 +72,23 @@ type Store interface {
 }
 
 type Options struct {
-	AppVersion   string
-	DatabasePath string
-	BindAddress  string
+	AppVersion              string
+	ControllerID            string
+	SiteName                string
+	DatabasePath            string
+	ConfigPath              string
+	BindAddress             string
+	G2SHostURL              string
+	G2SEndpointPath         string
+	G2SHostID               string
+	TLSRequired             bool
+	ClientCertRequired      bool
+	WebLoginRequired        bool
+	AdminClientCertRequired bool
+	CAConfigured            bool
+	ClientCertConfigured    bool
+	ServerCertConfigured    bool
+	StartedAt               time.Time
 }
 
 type Server struct {
@@ -1407,41 +1421,95 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, "/operator/settings", "Operator Console Settings", err)
 		return
 	}
-	statusCounts := map[string]int{}
-	for _, row := range certs {
-		statusCounts[row.Status]++
-	}
-	statusKeys := make([]string, 0, len(statusCounts))
-	for key := range statusCounts {
-		statusKeys = append(statusKeys, key)
-	}
-	sort.Strings(statusKeys)
-
-	certSummary := "no certificate inventory records"
-	if len(statusKeys) > 0 {
-		parts := make([]string, 0, len(statusKeys))
-		for _, key := range statusKeys {
-			parts = append(parts, fmt.Sprintf("%s=%d", key, statusCounts[key]))
-		}
-		certSummary = strings.Join(parts, ", ")
-	}
-
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Network and Certificate Settings (Read-Only)</h2><table>`)
-	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
-	body.WriteString(`<tr><td>App Version</td><td>` + esc(defaultString(s.Options.AppVersion, "unknown")) + `</td></tr>`)
-	body.WriteString(`<tr><td>Database Path</td><td class="mono">` + esc(defaultString(s.Options.DatabasePath, "unknown")) + `</td></tr>`)
-	body.WriteString(`<tr><td>Bind Address</td><td class="mono">` + esc(defaultString(s.Options.BindAddress, "unknown")) + `</td></tr>`)
-	body.WriteString(`<tr><td>Sending Status</td><td>disabled</td></tr>`)
-	latestMessages, msgErr := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 1})
-	lastSend := "none"
-	if msgErr == nil && len(latestMessages) > 0 {
-		lastSend = string(latestMessages[0].Result)
+
+	operatorURL := "-"
+	bindAddress := strings.TrimSpace(s.Options.BindAddress)
+	if bindAddress != "" {
+		scheme := "http"
+		if s.Options.TLSRequired {
+			scheme = "https"
+		}
+		operatorURL = fmt.Sprintf("%s://%s%s", scheme, bindAddress, operatorRouteBase)
 	}
-	body.WriteString(`<tr><td>Last Message Delivery Result</td><td>` + esc(lastSend) + `</td></tr>`)
-	body.WriteString(`<tr><td>Certificate Status Summary</td><td>` + esc(certSummary) + `</td></tr>`)
-	body.WriteString(`<tr><td>Trust Material Status</td><td>read-only</td></tr>`)
+	listenerStatus := "not configured"
+	if bindAddress != "" {
+		listenerStatus = "configured"
+	}
+	g2sListener := "-"
+	if strings.TrimSpace(s.Options.G2SHostURL) != "" {
+		g2sListener = strings.TrimSpace(s.Options.G2SHostURL)
+	}
+	if strings.TrimSpace(s.Options.G2SEndpointPath) != "" && g2sListener == "-" {
+		g2sListener = strings.TrimSpace(s.Options.G2SEndpointPath)
+	}
+
+	body.WriteString(`<div class="panel"><h2>Appliance</h2><table>`)
+	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
+	body.WriteString(`<tr><td>Controller</td><td class="mono">` + esc(defaultString(s.Options.ControllerID, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Site</td><td>` + esc(defaultString(s.Options.SiteName, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Application Version</td><td>` + esc(defaultString(s.Options.AppVersion, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Config Path</td><td class="mono">` + esc(defaultString(s.Options.ConfigPath, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Started At</td><td class="mono">` + esc(fmtTime(s.Options.StartedAt)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Current Time</td><td class="mono">` + esc(fmtTime(time.Now().UTC())) + `</td></tr>`)
 	body.WriteString(`</table></div>`)
+
+	body.WriteString(`<div class="panel"><h2>Network Listener</h2><table>`)
+	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
+	body.WriteString(`<tr><td>HTTP Bind Address</td><td class="mono">` + esc(defaultString(bindAddress, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Listener Status</td><td>` + esc(listenerStatus) + `</td></tr>`)
+	body.WriteString(`<tr><td>Operator Console URL</td><td class="mono">` + esc(operatorURL) + `</td></tr>`)
+	body.WriteString(`<tr><td>G2S Listener URL</td><td class="mono">` + esc(g2sListener) + `</td></tr>`)
+	body.WriteString(`<tr><td>G2S Endpoint Path</td><td class="mono">` + esc(defaultString(s.Options.G2SEndpointPath, "unknown")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Host ID</td><td class="mono">` + esc(defaultString(s.Options.G2SHostID, "unknown")) + `</td></tr>`)
+	body.WriteString(`</table></div>`)
+
+	body.WriteString(`<div class="panel"><h2>Certificates</h2>`)
+	if len(certs) == 0 {
+		body.WriteString(`<p>No certificate inventory recorded.</p>`)
+	} else {
+		body.WriteString(`<table><tr><th>Role</th><th>Path</th><th>Status</th><th>Subject</th><th>Issuer</th><th>Fingerprint</th><th>Not Before</th><th>Not After</th><th>Days Until Expiry</th><th>Last Checked</th><th>Runtime Note</th></tr>`)
+		for _, row := range certs {
+			body.WriteString(`<tr>`)
+			body.WriteString(`<td class="mono">` + esc(row.Role) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(row.Path, "-")) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(row.Status, "-")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(row.Subject, "-")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(row.Issuer, "-")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(defaultString(row.SHA256Fingerprint, "-")) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.NotBefore)) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.NotAfter)) + `</td>`)
+			body.WriteString(`<td>` + esc(daysUntilExpiryText(row.NotAfter)) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(fmtTime(row.LastCheckedAt)) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(row.Error, "-")) + `</td>`)
+			body.WriteString(`</tr>`)
+		}
+		body.WriteString(`</table>`)
+	}
+	body.WriteString(`</div>`)
+
+	body.WriteString(`<div class="panel"><h2>Trust Material</h2><table>`)
+	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
+	body.WriteString(`<tr><td>Certificate Trust</td><td>` + esc(configuredText(s.Options.CAConfigured)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Client Certificate</td><td>` + esc(configuredText(s.Options.ClientCertConfigured)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Server Certificate</td><td>` + esc(configuredText(s.Options.ServerCertConfigured)) + `</td></tr>`)
+	body.WriteString(`<tr><td>TLS</td><td>` + esc(enabledText(s.Options.TLSRequired)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Client Authentication</td><td>` + esc(enabledText(s.Options.ClientCertRequired)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Web Login</td><td>` + esc(enabledText(s.Options.WebLoginRequired)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Admin Client Certificate</td><td>` + esc(enabledText(s.Options.AdminClientCertRequired)) + `</td></tr>`)
+	body.WriteString(`</table></div>`)
+
+	body.WriteString(`<div class="panel"><h2>Storage</h2><table>`)
+	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
+	body.WriteString(`<tr><td>Database</td><td class="mono">` + esc(defaultString(s.Options.DatabasePath, "unknown")) + `</td></tr>`)
+	body.WriteString(`</table></div>`)
+
+	body.WriteString(`<div class="panel"><h2>Current Runtime Notes</h2><ul>`)
+	body.WriteString(`<li>Settings view is read-only.</li>`)
+	body.WriteString(`<li>Certificate material details are metadata-only; private keys are not displayed.</li>`)
+	body.WriteString(`<li>Message delivery behavior is unchanged in this view.</li>`)
+	body.WriteString(`</ul></div>`)
+
 	s.renderPage(w, operatorRoute("/settings"), "Operator Settings", body.String(), "", "")
 }
 
@@ -1937,28 +2005,38 @@ func parseVersionLabelInt(label string) int {
 	return 0
 }
 
-func sanitizeVersionLabel(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "version"
-	}
-	builder := strings.Builder{}
-	for _, ch := range trimmed {
-		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
-			builder.WriteRune(ch)
-		} else {
-			builder.WriteRune('-')
-		}
-	}
-	return strings.Trim(builder.String(), "-")
-}
-
 func defaultString(value string, fallback string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return fallback
 	}
 	return trimmed
+}
+
+func enabledText(value bool) string {
+	if value {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func configuredText(value bool) string {
+	if value {
+		return "configured"
+	}
+	return "not configured"
+}
+
+func daysUntilExpiryText(notAfter *time.Time) string {
+	if notAfter == nil {
+		return "-"
+	}
+	now := time.Now().UTC()
+	if notAfter.Before(now) {
+		return "expired"
+	}
+	days := int(notAfter.Sub(now).Hours() / 24)
+	return strconv.Itoa(days)
 }
 
 func zeroDash(value int) string {

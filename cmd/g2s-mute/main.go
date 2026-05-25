@@ -117,9 +117,23 @@ func main() {
 	operatorServer := operatorui.NewServer(
 		auditStore,
 		operatorui.Options{
-			AppVersion:   "operator-console",
-			DatabasePath: cfg.Database.Path,
-			BindAddress:  cfg.WebUI.BindAddress,
+			AppVersion:              "operator-console",
+			ControllerID:            cfg.ControllerID,
+			SiteName:                cfg.SiteName,
+			DatabasePath:            cfg.Database.Path,
+			ConfigPath:              *configPath,
+			BindAddress:             cfg.WebUI.BindAddress,
+			G2SHostURL:              cfg.G2S.HostURL,
+			G2SEndpointPath:         cfg.G2S.EndpointPath,
+			G2SHostID:               cfg.G2S.HostID,
+			TLSRequired:             cfg.G2S.RequireTLS,
+			ClientCertRequired:      cfg.G2S.RequireClientCert,
+			WebLoginRequired:        cfg.WebUI.RequireLogin,
+			AdminClientCertRequired: cfg.WebUI.RequireClientCertForAdmin,
+			CAConfigured:            strings.TrimSpace(cfg.Crypto.G2SCAPath) != "",
+			ClientCertConfigured:    strings.TrimSpace(cfg.Crypto.G2SClientCertPath) != "",
+			ServerCertConfigured:    strings.TrimSpace(cfg.Crypto.WebServerCertPath) != "",
+			StartedAt:               startedAt,
 		},
 		func(w http.ResponseWriter, r *http.Request) bool {
 			return requireMutationAuth(w, r, cfg)
