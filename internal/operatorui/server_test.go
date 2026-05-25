@@ -1821,7 +1821,10 @@ func TestSettingsPageRendersCertificateInventoryRows(t *testing.T) {
 	}
 	body := res.Body.String()
 	for _, expected := range []string{
-		"Certificates",
+		"Certificate Status",
+		"Configured",
+		"File Exists",
+		"Parse Status",
 		"web_server_cert",
 		"/certs/web.crt",
 		"OK",

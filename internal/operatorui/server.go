@@ -3285,15 +3285,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<tr><td>Host ID</td><td class="mono">` + esc(defaultString(s.Options.G2SHostID, "unknown")) + `</td></tr>`)
 	body.WriteString(`</table></div>`)
 
-	body.WriteString(`<div class="panel"><h2>Certificates</h2>`)
+	body.WriteString(`<div class="panel"><h2>Certificate Status</h2>`)
 	if len(certs) == 0 {
 		body.WriteString(`<p>No certificate inventory recorded.</p>`)
 	} else {
-		body.WriteString(`<table><tr><th>Role</th><th>Path</th><th>Status</th><th>Fingerprint</th><th>Not Before</th><th>Not After</th><th>Days Until Expiry</th><th>Last Checked</th><th>Runtime Note</th></tr>`)
+		body.WriteString(`<table><tr><th>Role</th><th>Path</th><th>Configured</th><th>File Exists</th><th>Parse Status</th><th>Status</th><th>Fingerprint</th><th>Not Before</th><th>Not After</th><th>Days Until Expiry</th><th>Last Checked</th><th>Runtime Note</th></tr>`)
 		for _, row := range certs {
 			body.WriteString(`<tr>`)
 			body.WriteString(`<td class="mono">` + esc(row.Role) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(defaultString(row.Path, "-")) + `</td>`)
+			body.WriteString(`<td>` + esc(configuredFromPathText(row.Path)) + `</td>`)
+			body.WriteString(`<td>` + esc(fileExistsFromStatusText(row.Status)) + `</td>`)
+			body.WriteString(`<td>` + esc(parseStatusText(row.Status)) + `</td>`)
 			body.WriteString(`<td>` + esc(defaultString(row.Status, "-")) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(defaultString(row.SHA256Fingerprint, "-")) + `</td>`)
 			body.WriteString(`<td class="mono">` + esc(fmtMaybeTime(row.NotBefore)) + `</td>`)
@@ -3878,6 +3881,37 @@ func configuredText(value bool) string {
 		return "configured"
 	}
 	return "not configured"
+}
+
+func configuredFromPathText(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "not configured"
+	}
+	return "configured"
+}
+
+func fileExistsFromStatusText(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "MISSING", "NOT_CONFIGURED":
+		return "no"
+	default:
+		return "yes"
+	}
+}
+
+func parseStatusText(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "VALID", "EXPIRING_SOON", "EXPIRED", "NOT_YET_VALID":
+		return "parsed"
+	case "INVALID":
+		return "invalid"
+	case "MISSING":
+		return "missing"
+	case "NOT_CONFIGURED":
+		return "not configured"
+	default:
+		return "unknown"
+	}
 }
 
 func handlerRuleOutcomeLabel(value g2sengine.HandlerRuleOutcome) string {

@@ -65,6 +65,7 @@ Visible seed data in Operator Console must remain product-neutral (for example c
 - `PHASE_5G_EGM_GROUPS_REGISTRY_IMPORT_EXPORT.md`
 - `PHASE_5C_AUDIT_EVIDENCE_PACKAGE_LITE.md`
 - `PHASE_6A_CONFIGURED_G2S_DELIVERY_CLIENT.md`
+- `PHASE_6A_CERTIFICATE_DELIVERY_READINESS.md`
 - `TRANSPORT_POLICY_REVIEW.md`
 
 ## Archived Old Plans

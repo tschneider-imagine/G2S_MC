@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
@@ -21,6 +22,7 @@ type Source struct {
 func SourcesFromConfig(cfg config.Crypto) []Source {
 	return []Source{
 		{Role: "g2s_client_cert", Path: cfg.G2SClientCertPath},
+		{Role: "g2s_client_key", Path: cfg.G2SClientKeyPath},
 		{Role: "g2s_ca_cert", Path: cfg.G2SCAPath},
 		{Role: "web_server_cert", Path: cfg.WebServerCertPath},
 	}
@@ -35,6 +37,10 @@ func InspectAll(sources []Source, now time.Time) []model.CertificateInventory {
 }
 
 func Inspect(source Source, now time.Time) model.CertificateInventory {
+	if isPrivateKeyRole(source.Role) {
+		return inspectPrivateKey(source, now)
+	}
+
 	record := model.CertificateInventory{
 		Role:          source.Role,
 		Path:          source.Path,
@@ -76,6 +82,59 @@ func Inspect(source Source, now time.Time) model.CertificateInventory {
 	record.SHA256Fingerprint = formatFingerprint(fingerprint[:])
 	record.Status = statusFor(cert, now)
 	return record
+}
+
+func inspectPrivateKey(source Source, now time.Time) model.CertificateInventory {
+	record := model.CertificateInventory{
+		Role:          source.Role,
+		Path:          source.Path,
+		LastCheckedAt: now,
+	}
+	if source.Path == "" {
+		record.Status = "NOT_CONFIGURED"
+		return record
+	}
+
+	raw, err := os.ReadFile(source.Path)
+	if err != nil {
+		record.Status = "MISSING"
+		record.Error = err.Error()
+		return record
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		record.Status = "INVALID"
+		record.Error = "no PEM private key block found"
+		return record
+	}
+	if _, err := parsePrivateKeyBlock(block.Bytes); err != nil {
+		record.Status = "INVALID"
+		record.Error = err.Error()
+		return record
+	}
+
+	fingerprint := sha256.Sum256(block.Bytes)
+	record.SHA256Fingerprint = formatFingerprint(fingerprint[:])
+	record.Status = "VALID"
+	return record
+}
+
+func parsePrivateKeyBlock(raw []byte) (any, error) {
+	if key, err := x509.ParsePKCS1PrivateKey(raw); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(raw); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParseECPrivateKey(raw); err == nil {
+		return key, nil
+	}
+	return nil, fmt.Errorf("unsupported private key format")
+}
+
+func isPrivateKeyRole(role string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(role))
+	return strings.HasSuffix(normalized, "_key")
 }
 
 func statusFor(cert *x509.Certificate, now time.Time) string {
