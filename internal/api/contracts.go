@@ -44,9 +44,11 @@ type ActionRunDispatchDryRunRequest struct {
 }
 
 type ActionRunSendPreparedRequest struct {
-	TransportMode string `json:"transport_mode"`
-	AllowRealSend bool   `json:"allow_real_send"`
-	Actor         string `json:"actor,omitempty"`
+	TransportMode   string `json:"transport_mode"`
+	AllowRealSend   bool   `json:"allow_real_send"`
+	CaptureOnlySend bool   `json:"capture_only_send"`
+	CaptureEndpoint string `json:"capture_endpoint,omitempty"`
+	Actor           string `json:"actor,omitempty"`
 }
 
 type TemplatesListResponse struct {

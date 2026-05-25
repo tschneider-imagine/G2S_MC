@@ -34,6 +34,8 @@ func main() {
 	sendPrepared := flag.Bool("send-prepared", false, "send prepared outbound messages for newly queued runs")
 	transportModeRaw := flag.String("transport", "disabled", "transport mode: disabled|dry-run|http")
 	allowRealSend := flag.Bool("allow-real-send", false, "allow real network sends (requires -transport http)")
+	captureEndpoint := flag.String("capture-endpoint", "", "explicit HTTP capture endpoint URL (used for demo seed/send proof)")
+	captureOnlySend := flag.Bool("capture-only-send", false, "require localhost capture endpoint safety gate for HTTP send proof")
 	clearLatchInputID := flag.String("clear-latch", "", "manually clear a MANUAL_CLEAR latched input by input ID")
 	seedDemoActions := flag.Bool("seed-demo-actions", false, "seed queue-only demo action definitions and bind default channels")
 	seedDemoEGMs := flag.Bool("seed-demo-egms", false, "seed no-send smoke EGM registry records and template")
@@ -58,6 +60,10 @@ func main() {
 	transportMode, modeErr := parseTransportMode(*transportModeRaw)
 	if modeErr != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", modeErr)
+		os.Exit(2)
+	}
+	if err := validateCaptureSendConfig(transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint)); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
 
@@ -87,7 +93,7 @@ func main() {
 		}
 	}
 	if *seedDemoEGMs {
-		if err := seedDemoEGMRegistry(ctx, st); err != nil {
+		if err := seedDemoEGMRegistry(ctx, st, strings.TrimSpace(*captureEndpoint)); err != nil {
 			fmt.Fprintf(os.Stderr, "seed demo egms: %v\n", err)
 			os.Exit(1)
 		}
@@ -107,14 +113,14 @@ func main() {
 	}
 
 	if strings.TrimSpace(*clearLatchInputID) != "" {
-		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, strings.TrimSpace(*clearLatchInputID), *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend); err != nil {
+		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, strings.TrimSpace(*clearLatchInputID), *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint)); err != nil {
 			fmt.Fprintf(os.Stderr, "clear latch: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	if *once {
-		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, 1); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), 1); err != nil {
 			fmt.Fprintf(os.Stderr, "poll once: %v\n", err)
 			os.Exit(1)
 		}
@@ -125,7 +131,7 @@ func main() {
 	count := 0
 	for {
 		count++
-		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, count); err != nil {
+		if err := runPoll(ctx, poller, queuer, dispatcher, *queueActions, *dispatchDryRun, *sendPrepared, transportMode, *allowRealSend, *captureOnlySend, strings.TrimSpace(*captureEndpoint), count); err != nil {
 			fmt.Fprintf(os.Stderr, "poll #%d: %v\n", count, err)
 			os.Exit(1)
 		}
@@ -136,7 +142,7 @@ func main() {
 	}
 }
 
-func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, iteration int) error {
+func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string, iteration int) error {
 	result, err := poller.PollOnce(ctx)
 	if err != nil {
 		return err
@@ -206,11 +212,13 @@ func runPoll(ctx context.Context, poller *inputpoller.Poller, queuer *actionrunt
 						)
 						if sendPrepared {
 							sendResult, sendErr := dispatcher.SendPreparedMessages(ctx, actiondispatch.SendPreparedMessagesRequest{
-								ActionRunID:   dispatchResult.ActionRunID,
-								TransportMode: transportMode,
-								AllowRealSend: allowRealSend,
-								Actor:         "g2s-input-monitor",
-								RequestedAt:   result.ObservedAt,
+								ActionRunID:     dispatchResult.ActionRunID,
+								TransportMode:   transportMode,
+								AllowRealSend:   allowRealSend,
+								CaptureOnlySend: captureOnlySend,
+								CaptureEndpoint: captureEndpoint,
+								Actor:           "g2s-input-monitor",
+								RequestedAt:     result.ObservedAt,
 							})
 							if sendErr != nil {
 								fmt.Printf("send_prepared_error run_id=%s err=%v\n", dispatchResult.ActionRunID, sendErr)
@@ -260,7 +268,24 @@ func parseTransportMode(raw string) (g2stransport.Mode, error) {
 	}
 }
 
-func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, inputID string, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool) error {
+func validateCaptureSendConfig(transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string) error {
+	if !allowRealSend {
+		return nil
+	}
+	if transportMode != g2stransport.ModeHTTP {
+		return fmt.Errorf("-allow-real-send requires -transport http")
+	}
+	if !captureOnlySend {
+		return fmt.Errorf("-allow-real-send in Phase 2G requires -capture-only-send")
+	}
+	allowed, reason := g2stransport.CaptureEndpointAllowed(captureEndpoint)
+	if !allowed {
+		return fmt.Errorf("capture endpoint is required and must be localhost/loopback for Phase 2G: %s", reason)
+	}
+	return nil
+}
+
+func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queuer *actionruntime.Queuer, dispatcher *actiondispatch.Dispatcher, inputID string, queueActions bool, dispatchDryRun bool, sendPrepared bool, transportMode g2stransport.Mode, allowRealSend bool, captureOnlySend bool, captureEndpoint string) error {
 	clearedAt := time.Now().UTC()
 	clearResult, err := evaluator.ClearLatchedInput(ctx, inputID, "g2s-input-monitor", "operator requested clear-latch")
 	if err != nil {
@@ -316,11 +341,13 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 		return nil
 	}
 	sendResult, sendErr := dispatcher.SendPreparedMessages(ctx, actiondispatch.SendPreparedMessagesRequest{
-		ActionRunID:   dispatchResult.ActionRunID,
-		TransportMode: transportMode,
-		AllowRealSend: allowRealSend,
-		Actor:         "g2s-input-monitor",
-		RequestedAt:   clearedAt,
+		ActionRunID:     dispatchResult.ActionRunID,
+		TransportMode:   transportMode,
+		AllowRealSend:   allowRealSend,
+		CaptureOnlySend: captureOnlySend,
+		CaptureEndpoint: captureEndpoint,
+		Actor:           "g2s-input-monitor",
+		RequestedAt:     clearedAt,
 	})
 	if sendErr != nil {
 		return sendErr
@@ -338,7 +365,7 @@ func runClearLatch(ctx context.Context, evaluator *inputruntime.Evaluator, queue
 	return nil
 }
 
-func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore) error {
+func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore, captureEndpoint string) error {
 	template := templates.G2STemplate{
 		ID:     "template-smoke-no-send",
 		Name:   "Template Smoke No Send",
@@ -372,6 +399,7 @@ func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore) error {
 			TemplateID:         template.ID,
 			CurrentActionState: egms.EGMActionStateNormal,
 			Notes:              "No-send dry-run registry seed",
+			EndpointPath:       strings.TrimSpace(captureEndpoint),
 		},
 		{
 			EGMID:              "EGM-SMOKE-002",
@@ -381,6 +409,7 @@ func seedDemoEGMRegistry(ctx context.Context, st *store.SQLiteStore) error {
 			TemplateID:         template.ID,
 			CurrentActionState: egms.EGMActionStateNormal,
 			Notes:              "No-send dry-run registry seed",
+			EndpointPath:       strings.TrimSpace(captureEndpoint),
 		},
 	}
 	for _, row := range egmRows {

@@ -194,10 +194,12 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 		}
 		dispatcher := actiondispatch.Dispatcher{Store: s.Store}
 		result, err := dispatcher.SendPreparedMessages(r.Context(), actiondispatch.SendPreparedMessagesRequest{
-			ActionRunID:   id,
-			TransportMode: g2stransport.Mode(strings.ToUpper(strings.TrimSpace(req.TransportMode))),
-			AllowRealSend: req.AllowRealSend,
-			Actor:         strings.TrimSpace(req.Actor),
+			ActionRunID:     id,
+			TransportMode:   g2stransport.Mode(strings.ToUpper(strings.TrimSpace(req.TransportMode))),
+			AllowRealSend:   req.AllowRealSend,
+			CaptureOnlySend: req.CaptureOnlySend,
+			CaptureEndpoint: strings.TrimSpace(req.CaptureEndpoint),
+			Actor:           strings.TrimSpace(req.Actor),
 		})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {

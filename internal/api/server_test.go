@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -711,6 +712,104 @@ func TestPostActionRunSendPreparedBlocksWithoutAllowFlag(t *testing.T) {
 	}
 	if messages[0].Result != g2sengine.MessageResultSendBlocked {
 		t.Fatalf("message result=%q, want %q", messages[0].Result, g2sengine.MessageResultSendBlocked)
+	}
+}
+
+func TestPostActionRunSendPreparedBlocksWithoutCaptureOnly(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	dispatchReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/dispatch-dry-run", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	dispatchRes := httptest.NewRecorder()
+	mux.ServeHTTP(dispatchRes, dispatchReq)
+	if dispatchRes.Code != http.StatusOK {
+		t.Fatalf("dispatch status=%d, want %d", dispatchRes.Code, http.StatusOK)
+	}
+
+	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http","allow_real_send":true,"capture_only_send":false,"capture_endpoint":"http://127.0.0.1:18080/capture"}`)))
+	sendRes := httptest.NewRecorder()
+	mux.ServeHTTP(sendRes, sendReq)
+	if sendRes.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", sendRes.Code, http.StatusOK, sendRes.Body.String())
+	}
+	var response actiondispatch.SendPreparedMessagesResult
+	if err := json.Unmarshal(sendRes.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.BlockedCount == 0 {
+		t.Fatalf("blocked count=%d, want >0", response.BlockedCount)
+	}
+}
+
+func TestPostActionRunSendPreparedLocalhostCaptureSends(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	captured := 0
+	captureServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured++
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("captured"))
+	}))
+	defer captureServer.Close()
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	dispatchReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/dispatch-dry-run", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	dispatchRes := httptest.NewRecorder()
+	mux.ServeHTTP(dispatchRes, dispatchReq)
+	if dispatchRes.Code != http.StatusOK {
+		t.Fatalf("dispatch status=%d, want %d", dispatchRes.Code, http.StatusOK)
+	}
+
+	body := fmt.Sprintf(`{"transport_mode":"http","allow_real_send":true,"capture_only_send":true,"capture_endpoint":"%s/capture"}`, captureServer.URL)
+	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(body)))
+	sendRes := httptest.NewRecorder()
+	mux.ServeHTTP(sendRes, sendReq)
+	if sendRes.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", sendRes.Code, http.StatusOK, sendRes.Body.String())
+	}
+	var response actiondispatch.SendPreparedMessagesResult
+	if err := json.Unmarshal(sendRes.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.SentCount == 0 {
+		t.Fatalf("sent count=%d, want >0", response.SentCount)
+	}
+	if captured == 0 {
+		t.Fatal("expected capture server to receive request")
+	}
+	messages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 50, ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("list message journal by run: %v", err)
+	}
+	if len(messages) == 0 {
+		t.Fatal("expected sent messages")
+	}
+	if messages[0].Result != g2sengine.MessageResultSendSucceeded {
+		t.Fatalf("message result=%q, want %q", messages[0].Result, g2sengine.MessageResultSendSucceeded)
+	}
+	run, err := db.GetActionRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("get action run: %v", err)
+	}
+	if run == nil {
+		t.Fatal("expected action run")
+	}
+	if run.Status == actions.RunStatusSucceeded {
+		t.Fatalf("run should not be marked succeeded in Phase 2G: %q", run.Status)
 	}
 }
 

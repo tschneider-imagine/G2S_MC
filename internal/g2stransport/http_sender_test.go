@@ -18,12 +18,13 @@ func TestHTTPSenderBlocksWhenAllowFalse(t *testing.T) {
 
 	sender := &HTTPSender{}
 	result, err := sender.Send(context.Background(), SendRequest{
-		MessageID:     1,
-		EGMID:         "EGM-1",
-		EndpointURL:   server.URL,
-		RawPayload:    "<x/>",
-		TransportMode: ModeHTTP,
-		AllowRealSend: false,
+		MessageID:       1,
+		EGMID:           "EGM-1",
+		EndpointURL:     server.URL,
+		RawPayload:      "<x/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   false,
+		CaptureOnlySend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -46,12 +47,13 @@ func TestHTTPSenderBlocksWhenModeNotHTTP(t *testing.T) {
 
 	sender := &HTTPSender{}
 	result, err := sender.Send(context.Background(), SendRequest{
-		MessageID:     2,
-		EGMID:         "EGM-2",
-		EndpointURL:   server.URL,
-		RawPayload:    "<x/>",
-		TransportMode: ModeDisabled,
-		AllowRealSend: true,
+		MessageID:       2,
+		EGMID:           "EGM-2",
+		EndpointURL:     server.URL,
+		RawPayload:      "<x/>",
+		TransportMode:   ModeDisabled,
+		AllowRealSend:   true,
+		CaptureOnlySend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -77,12 +79,13 @@ func TestHTTPSenderSendsWhenAllowed(t *testing.T) {
 
 	sender := &HTTPSender{}
 	result, err := sender.Send(context.Background(), SendRequest{
-		MessageID:     3,
-		EGMID:         "EGM-3",
-		EndpointURL:   server.URL,
-		RawPayload:    "<send/>",
-		TransportMode: ModeHTTP,
-		AllowRealSend: true,
+		MessageID:       3,
+		EGMID:           "EGM-3",
+		EndpointURL:     server.URL,
+		RawPayload:      "<send/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -95,5 +98,56 @@ func TestHTTPSenderSendsWhenAllowed(t *testing.T) {
 	}
 	if result.ResponseExcerpt != "acknowledged" {
 		t.Fatalf("excerpt=%q", result.ResponseExcerpt)
+	}
+}
+
+func TestHTTPSenderBlocksWhenCaptureOnlyNotSet(t *testing.T) {
+	var hitCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hitCount, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender := &HTTPSender{}
+	result, err := sender.Send(context.Background(), SendRequest{
+		MessageID:       4,
+		EGMID:           "EGM-4",
+		EndpointURL:     server.URL,
+		RawPayload:      "<send/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: false,
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if !result.Blocked || result.Sent {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if got := atomic.LoadInt32(&hitCount); got != 0 {
+		t.Fatalf("expected no network call, hitCount=%d", got)
+	}
+}
+
+func TestHTTPSenderBlocksNonLocalCaptureEndpoint(t *testing.T) {
+	sender := &HTTPSender{}
+	result, err := sender.Send(context.Background(), SendRequest{
+		MessageID:       5,
+		EGMID:           "EGM-5",
+		EndpointURL:     "http://10.20.30.40:18080/capture",
+		RawPayload:      "<send/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: true,
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if !result.Blocked || result.Sent {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Error == "" || result.Error == "send blocked: capture_only_send_required" {
+		t.Fatalf("unexpected blocked reason: %q", result.Error)
 	}
 }

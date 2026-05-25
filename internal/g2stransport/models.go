@@ -2,6 +2,8 @@ package g2stransport
 
 import (
 	"context"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -15,18 +17,19 @@ const (
 )
 
 type SendRequest struct {
-	MessageID     int64
-	ActionRunID   string
-	EGMID         string
-	EndpointURL   string
-	Method        string
-	ContentType   string
-	Headers       map[string]string
-	RawPayload    string
-	TimeoutMS     int
-	AllowRealSend bool
-	TransportMode Mode
-	RequestedAt   time.Time
+	MessageID       int64
+	ActionRunID     string
+	EGMID           string
+	EndpointURL     string
+	Method          string
+	ContentType     string
+	Headers         map[string]string
+	RawPayload      string
+	TimeoutMS       int
+	AllowRealSend   bool
+	CaptureOnlySend bool
+	TransportMode   Mode
+	RequestedAt     time.Time
 }
 
 type SendResult struct {
@@ -57,4 +60,27 @@ func normalizeMode(mode Mode) Mode {
 	default:
 		return ModeDisabled
 	}
+}
+
+func CaptureEndpointAllowed(endpointURL string) (bool, string) {
+	trimmed := strings.TrimSpace(endpointURL)
+	if trimmed == "" {
+		return false, "missing_endpoint"
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return false, "invalid_endpoint_url"
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return false, "invalid_endpoint_host"
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true, ""
+	}
+	parsedIP := net.ParseIP(host)
+	if parsedIP != nil && parsedIP.IsLoopback() {
+		return true, ""
+	}
+	return false, "endpoint_not_allowed_for_capture_phase"
 }

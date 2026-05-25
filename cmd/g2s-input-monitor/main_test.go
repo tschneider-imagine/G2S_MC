@@ -74,7 +74,7 @@ func TestSeedDemoEGMRegistry(t *testing.T) {
 	}
 	defer st.Close()
 
-	if err := seedDemoEGMRegistry(ctx, st); err != nil {
+	if err := seedDemoEGMRegistry(ctx, st, "http://127.0.0.1:18080/capture"); err != nil {
 		t.Fatalf("seed demo egm registry: %v", err)
 	}
 
@@ -129,6 +129,9 @@ func TestSeedDemoEGMRegistry(t *testing.T) {
 		if row.TemplateID != "template-smoke-no-send" {
 			t.Fatalf("template_id=%q for %s", row.TemplateID, id)
 		}
+		if row.EndpointPath != "http://127.0.0.1:18080/capture" {
+			t.Fatalf("endpoint_path=%q for %s", row.EndpointPath, id)
+		}
 	}
 }
 
@@ -154,6 +157,68 @@ func TestParseTransportMode(t *testing.T) {
 		}
 		if tc.ok && got != tc.expect {
 			t.Fatalf("parseTransportMode(%q)=%q want %q", tc.raw, got, tc.expect)
+		}
+	}
+}
+
+func TestValidateCaptureSendConfig(t *testing.T) {
+	cases := []struct {
+		name            string
+		mode            g2stransport.Mode
+		allowRealSend   bool
+		captureOnlySend bool
+		endpoint        string
+		wantErr         bool
+	}{
+		{
+			name:            "default no send",
+			mode:            g2stransport.ModeDisabled,
+			allowRealSend:   false,
+			captureOnlySend: false,
+			endpoint:        "",
+			wantErr:         false,
+		},
+		{
+			name:            "allow send requires http mode",
+			mode:            g2stransport.ModeDryRun,
+			allowRealSend:   true,
+			captureOnlySend: true,
+			endpoint:        "http://127.0.0.1:18080/capture",
+			wantErr:         true,
+		},
+		{
+			name:            "allow send requires capture only",
+			mode:            g2stransport.ModeHTTP,
+			allowRealSend:   true,
+			captureOnlySend: false,
+			endpoint:        "http://127.0.0.1:18080/capture",
+			wantErr:         true,
+		},
+		{
+			name:            "allow send requires local endpoint",
+			mode:            g2stransport.ModeHTTP,
+			allowRealSend:   true,
+			captureOnlySend: true,
+			endpoint:        "http://10.20.30.40:18080/capture",
+			wantErr:         true,
+		},
+		{
+			name:            "allow send localhost ok",
+			mode:            g2stransport.ModeHTTP,
+			allowRealSend:   true,
+			captureOnlySend: true,
+			endpoint:        "http://localhost:18080/capture",
+			wantErr:         false,
+		},
+	}
+
+	for _, tc := range cases {
+		err := validateCaptureSendConfig(tc.mode, tc.allowRealSend, tc.captureOnlySend, tc.endpoint)
+		if tc.wantErr && err == nil {
+			t.Fatalf("%s: expected error", tc.name)
+		}
+		if !tc.wantErr && err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
 		}
 	}
 }
@@ -217,7 +282,7 @@ func TestRunClearLatchPath(t *testing.T) {
 	evaluator := &inputruntime.Evaluator{Store: st, Clock: time.Now}
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, channel.ID, true, false, false, g2stransport.ModeDisabled, false); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, channel.ID, true, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	rows, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})

@@ -327,19 +327,23 @@ func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPrepa
 		if endpointURL == "" {
 			endpointURL = endpointURLFromEGM(egmRecord)
 		}
+		if override := strings.TrimSpace(request.CaptureEndpoint); override != "" {
+			endpointURL = override
+		}
 
 		sendResult, sendErr := sender.Send(ctx, g2stransport.SendRequest{
-			MessageID:     entry.ID,
-			ActionRunID:   actionRunID,
-			EGMID:         entry.EGMID,
-			EndpointURL:   endpointURL,
-			Method:        "POST",
-			ContentType:   "application/soap+xml",
-			RawPayload:    entry.RawPayload,
-			TimeoutMS:     request.DefaultTimeout,
-			AllowRealSend: request.AllowRealSend,
-			TransportMode: request.TransportMode,
-			RequestedAt:   now,
+			MessageID:       entry.ID,
+			ActionRunID:     actionRunID,
+			EGMID:           entry.EGMID,
+			EndpointURL:     endpointURL,
+			Method:          "POST",
+			ContentType:     "application/soap+xml",
+			RawPayload:      entry.RawPayload,
+			TimeoutMS:       request.DefaultTimeout,
+			AllowRealSend:   request.AllowRealSend,
+			CaptureOnlySend: request.CaptureOnlySend,
+			TransportMode:   request.TransportMode,
+			RequestedAt:     now,
 		})
 		if sendErr != nil {
 			sendResult.Error = sendErr.Error()
@@ -394,13 +398,15 @@ func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPrepa
 	}
 
 	detailJSON, err := json.Marshal(map[string]any{
-		"action_run_id":   actionRunID,
-		"transport_mode":  request.TransportMode,
-		"allow_real_send": request.AllowRealSend,
-		"processed":       processed,
-		"sent":            sentCount,
-		"failed":          failedCount,
-		"blocked":         blockedCount,
+		"action_run_id":     actionRunID,
+		"transport_mode":    request.TransportMode,
+		"allow_real_send":   request.AllowRealSend,
+		"capture_only_send": request.CaptureOnlySend,
+		"capture_endpoint":  strings.TrimSpace(request.CaptureEndpoint),
+		"processed":         processed,
+		"sent":              sentCount,
+		"failed":            failedCount,
+		"blocked":           blockedCount,
 	})
 	if err != nil {
 		return SendPreparedMessagesResult{}, fmt.Errorf("marshal send-prepared detail: %w", err)

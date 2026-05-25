@@ -36,12 +36,14 @@ type DispatchResult struct {
 }
 
 type SendPreparedMessagesRequest struct {
-	ActionRunID    string
-	TransportMode  g2stransport.Mode
-	AllowRealSend  bool
-	Actor          string
-	RequestedAt    time.Time
-	DefaultTimeout int
+	ActionRunID     string
+	TransportMode   g2stransport.Mode
+	AllowRealSend   bool
+	CaptureOnlySend bool
+	CaptureEndpoint string
+	Actor           string
+	RequestedAt     time.Time
+	DefaultTimeout  int
 }
 
 type SendPreparedMessagesResult struct {

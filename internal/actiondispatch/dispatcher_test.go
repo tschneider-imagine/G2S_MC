@@ -3,6 +3,8 @@ package actiondispatch
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -326,10 +328,11 @@ func TestSendPreparedMessagesBlockedUpdatesJournal(t *testing.T) {
 	}
 
 	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
-		ActionRunID:   "run-1",
-		TransportMode: g2stransport.ModeDisabled,
-		AllowRealSend: false,
-		RequestedAt:   now,
+		ActionRunID:     "run-1",
+		TransportMode:   g2stransport.ModeDisabled,
+		AllowRealSend:   false,
+		CaptureOnlySend: false,
+		RequestedAt:     now,
 	})
 	if err != nil {
 		t.Fatalf("send prepared: %v", err)
@@ -373,10 +376,12 @@ func TestSendPreparedMessagesAllowedMarksSucceeded(t *testing.T) {
 	}
 
 	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
-		ActionRunID:   "run-1",
-		TransportMode: g2stransport.ModeHTTP,
-		AllowRealSend: true,
-		RequestedAt:   now,
+		ActionRunID:     "run-1",
+		TransportMode:   g2stransport.ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: true,
+		CaptureEndpoint: "http://127.0.0.1:18080/capture",
+		RequestedAt:     now,
 	})
 	if err != nil {
 		t.Fatalf("send prepared: %v", err)
@@ -395,6 +400,78 @@ func TestSendPreparedMessagesAllowedMarksSucceeded(t *testing.T) {
 	updated := st.runs["run-1"]
 	if updated.Status == actions.RunStatusSucceeded {
 		t.Fatalf("run status should not be succeeded in phase 2F: %q", updated.Status)
+	}
+}
+
+func TestSendPreparedMessagesRealSenderBlockedWithoutCaptureOnly(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	dispatcher := &Dispatcher{Store: st}
+
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		ActionRunID: "run-1",
+		Mode:        DispatchModeDryRun,
+		RequestedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
+		ActionRunID:     "run-1",
+		TransportMode:   g2stransport.ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: false,
+		CaptureEndpoint: "http://127.0.0.1:18080/capture",
+		RequestedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("send prepared: %v", err)
+	}
+	if result.BlockedCount == 0 {
+		t.Fatalf("blocked count=%d want >0", result.BlockedCount)
+	}
+}
+
+func TestSendPreparedMessagesRealSenderLocalhostCaptureSucceeds(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("captured"))
+	}))
+	defer server.Close()
+
+	dispatcher := &Dispatcher{Store: st}
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		ActionRunID: "run-1",
+		Mode:        DispatchModeDryRun,
+		RequestedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
+		ActionRunID:     "run-1",
+		TransportMode:   g2stransport.ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: true,
+		CaptureEndpoint: server.URL + "/capture",
+		RequestedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("send prepared: %v", err)
+	}
+	if result.SentCount == 0 {
+		t.Fatalf("sent count=%d want >0", result.SentCount)
+	}
+	for _, row := range st.messages {
+		if row.ActionRunID != "run-1" {
+			continue
+		}
+		if row.Result != g2sengine.MessageResultSendSucceeded {
+			t.Fatalf("expected send succeeded result, got %q", row.Result)
+		}
 	}
 }
 
