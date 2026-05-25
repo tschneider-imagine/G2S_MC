@@ -42,8 +42,20 @@ Expected key results:
 - `200 /healthz`
 - `200 /operator`
 - `200 /operator/inputs`
+- `200 /operator/actions`
+- `200 /operator/comms`
+- `200 /operator/egms`
+- `200 /operator/templates`
+- `200 /operator/audit`
+- `200 /operator/settings`
 - `404 /field-test`
 - `404 /dashboard`
+- `404 /static/dashboard.js`
+- `404 /static/dashboard.css`
+- `404 /operator/readiness`
+- `404 /operator/readiness.json`
+- `404 /operator/settings/system-check`
+- `404 /operator/settings/system-check.json`
 
 ## Verify Input Runtime
 
