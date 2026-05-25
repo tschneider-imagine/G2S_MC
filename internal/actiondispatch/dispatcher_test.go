@@ -403,7 +403,7 @@ func TestSendPreparedMessagesAllowedMarksSucceeded(t *testing.T) {
 	}
 }
 
-func TestSendPreparedMessagesRealSenderBlockedWithoutCaptureOnly(t *testing.T) {
+func TestSendPreparedMessagesRealSenderAttemptsDeliveryWithoutCaptureOnly(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
 	dispatcher := &Dispatcher{Store: st}
@@ -428,8 +428,11 @@ func TestSendPreparedMessagesRealSenderBlockedWithoutCaptureOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send prepared: %v", err)
 	}
-	if result.BlockedCount == 0 {
-		t.Fatalf("blocked count=%d want >0", result.BlockedCount)
+	if result.BlockedCount != 0 {
+		t.Fatalf("blocked count=%d want 0", result.BlockedCount)
+	}
+	if result.FailedCount == 0 {
+		t.Fatalf("failed count=%d want >0", result.FailedCount)
 	}
 }
 

@@ -44,22 +44,19 @@ func (s *HTTPSender) Send(ctx context.Context, request SendRequest) (SendResult,
 		result.Error = "send blocked: allow_real_send is false"
 		return result, nil
 	}
-	if !request.CaptureOnlySend {
-		result.Blocked = true
-		result.Error = "send blocked: capture_only_send_required"
-		return result, nil
-	}
 
 	endpointURL := strings.TrimSpace(request.EndpointURL)
 	if endpointURL == "" {
 		result.Error = "missing endpoint URL"
 		return result, nil
 	}
-	allowed, reason := CaptureEndpointAllowed(endpointURL)
-	if !allowed {
-		result.Blocked = true
-		result.Error = "send blocked: " + reason
-		return result, nil
+	if request.CaptureOnlySend {
+		allowed, reason := CaptureEndpointAllowed(endpointURL)
+		if !allowed {
+			result.Blocked = true
+			result.Error = "send blocked: " + reason
+			return result, nil
+		}
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(request.Method))

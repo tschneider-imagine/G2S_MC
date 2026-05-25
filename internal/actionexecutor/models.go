@@ -8,6 +8,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
 
@@ -16,6 +17,7 @@ type ExecuteRequest struct {
 	Actor       string
 	RequestedAt time.Time
 	MaxTargets  int
+	Delivery    g2stransport.DeliverySettings
 }
 
 type ExecutionAttemptSummary struct {

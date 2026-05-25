@@ -37,6 +37,7 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 	if now.IsZero() {
 		now = e.now()
 	}
+	delivery := request.Delivery.Normalize()
 
 	run, err := e.Store.GetActionRun(ctx, runID)
 	if err != nil {
@@ -79,11 +80,15 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 
 	auditIDs := make([]int64, 0, 8)
 	startAuditID, err := e.recordAudit(ctx, now, mapAuditSeverity(definition.Severity), audit.EventTypeActionStarted, fmt.Sprintf("Action run %s started", run.ID), map[string]any{
-		"action_run_id": run.ID,
-		"action_id":     definition.ID,
-		"target_count":  len(targetRows),
-		"retry_count":   retryPolicy.Count,
-		"retry_delay":   retryPolicy.DelayMS,
+		"action_run_id":    run.ID,
+		"action_id":        definition.ID,
+		"target_count":     len(targetRows),
+		"retry_count":      retryPolicy.Count,
+		"retry_delay":      retryPolicy.DelayMS,
+		"delivery_mode":    delivery.Mode,
+		"allow_delivery":   delivery.AllowDelivery,
+		"capture_only":     delivery.CaptureOnly,
+		"delivery_timeout": delivery.TimeoutMS,
 	}, run.ID, strings.TrimSpace(request.Actor), 0)
 	if err != nil {
 		return ExecuteResult{}, err
@@ -289,10 +294,11 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 					ContentType:     rendered.ContentType,
 					Headers:         rendered.Headers,
 					RawPayload:      rendered.RawPayload,
-					AllowRealSend:   true,
-					TransportMode:   g2stransport.ModeHTTP,
+					AllowRealSend:   delivery.AllowDelivery,
+					TransportMode:   delivery.TransportMode(),
 					RequestedAt:     stepNow,
-					CaptureOnlySend: false,
+					CaptureOnlySend: delivery.CaptureOnly,
+					TimeoutMS:       delivery.TimeoutMS,
 				})
 				if sendErr != nil {
 					sendResult.Error = sendErr.Error()

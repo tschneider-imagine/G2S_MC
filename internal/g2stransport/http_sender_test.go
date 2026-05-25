@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -104,11 +105,11 @@ func TestHTTPSenderSendsWhenAllowed(t *testing.T) {
 	}
 }
 
-func TestHTTPSenderCaptureProofBlocksWhenCaptureOnlyNotSet(t *testing.T) {
+func TestHTTPSenderAllowsConfiguredHTTPWhenCaptureOnlyNotSet(t *testing.T) {
 	var hitCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hitCount, 1)
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer server.Close()
 
@@ -125,11 +126,11 @@ func TestHTTPSenderCaptureProofBlocksWhenCaptureOnlyNotSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !result.Blocked || result.Sent {
+	if result.Blocked || !result.Sent {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if got := atomic.LoadInt32(&hitCount); got != 0 {
-		t.Fatalf("expected no network call, hitCount=%d", got)
+	if got := atomic.LoadInt32(&hitCount); got != 1 {
+		t.Fatalf("expected one network call, hitCount=%d", got)
 	}
 }
 
@@ -152,5 +153,30 @@ func TestHTTPSenderCaptureProofBlocksNonLocalEndpoint(t *testing.T) {
 	}
 	if result.Error == "" || result.Error == "send blocked: capture_only_send_required" {
 		t.Fatalf("unexpected blocked reason: %q", result.Error)
+	}
+}
+
+func TestHTTPSenderMissingEndpointFailsClearly(t *testing.T) {
+	sender := &HTTPSender{}
+	result, err := sender.Send(context.Background(), SendRequest{
+		MessageID:       6,
+		EGMID:           "EGM-6",
+		EndpointURL:     "",
+		RawPayload:      "<send/>",
+		TransportMode:   ModeHTTP,
+		AllowRealSend:   true,
+		CaptureOnlySend: false,
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if result.Blocked {
+		t.Fatalf("missing endpoint should fail clearly, not block: %+v", result)
+	}
+	if result.Sent {
+		t.Fatalf("unexpected sent result: %+v", result)
+	}
+	if result.Error == "" || !strings.Contains(strings.ToLower(result.Error), "missing endpoint") {
+		t.Fatalf("unexpected error: %q", result.Error)
 	}
 }

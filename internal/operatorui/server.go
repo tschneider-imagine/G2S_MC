@@ -91,6 +91,10 @@ type Options struct {
 	CAConfigured            bool
 	ClientCertConfigured    bool
 	ServerCertConfigured    bool
+	DeliveryMode            string
+	AllowDeliveryDefault    bool
+	CaptureOnlyDefault      bool
+	DeliveryTimeoutMS       int
 	StartedAt               time.Time
 }
 
@@ -1763,6 +1767,15 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	body.WriteString(`<tr><td>Client Authentication</td><td>` + esc(enabledText(s.Options.ClientCertRequired)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Web Login</td><td>` + esc(enabledText(s.Options.WebLoginRequired)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Admin Client Certificate</td><td>` + esc(enabledText(s.Options.AdminClientCertRequired)) + `</td></tr>`)
+	body.WriteString(`</table></div>`)
+
+	body.WriteString(`<div class="panel"><h2>Delivery Settings</h2><table>`)
+	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
+	body.WriteString(`<tr><td>Delivery Mode</td><td class="mono">` + esc(defaultString(strings.TrimSpace(s.Options.DeliveryMode), "DISABLED")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Delivery Default</td><td>` + esc(enabledText(s.Options.AllowDeliveryDefault)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Approved Delivery</td><td>` + esc(enabledText(s.Options.AllowDeliveryDefault)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Capture Only</td><td>` + esc(enabledText(s.Options.CaptureOnlyDefault)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Delivery Timeout (ms)</td><td class="mono">` + esc(strconv.Itoa(s.Options.DeliveryTimeoutMS)) + `</td></tr>`)
 	body.WriteString(`</table></div>`)
 
 	body.WriteString(`<div class="panel"><h2>Storage</h2><table>`)

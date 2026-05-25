@@ -22,6 +22,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/config"
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2s"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/operatorui"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
@@ -112,6 +113,13 @@ func main() {
 		AuthorizeMutation: func(w http.ResponseWriter, r *http.Request) bool {
 			return requireMutationAuth(w, r, cfg)
 		},
+		ActionSender: &g2stransport.HTTPSender{},
+		DefaultDeliverySettings: g2stransport.DeliverySettings{
+			Mode:          g2stransport.DeliveryModeDisabled,
+			AllowDelivery: false,
+			CaptureOnly:   false,
+			TimeoutMS:     cfg.Timeouts.G2SRequestTimeoutMS,
+		},
 	}
 	rebuildV2API.RegisterRoutes(mux)
 	operatorServer := operatorui.NewServer(
@@ -133,6 +141,10 @@ func main() {
 			CAConfigured:            strings.TrimSpace(cfg.Crypto.G2SCAPath) != "",
 			ClientCertConfigured:    strings.TrimSpace(cfg.Crypto.G2SClientCertPath) != "",
 			ServerCertConfigured:    strings.TrimSpace(cfg.Crypto.WebServerCertPath) != "",
+			DeliveryMode:            string(g2stransport.DeliveryModeDisabled),
+			AllowDeliveryDefault:    false,
+			CaptureOnlyDefault:      false,
+			DeliveryTimeoutMS:       cfg.Timeouts.G2SRequestTimeoutMS,
 			StartedAt:               startedAt,
 		},
 		func(w http.ResponseWriter, r *http.Request) bool {

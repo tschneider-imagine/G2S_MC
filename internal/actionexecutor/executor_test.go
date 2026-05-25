@@ -225,7 +225,11 @@ func TestExecuteSuccessConfirmsTargetAndRunSucceeded(t *testing.T) {
 		Sleep: func(time.Duration) {},
 	}
 
-	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-1", Actor: "operator"})
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Actor:       "operator",
+		Delivery:    enabledDeliverySettings(),
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -263,7 +267,11 @@ func TestExecuteFailureMatcherMarksRunFailed(t *testing.T) {
 		Sleep: func(time.Duration) {},
 	}
 
-	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-1", Actor: "operator"})
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Actor:       "operator",
+		Delivery:    enabledDeliverySettings(),
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -300,7 +308,10 @@ func TestExecuteDeliveryFailureRetriesAndCreatesEvidence(t *testing.T) {
 		Sleep: func(time.Duration) {},
 	}
 
-	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-1"})
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Delivery:    enabledDeliverySettings(),
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -364,7 +375,11 @@ func TestExecuteQueuesEscalationAfterFailure(t *testing.T) {
 		Sleep: func(time.Duration) {},
 	}
 
-	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-1", Actor: "operator"})
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Actor:       "operator",
+		Delivery:    enabledDeliverySettings(),
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -397,6 +412,86 @@ func TestExecuteNoSenderFailsWithoutPretendingSuccess(t *testing.T) {
 	}
 	if len(result.Attempts) == 0 || !strings.Contains(strings.ToLower(result.Attempts[0].Error), "sender") {
 		t.Fatalf("expected sender configuration error in attempts: %+v", result.Attempts)
+	}
+}
+
+func TestExecuteDefaultDeliverySettingsDoNotSilentlySend(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	calls := 0
+	executor := Executor{
+		Store: st,
+		Sender: &fakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
+			calls++
+			if req.AllowRealSend {
+				t.Fatalf("allow_real_send must be false by default: %+v", req)
+			}
+			if req.TransportMode != g2stransport.ModeDisabled {
+				t.Fatalf("transport mode must be disabled by default: %q", req.TransportMode)
+			}
+			return g2stransport.SendResult{
+				MessageID:     req.MessageID,
+				EGMID:         req.EGMID,
+				TransportMode: req.TransportMode,
+				Blocked:       true,
+				Sent:          false,
+				Error:         "send blocked: allow_real_send is false",
+				CompletedAt:   now,
+			}, nil
+		}},
+		Clock: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	}
+
+	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("expected sender to be called")
+	}
+	if result.ActionRun.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
+	}
+}
+
+func TestExecuteUsesConfiguredDeliverySettings(t *testing.T) {
+	now := time.Now().UTC()
+	st := newFakeStore(now)
+	captured := g2stransport.SendRequest{}
+	executor := Executor{
+		Store: st,
+		Sender: &fakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
+			captured = req
+			return g2stransport.SendResult{
+				MessageID:       req.MessageID,
+				EGMID:           req.EGMID,
+				TransportMode:   req.TransportMode,
+				Sent:            true,
+				HTTPStatusCode:  200,
+				ResponseExcerpt: "<ack>accepted</ack>",
+				CompletedAt:     now,
+			}, nil
+		}},
+		Clock: func() time.Time { return now },
+		Sleep: func(time.Duration) {},
+	}
+
+	settings := g2stransport.DeliverySettings{
+		Mode:          g2stransport.DeliveryModeHTTP,
+		AllowDelivery: true,
+		CaptureOnly:   false,
+		TimeoutMS:     4321,
+	}
+	_, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-1",
+		Delivery:    settings,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if captured.TransportMode != g2stransport.ModeHTTP || !captured.AllowRealSend || captured.CaptureOnlySend || captured.TimeoutMS != 4321 {
+		t.Fatalf("send request did not reflect delivery settings: %+v", captured)
 	}
 }
 
@@ -449,12 +544,24 @@ func TestExecuteRestoreActionUsesSamePath(t *testing.T) {
 		Sleep: func(time.Duration) {},
 	}
 
-	result, err := executor.Execute(context.Background(), ExecuteRequest{ActionRunID: "run-restore"})
+	result, err := executor.Execute(context.Background(), ExecuteRequest{
+		ActionRunID: "run-restore",
+		Delivery:    enabledDeliverySettings(),
+	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	if result.ActionRun.Status != actions.RunStatusSucceeded {
 		t.Fatalf("restore run status=%q, want %q", result.ActionRun.Status, actions.RunStatusSucceeded)
+	}
+}
+
+func enabledDeliverySettings() g2stransport.DeliverySettings {
+	return g2stransport.DeliverySettings{
+		Mode:          g2stransport.DeliveryModeHTTP,
+		AllowDelivery: true,
+		CaptureOnly:   false,
+		TimeoutMS:     5000,
 	}
 }
 

@@ -16,6 +16,47 @@ const (
 	ModeHTTP     Mode = "HTTP"
 )
 
+type DeliveryMode string
+
+const (
+	DeliveryModeDisabled DeliveryMode = "DISABLED"
+	DeliveryModeHTTP     DeliveryMode = "HTTP"
+)
+
+type DeliverySettings struct {
+	Mode          DeliveryMode `json:"mode"`
+	AllowDelivery bool         `json:"allow_delivery"`
+	CaptureOnly   bool         `json:"capture_only"`
+	TimeoutMS     int          `json:"timeout_ms"`
+}
+
+func (s DeliverySettings) Normalize() DeliverySettings {
+	normalized := DeliverySettings{
+		Mode:          DeliveryMode(strings.ToUpper(strings.TrimSpace(string(s.Mode)))),
+		AllowDelivery: s.AllowDelivery,
+		CaptureOnly:   s.CaptureOnly,
+		TimeoutMS:     s.TimeoutMS,
+	}
+	switch normalized.Mode {
+	case DeliveryModeHTTP:
+	default:
+		normalized.Mode = DeliveryModeDisabled
+	}
+	if normalized.TimeoutMS < 0 {
+		normalized.TimeoutMS = 0
+	}
+	return normalized
+}
+
+func (s DeliverySettings) TransportMode() Mode {
+	switch s.Normalize().Mode {
+	case DeliveryModeHTTP:
+		return ModeHTTP
+	default:
+		return ModeDisabled
+	}
+}
+
 type SendRequest struct {
 	MessageID     int64
 	ActionRunID   string

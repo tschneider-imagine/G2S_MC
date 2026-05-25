@@ -16,6 +16,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
@@ -745,7 +746,7 @@ func TestPostActionRunSendPreparedBlocksWithoutAllowFlag(t *testing.T) {
 	}
 }
 
-func TestPostActionRunSendPreparedBlocksWithoutCaptureOnly(t *testing.T) {
+func TestPostActionRunSendPreparedAttemptsDeliveryWithoutCaptureOnly(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
@@ -773,8 +774,11 @@ func TestPostActionRunSendPreparedBlocksWithoutCaptureOnly(t *testing.T) {
 	if err := json.Unmarshal(sendRes.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.BlockedCount == 0 {
-		t.Fatalf("blocked count=%d, want >0", response.BlockedCount)
+	if response.BlockedCount != 0 {
+		t.Fatalf("blocked count=%d, want 0", response.BlockedCount)
+	}
+	if response.FailedCount == 0 {
+		t.Fatalf("failed count=%d, want >0", response.FailedCount)
 	}
 }
 
@@ -897,6 +901,118 @@ func TestPostActionRunExecuteExecutesSpecifiedRunOnly(t *testing.T) {
 	}
 }
 
+func TestPostActionRunExecuteWithoutDeliverySettingsDoesNotSilentlySend(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	sendCalls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		ActionSender: &apiFakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
+			sendCalls++
+			if req.AllowRealSend {
+				t.Fatalf("allow_real_send should be false by default")
+			}
+			if req.TransportMode != g2stransport.ModeDisabled {
+				t.Fatalf("transport mode should be disabled by default, got %q", req.TransportMode)
+			}
+			return g2stransport.SendResult{
+				MessageID:     req.MessageID,
+				EGMID:         req.EGMID,
+				TransportMode: req.TransportMode,
+				Blocked:       true,
+				Sent:          false,
+				Error:         "send blocked: allow_real_send is false",
+				CompletedAt:   time.Now().UTC(),
+			}, nil
+		}},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(`{"actor":"tester"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if sendCalls == 0 {
+		t.Fatal("expected sender to be called")
+	}
+	run, err := db.GetActionRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("get run-1: %v", err)
+	}
+	if run == nil || run.Status == actions.RunStatusSucceeded {
+		t.Fatalf("run should not succeed without delivery settings, got %+v", run)
+	}
+}
+
+func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedActionRunFixtures(t, ctx, db)
+	seedDispatchFixtures(t, ctx, db)
+
+	// Enable expected matcher for this template so successful delivery can confirm target/run.
+	if err := db.UpsertG2STemplateVersion(ctx, templates.G2STemplateVersion{
+		ID:                    "template-smoke-no-send-v1",
+		TemplateID:            "template-smoke-no-send",
+		VersionLabel:          "1",
+		ActionsJSON:           `{"actions":{"queue_only_no_send":{"message_type":"DRY_RUN_NO_SEND","content_type":"application/xml","payload_template":"<dryRunG2SMessage noSend=\"true\" action=\"{{.ActionID}}\" run=\"{{.ActionRunID}}\" egm=\"{{.EGMID}}\" step=\"{{.TemplateActionKey}}\" timestamp=\"{{.TimestampRFC3339}}\"/>"}}}`,
+		ConfirmationRulesJSON: `{"rules":[{"id":"ok","contains":["accepted"]}]}`,
+		FailureRulesJSON:      `{"rules":[{"id":"bad","contains":["rejected"]}]}`,
+	}); err != nil {
+		t.Fatalf("update template version: %v", err)
+	}
+
+	sendCalls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store:             db,
+		AuthorizeMutation: allowMutation,
+		ActionSender: &apiFakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
+			sendCalls++
+			if req.TransportMode != g2stransport.ModeHTTP || !req.AllowRealSend || req.CaptureOnlySend || req.TimeoutMS != 5000 {
+				t.Fatalf("unexpected send request: %+v", req)
+			}
+			return g2stransport.SendResult{
+				MessageID:       req.MessageID,
+				EGMID:           req.EGMID,
+				TransportMode:   req.TransportMode,
+				Sent:            true,
+				HTTPStatusCode:  200,
+				ResponseExcerpt: "<ack>accepted</ack>",
+				CompletedAt:     time.Now().UTC(),
+			}, nil
+		}},
+	}
+	server.RegisterRoutes(mux)
+
+	body := `{"actor":"tester","delivery_mode":"HTTP","allow_delivery":true,"capture_only":false,"timeout_ms":5000}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(body)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if sendCalls == 0 {
+		t.Fatal("expected sender to be called")
+	}
+	run, err := db.GetActionRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("get run-1: %v", err)
+	}
+	if run == nil || run.Status != actions.RunStatusSucceeded {
+		t.Fatalf("run should succeed with expected matcher confirmation, got %+v", run)
+	}
+}
+
 func TestPostTemplatesRenderPreviewReturnsJSON(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
@@ -1006,6 +1122,17 @@ func TestGetActionRunMessagesReturnsJSON(t *testing.T) {
 }
 
 func allowMutation(_ http.ResponseWriter, _ *http.Request) bool { return true }
+
+type apiFakeSender struct {
+	sendFn func(context.Context, g2stransport.SendRequest) (g2stransport.SendResult, error)
+}
+
+func (s *apiFakeSender) Send(ctx context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
+	if s.sendFn == nil {
+		return g2stransport.SendResult{}, nil
+	}
+	return s.sendFn(ctx, req)
+}
 
 func validInputChannel() inputs.InputChannel {
 	return inputs.InputChannel{

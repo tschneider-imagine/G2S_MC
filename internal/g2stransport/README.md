@@ -16,4 +16,5 @@ This package does not own:
 
 Safety gate:
 - real network send requires `TransportMode=HTTP` and `AllowRealSend=true`,
+- capture restriction is applied only when `CaptureOnlySend=true`,
 - all other combinations are blocked with no network call.

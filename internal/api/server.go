@@ -63,8 +63,10 @@ type Store interface {
 }
 
 type Server struct {
-	Store             Store
-	AuthorizeMutation func(http.ResponseWriter, *http.Request) bool
+	Store                   Store
+	AuthorizeMutation       func(http.ResponseWriter, *http.Request) bool
+	ActionSender            g2stransport.Sender
+	DefaultDeliverySettings g2stransport.DeliverySettings
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
@@ -222,16 +224,34 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req ActionRunExecuteRequest
+		hasBody := r.ContentLength > 0
 		if r.ContentLength > 0 {
 			if !decodeJSON(w, r, &req) {
 				return
 			}
 		}
-		executor := actionexecutor.Executor{Store: s.Store}
+		delivery := s.DefaultDeliverySettings.Normalize()
+		if mode := strings.TrimSpace(req.DeliveryMode); mode != "" {
+			delivery.Mode = g2stransport.DeliveryMode(strings.ToUpper(mode))
+		}
+		if hasBody {
+			delivery.AllowDelivery = req.AllowDelivery
+			delivery.CaptureOnly = req.CaptureOnly
+			if req.TimeoutMS > 0 {
+				delivery.TimeoutMS = req.TimeoutMS
+			}
+		}
+		delivery = delivery.Normalize()
+
+		executor := actionexecutor.Executor{
+			Store:  s.Store,
+			Sender: s.ActionSender,
+		}
 		result, err := executor.Execute(r.Context(), actionexecutor.ExecuteRequest{
 			ActionRunID: id,
 			Actor:       strings.TrimSpace(req.Actor),
 			MaxTargets:  req.MaxTargets,
+			Delivery:    delivery,
 		})
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {

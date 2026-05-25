@@ -925,6 +925,29 @@ func TestSettingsPageRendersBindAndDatabase(t *testing.T) {
 	}
 }
 
+func TestSettingsPageShowsDeliverySettings(t *testing.T) {
+	mux := setupOperatorServer(t)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/settings", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Delivery Settings",
+		"Delivery Mode",
+		"DISABLED",
+		"Delivery Default",
+		"Approved Delivery",
+		"Delivery Timeout (ms)",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in settings page", expected)
+		}
+	}
+}
+
 func TestSettingsPageRendersCertificateInventoryRows(t *testing.T) {
 	mux := setupOperatorServer(t)
 	res := httptest.NewRecorder()
@@ -1246,6 +1269,10 @@ func defaultOperatorOptions() Options {
 		CAConfigured:            true,
 		ClientCertConfigured:    true,
 		ServerCertConfigured:    true,
+		DeliveryMode:            "DISABLED",
+		AllowDeliveryDefault:    false,
+		CaptureOnlyDefault:      false,
+		DeliveryTimeoutMS:       5000,
 		StartedAt:               time.Now().UTC().Add(-5 * time.Minute),
 	}
 }
