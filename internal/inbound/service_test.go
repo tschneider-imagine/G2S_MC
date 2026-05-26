@@ -439,6 +439,111 @@ func TestInboundFailureMatcherFailsWaitingTarget(t *testing.T) {
 	}
 }
 
+func TestInboundReturnSuccessSupersedesOlderIncidentWaitingRun(t *testing.T) {
+	store := newInboundStoreFixture()
+	now := fixedClock()()
+
+	store.runs["run-1"] = actions.ActionRun{
+		ID:                 "run-1",
+		ActionDefinitionID: "emergency-broadcast-trigger",
+		IncidentID:         "101",
+		StartedAt:          now.Add(-10 * time.Minute),
+		Status:             actions.RunStatusWaitingConfirmation,
+		TargetCount:        1,
+	}
+	store.targets["run-1"] = []actions.ActionTargetResult{
+		{ID: 1, ActionRunID: "run-1", TargetEGMID: "EGM-001", Status: actions.TargetStatusPending},
+	}
+	store.runs["run-2"] = actions.ActionRun{
+		ID:                 "run-2",
+		ActionDefinitionID: "emergency-broadcast-normal",
+		IncidentID:         "101",
+		StartedAt:          now.Add(-2 * time.Minute),
+		Status:             actions.RunStatusWaitingConfirmation,
+		TargetCount:        1,
+	}
+	store.targets["run-2"] = []actions.ActionTargetResult{
+		{ID: 2, ActionRunID: "run-2", TargetEGMID: "EGM-002", Status: actions.TargetStatusPending},
+	}
+	store.defs["emergency-broadcast-normal"] = actions.ActionDefinition{
+		ID:               "emergency-broadcast-normal",
+		Name:             "Emergency Broadcast Return",
+		Severity:         actions.SeverityRestore,
+		Enabled:          true,
+		TargetSelector:   "ALL_EMERGENCY_ENABLED",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-1",
+			Name:              "Restore",
+			Sequence:          0,
+			TemplateActionKey: "emergency_broadcast_restore",
+		}},
+		Version: 1,
+	}
+	store.messages = append(store.messages,
+		g2sengine.MessageJournalEntry{
+			ID:          990,
+			Timestamp:   now.Add(-4 * time.Minute),
+			Direction:   g2sengine.DirectionOutbound,
+			EGMID:       "EGM-001",
+			ActionRunID: "run-1",
+			Result:      g2sengine.MessageResultOffered,
+			RawPayload:  "<trigger/>",
+		},
+		g2sengine.MessageJournalEntry{
+			ID:          991,
+			Timestamp:   now.Add(-time.Minute),
+			Direction:   g2sengine.DirectionOutbound,
+			EGMID:       "EGM-002",
+			ActionRunID: "run-2",
+			Result:      g2sengine.MessageResultOffered,
+			RawPayload:  "<return/>",
+		},
+	)
+
+	svc := &Service{Store: store, Clock: fixedClock()}
+	result, err := svc.Process(context.Background(), InboundMessage{
+		RawPayload:  `<ack status="accepted"/>`,
+		EGMID:       "EGM-002",
+		ActionRunID: "run-2",
+		MessageType: "ACK",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !result.TargetUpdated || result.TargetStatus != string(actions.TargetStatusConfirmed) {
+		t.Fatalf("expected run-2 target confirmed, got %+v", result)
+	}
+	if store.runs["run-2"].Status != actions.RunStatusSucceeded {
+		t.Fatalf("run-2 status=%q want SUCCEEDED", store.runs["run-2"].Status)
+	}
+	if store.runs["run-1"].Status != actions.RunStatusSuperseded {
+		t.Fatalf("run-1 status=%q want SUPERSEDED", store.runs["run-1"].Status)
+	}
+	if store.runs["run-1"].Status == actions.RunStatusSucceeded {
+		t.Fatal("run-1 must not become SUCCEEDED")
+	}
+	if store.targets["run-1"][0].Status != actions.TargetStatusSuperseded {
+		t.Fatalf("run-1 target status=%q want SUPERSEDED", store.targets["run-1"][0].Status)
+	}
+	var triggerMessageResult g2sengine.MessageResult
+	var returnMessageResult g2sengine.MessageResult
+	for _, row := range store.messages {
+		if row.ID == 990 {
+			triggerMessageResult = row.Result
+		}
+		if row.ID == 991 {
+			returnMessageResult = row.Result
+		}
+	}
+	if triggerMessageResult != g2sengine.MessageResultSuperseded {
+		t.Fatalf("trigger message result=%q want SUPERSEDED", triggerMessageResult)
+	}
+	if returnMessageResult != g2sengine.MessageResultConfirmed {
+		t.Fatalf("return message result=%q want CONFIRMED", returnMessageResult)
+	}
+}
+
 func TestInboundNoMatchLeavesTargetUnchanged(t *testing.T) {
 	store := newInboundStoreFixture()
 	svc := &Service{Store: store, Clock: fixedClock()}

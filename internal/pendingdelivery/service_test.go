@@ -111,6 +111,15 @@ func (f *fakeStore) ListActionRuns(_ context.Context, query store.ActionRunListQ
 		if query.Status != "" && row.Status != query.Status {
 			continue
 		}
+		if strings.TrimSpace(query.IncidentID) != "" && !strings.EqualFold(strings.TrimSpace(row.IncidentID), strings.TrimSpace(query.IncidentID)) {
+			continue
+		}
+		if strings.TrimSpace(query.ActionDefinitionID) != "" && !strings.EqualFold(strings.TrimSpace(row.ActionDefinitionID), strings.TrimSpace(query.ActionDefinitionID)) {
+			continue
+		}
+		if query.InputTransitionID > 0 && row.InputTransitionID != query.InputTransitionID {
+			continue
+		}
 		rows = append(rows, row)
 	}
 	return rows, nil
@@ -408,6 +417,149 @@ func TestSweepWaitingConfirmationsExpiresMessageAndFailsRun(t *testing.T) {
 	run := st.runs["run-1"]
 	if run.Status != actions.RunStatusFailed {
 		t.Fatalf("run status=%q want FAILED", run.Status)
+	}
+}
+
+func TestResolveIncidentAfterReturnSuccessSupersedesOlderUnresolvedRuns(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := &fakeStore{
+		messages: []g2sengine.MessageJournalEntry{
+			{
+				ID:          1,
+				Timestamp:   now.Add(-5 * time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-001",
+				ActionRunID: "run-trigger",
+				Result:      g2sengine.MessageResultPrepared,
+				RawPayload:  "<trigger/>",
+			},
+			{
+				ID:          2,
+				Timestamp:   now.Add(-4 * time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-002",
+				ActionRunID: "run-trigger",
+				Result:      g2sengine.MessageResultOffered,
+				RawPayload:  "<trigger/>",
+			},
+			{
+				ID:          3,
+				Timestamp:   now.Add(-time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-001",
+				ActionRunID: "run-return",
+				Result:      g2sengine.MessageResultConfirmed,
+				RawPayload:  "<return/>",
+			},
+		},
+		runs: map[string]actions.ActionRun{
+			"run-trigger": {
+				ID:                 "run-trigger",
+				ActionDefinitionID: "emergency-broadcast-trigger",
+				IncidentID:         "101",
+				StartedAt:          now.Add(-10 * time.Minute),
+				Status:             actions.RunStatusWaitingConfirmation,
+				TargetCount:        2,
+			},
+			"run-return": {
+				ID:                 "run-return",
+				ActionDefinitionID: "emergency-broadcast-normal",
+				IncidentID:         "101",
+				StartedAt:          now.Add(-2 * time.Minute),
+				Status:             actions.RunStatusSucceeded,
+				TargetCount:        2,
+				ConfirmedCount:     2,
+			},
+			"run-unrelated": {
+				ID:                 "run-unrelated",
+				ActionDefinitionID: "general-broadcast-trigger",
+				IncidentID:         "202",
+				StartedAt:          now.Add(-11 * time.Minute),
+				Status:             actions.RunStatusWaitingConfirmation,
+				TargetCount:        1,
+			},
+		},
+		defs: map[string]actions.ActionDefinition{
+			"emergency-broadcast-trigger": {
+				ID:             "emergency-broadcast-trigger",
+				Name:           "Emergency Broadcast Trigger",
+				Severity:       actions.SeverityEmergency,
+				Enabled:        true,
+				TargetSelector: "ALL_EMERGENCY_ENABLED", TemplateSelector: "template-by-egm",
+				Steps:          []actions.ActionStep{{ID: "step-1", Name: "Silence", Sequence: 0, TemplateActionKey: "emergency_broadcast_silence"}},
+				ReturnActionID: "emergency-broadcast-normal",
+				Version:        1,
+			},
+			"emergency-broadcast-normal": {
+				ID:             "emergency-broadcast-normal",
+				Name:           "Emergency Broadcast Return",
+				Severity:       actions.SeverityRestore,
+				Enabled:        true,
+				TargetSelector: "ALL_EMERGENCY_ENABLED", TemplateSelector: "template-by-egm",
+				Steps:   []actions.ActionStep{{ID: "step-1", Name: "Restore", Sequence: 0, TemplateActionKey: "emergency_broadcast_restore"}},
+				Version: 1,
+			},
+			"general-broadcast-trigger": {
+				ID:             "general-broadcast-trigger",
+				Name:           "General Broadcast Trigger",
+				Severity:       actions.SeverityBroadcast,
+				Enabled:        true,
+				TargetSelector: "ALL_EMERGENCY_ENABLED", TemplateSelector: "template-by-egm",
+				Steps:   []actions.ActionStep{{ID: "step-1", Name: "Notice", Sequence: 0, TemplateActionKey: "general_broadcast_notice"}},
+				Version: 1,
+			},
+		},
+		targets: map[string][]actions.ActionTargetResult{
+			"run-trigger": {
+				{ID: 1, ActionRunID: "run-trigger", TargetEGMID: "EGM-001", Status: actions.TargetStatusPending},
+				{ID: 2, ActionRunID: "run-trigger", TargetEGMID: "EGM-002", Status: actions.TargetStatusConfirmed},
+			},
+			"run-return": {
+				{ID: 3, ActionRunID: "run-return", TargetEGMID: "EGM-001", Status: actions.TargetStatusConfirmed},
+				{ID: 4, ActionRunID: "run-return", TargetEGMID: "EGM-002", Status: actions.TargetStatusConfirmed},
+			},
+			"run-unrelated": {
+				{ID: 5, ActionRunID: "run-unrelated", TargetEGMID: "EGM-001", Status: actions.TargetStatusPending},
+			},
+		},
+		egms:   map[string]egms.EGMRecord{},
+		tpls:   map[string]templates.G2STemplate{},
+		audits: []audit.AuditTimelineEntry{},
+	}
+
+	result, err := ResolveIncidentAfterReturnSuccess(context.Background(), st, "101", "run-return", now)
+	if err != nil {
+		t.Fatalf("resolve after return: %v", err)
+	}
+	if result.RunsSuperseded != 1 {
+		t.Fatalf("runs_superseded=%d want 1", result.RunsSuperseded)
+	}
+	if st.runs["run-trigger"].Status != actions.RunStatusSuperseded {
+		t.Fatalf("trigger run status=%q want SUPERSEDED", st.runs["run-trigger"].Status)
+	}
+	if st.runs["run-trigger"].Status == actions.RunStatusSucceeded {
+		t.Fatal("trigger run must not become SUCCEEDED")
+	}
+	if st.targets["run-trigger"][0].Status != actions.TargetStatusSuperseded {
+		t.Fatalf("target status=%q want SUPERSEDED", st.targets["run-trigger"][0].Status)
+	}
+	if st.messages[0].Result != g2sengine.MessageResultSuperseded || st.messages[1].Result != g2sengine.MessageResultSuperseded {
+		t.Fatalf("expected trigger messages superseded, got %q and %q", st.messages[0].Result, st.messages[1].Result)
+	}
+	if st.messages[2].Result != g2sengine.MessageResultConfirmed {
+		t.Fatalf("return confirmation message changed unexpectedly: %q", st.messages[2].Result)
+	}
+	if st.runs["run-unrelated"].Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("unrelated run changed unexpectedly: %q", st.runs["run-unrelated"].Status)
+	}
+	foundAudit := false
+	for _, row := range st.audits {
+		if row.EventType == audit.EventTypeReturnToNormal && strings.Contains(row.Summary, "superseded by return-to-normal") {
+			foundAudit = true
+		}
+	}
+	if !foundAudit {
+		t.Fatalf("expected return-to-normal supersede audit, rows=%+v", st.audits)
 	}
 }
 

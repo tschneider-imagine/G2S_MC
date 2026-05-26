@@ -621,6 +621,11 @@ func (s *Service) refreshRunState(ctx context.Context, run *actions.ActionRun, o
 			return err
 		}
 	}
+	if run.Status == actions.RunStatusSucceeded && strings.TrimSpace(run.IncidentID) != "" {
+		if _, err := pendingdelivery.ResolveIncidentAfterReturnSuccess(ctx, s.Store, strings.TrimSpace(run.IncidentID), run.ID, occurredAt); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

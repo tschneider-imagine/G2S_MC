@@ -1543,6 +1543,16 @@ func TestGetPendingDeliveryReturnsPendingRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed confirmed message: %v", err)
 	}
+	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<superseded/>",
+		Result:      g2sengine.MessageResultSuperseded,
+	}); err != nil {
+		t.Fatalf("seed superseded message: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	server := &Server{Store: db}

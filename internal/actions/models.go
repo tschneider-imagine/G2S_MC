@@ -27,16 +27,18 @@ const (
 	RunStatusSucceeded           ActionRunStatus = "SUCCEEDED"
 	RunStatusFailed              ActionRunStatus = "FAILED"
 	RunStatusEscalated           ActionRunStatus = "ESCALATED"
+	RunStatusSuperseded          ActionRunStatus = "SUPERSEDED"
 	RunStatusCancelled           ActionRunStatus = "CANCELLED"
 )
 
 type ActionTargetStatus string
 
 const (
-	TargetStatusPending   ActionTargetStatus = "PENDING"
-	TargetStatusConfirmed ActionTargetStatus = "CONFIRMED"
-	TargetStatusFailed    ActionTargetStatus = "FAILED"
-	TargetStatusEscalated ActionTargetStatus = "ESCALATED"
+	TargetStatusPending    ActionTargetStatus = "PENDING"
+	TargetStatusConfirmed  ActionTargetStatus = "CONFIRMED"
+	TargetStatusFailed     ActionTargetStatus = "FAILED"
+	TargetStatusEscalated  ActionTargetStatus = "ESCALATED"
+	TargetStatusSuperseded ActionTargetStatus = "SUPERSEDED"
 )
 
 type ActionStep struct {
@@ -138,7 +140,7 @@ func (r ActionRun) Validate() error {
 		return fmt.Errorf("started_at is required")
 	}
 	switch r.Status {
-	case RunStatusPending, RunStatusDispatching, RunStatusDispatchPrepared, RunStatusWaitingConfirmation, RunStatusRunning, RunStatusSucceeded, RunStatusFailed, RunStatusEscalated, RunStatusCancelled:
+	case RunStatusPending, RunStatusDispatching, RunStatusDispatchPrepared, RunStatusWaitingConfirmation, RunStatusRunning, RunStatusSucceeded, RunStatusFailed, RunStatusEscalated, RunStatusSuperseded, RunStatusCancelled:
 	default:
 		return fmt.Errorf("status is invalid")
 	}
@@ -166,7 +168,7 @@ func (r ActionTargetResult) Validate() error {
 		return fmt.Errorf("target_egm_id is required")
 	}
 	switch r.Status {
-	case TargetStatusPending, TargetStatusConfirmed, TargetStatusFailed, TargetStatusEscalated:
+	case TargetStatusPending, TargetStatusConfirmed, TargetStatusFailed, TargetStatusEscalated, TargetStatusSuperseded:
 	default:
 		return fmt.Errorf("status is invalid")
 	}

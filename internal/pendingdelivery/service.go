@@ -75,9 +75,167 @@ type SweepResult struct {
 	Warnings           []string `json:"warnings,omitempty"`
 }
 
+type ResolveAfterReturnResult struct {
+	RunsSuperseded     int      `json:"runs_superseded"`
+	TargetsSuperseded  int      `json:"targets_superseded"`
+	MessagesSuperseded int      `json:"messages_superseded"`
+	Warnings           []string `json:"warnings,omitempty"`
+}
+
+type ResolveAfterReturnStore interface {
+	ListActionRuns(ctx context.Context, query store.ActionRunListQuery) ([]actions.ActionRun, error)
+	GetActionDefinition(ctx context.Context, id string) (*actions.ActionDefinition, error)
+	UpdateActionRun(ctx context.Context, run actions.ActionRun) error
+	ListActionTargetResults(ctx context.Context, actionRunID string) ([]actions.ActionTargetResult, error)
+	UpdateActionTargetResult(ctx context.Context, row actions.ActionTargetResult) error
+	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
+	UpdateMessageJournalResult(ctx context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error
+	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
+}
+
 type Service struct {
 	Store Store
 	Clock func() time.Time
+}
+
+func ResolveIncidentAfterReturnSuccess(ctx context.Context, st ResolveAfterReturnStore, incidentID string, returnRunID string, occurredAt time.Time) (ResolveAfterReturnResult, error) {
+	if st == nil {
+		return ResolveAfterReturnResult{}, fmt.Errorf("store is required")
+	}
+	incident := strings.TrimSpace(incidentID)
+	runID := strings.TrimSpace(returnRunID)
+	if incident == "" {
+		return ResolveAfterReturnResult{}, fmt.Errorf("incident id is required")
+	}
+	if runID == "" {
+		return ResolveAfterReturnResult{}, fmt.Errorf("return run id is required")
+	}
+	when := occurredAt.UTC()
+	if when.IsZero() {
+		when = time.Now().UTC()
+	}
+
+	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{
+		Limit:      500,
+		IncidentID: incident,
+	})
+	if err != nil {
+		return ResolveAfterReturnResult{}, err
+	}
+	if len(runs) == 0 {
+		return ResolveAfterReturnResult{Warnings: []string{"incident has no action runs"}}, nil
+	}
+
+	var returnRun *actions.ActionRun
+	for i := range runs {
+		if strings.EqualFold(strings.TrimSpace(runs[i].ID), runID) {
+			copy := runs[i]
+			returnRun = &copy
+			break
+		}
+	}
+	if returnRun == nil {
+		return ResolveAfterReturnResult{Warnings: []string{"return run not found in incident action runs"}}, nil
+	}
+	if returnRun.Status != actions.RunStatusSucceeded {
+		return ResolveAfterReturnResult{Warnings: []string{"return run is not succeeded"}}, nil
+	}
+
+	isReturn, returnReason, err := isReturnToNormalRun(ctx, st, *returnRun, runs)
+	if err != nil {
+		return ResolveAfterReturnResult{}, err
+	}
+	if !isReturn {
+		return ResolveAfterReturnResult{Warnings: []string{"run succeeded but is not identified as return-to-normal"}}, nil
+	}
+
+	result := ResolveAfterReturnResult{}
+	for i := range runs {
+		run := runs[i]
+		if strings.EqualFold(strings.TrimSpace(run.ID), runID) {
+			continue
+		}
+		if run.StartedAt.After(returnRun.StartedAt) {
+			continue
+		}
+		switch run.Status {
+		case actions.RunStatusPending, actions.RunStatusRunning, actions.RunStatusWaitingConfirmation:
+		default:
+			continue
+		}
+
+		prevStatus := run.Status
+		run.Status = actions.RunStatusSuperseded
+		completedAt := when
+		run.CompletedAt = &completedAt
+		if err := st.UpdateActionRun(ctx, run); err != nil {
+			return result, err
+		}
+		result.RunsSuperseded++
+
+		if _, err := st.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
+			OccurredAt:  when,
+			Severity:    audit.AuditSeverityInfo,
+			EventType:   audit.EventTypeReturnToNormal,
+			Summary:     "Action run superseded by return-to-normal success",
+			DetailJSON:  encodeDetail(map[string]any{"incident_id": incident, "superseded_run_id": run.ID, "return_run_id": runID, "previous_status": prevStatus, "reason": returnReason}),
+			ActionRunID: run.ID,
+		}); err != nil {
+			return result, err
+		}
+
+		targets, err := st.ListActionTargetResults(ctx, run.ID)
+		if err != nil {
+			return result, err
+		}
+		for j := range targets {
+			target := targets[j]
+			if target.Status != actions.TargetStatusPending {
+				continue
+			}
+			target.Status = actions.TargetStatusSuperseded
+			target.LastError = fmt.Sprintf("superseded by return-to-normal run %s", runID)
+			target.LastResultAt = &completedAt
+			if err := st.UpdateActionTargetResult(ctx, target); err != nil {
+				return result, err
+			}
+			result.TargetsSuperseded++
+		}
+
+		rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+			Limit:       500,
+			ActionRunID: run.ID,
+			Direction:   g2sengine.DirectionOutbound,
+			Results: []g2sengine.MessageResult{
+				g2sengine.MessageResultPrepared,
+				g2sengine.MessageResultPending,
+				g2sengine.MessageResultOffered,
+				g2sengine.MessageResultDelivered,
+			},
+		})
+		if err != nil {
+			return result, err
+		}
+		for _, row := range rows {
+			if err := st.UpdateMessageJournalResult(ctx, row.ID, g2sengine.MessageResultSuperseded, fmt.Sprintf("superseded by return-to-normal run %s", runID), "", 0, 0, row.TransportMode, row.SentAt, &completedAt); err != nil {
+				return result, err
+			}
+			result.MessagesSuperseded++
+			if _, err := st.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
+				OccurredAt:       when,
+				Severity:         audit.AuditSeverityInfo,
+				EventType:        audit.EventTypeMessageSuperseded,
+				Summary:          "Pending delivery superseded by return-to-normal success",
+				DetailJSON:       encodeDetail(map[string]any{"incident_id": incident, "return_run_id": runID, "message_id": row.ID}),
+				ActionRunID:      run.ID,
+				MessageJournalID: row.ID,
+			}); err != nil {
+				return result, err
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (s *Service) HandleClientContact(ctx context.Context, req ContactRequest) (ContactResult, error) {
@@ -442,6 +600,36 @@ func parseEscalationPolicy(raw string) escalationPolicy {
 		policy.AfterAttempts = 0
 	}
 	return policy
+}
+
+func isReturnToNormalRun(ctx context.Context, st ResolveAfterReturnStore, run actions.ActionRun, incidentRuns []actions.ActionRun) (bool, string, error) {
+	definition, err := st.GetActionDefinition(ctx, run.ActionDefinitionID)
+	if err != nil {
+		return false, "", err
+	}
+	if definition != nil && definition.Severity == actions.SeverityRestore {
+		return true, "restore severity", nil
+	}
+	reason := strings.ToLower(strings.TrimSpace(run.TriggerReason))
+	if strings.Contains(reason, "manual clear") || strings.Contains(reason, "return") || strings.Contains(reason, "on-normal") || strings.Contains(reason, "normal transition") {
+		return true, "trigger reason", nil
+	}
+	for _, candidate := range incidentRuns {
+		if strings.EqualFold(strings.TrimSpace(candidate.ID), strings.TrimSpace(run.ID)) {
+			continue
+		}
+		candidateDef, candidateErr := st.GetActionDefinition(ctx, candidate.ActionDefinitionID)
+		if candidateErr != nil {
+			return false, "", candidateErr
+		}
+		if candidateDef == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(candidateDef.ReturnActionID), strings.TrimSpace(run.ActionDefinitionID)) {
+			return true, "return action linkage", nil
+		}
+	}
+	return false, "", nil
 }
 
 func encodeDetail(payload map[string]any) string {

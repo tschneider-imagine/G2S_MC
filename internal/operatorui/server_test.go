@@ -286,6 +286,37 @@ func TestOperatorLiveShowsFailedAndEscalatedActionRuns(t *testing.T) {
 	}
 }
 
+func TestOperatorLiveDoesNotTreatSupersededRunAsActive(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := st.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-superseded",
+		ActionDefinitionID: "general-broadcast-trigger",
+		StartedAt:          now,
+		Status:             actions.RunStatusSuperseded,
+		TargetCount:        1,
+	}); err != nil {
+		t.Fatalf("create superseded run: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/live.json", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var payload LiveView
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, row := range payload.ActiveActions {
+		if row.RunID == "run-superseded" {
+			t.Fatalf("superseded run should not appear in active actions: %+v", payload.ActiveActions)
+		}
+	}
+}
+
 func TestOperatorLiveShowsEGMAttentionForMissingTemplate(t *testing.T) {
 	mux := setupOperatorServer(t)
 	res := httptest.NewRecorder()
@@ -485,6 +516,16 @@ func TestAuditPageFilterActionRunShowsRelatedEvidence(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed target result: %v", err)
 	}
+	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 20, ActionRunID: "run-1"})
+	if err != nil {
+		t.Fatalf("list run messages: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("expected seeded run message")
+	}
+	if err := st.UpdateMessageJournalResult(ctx, rows[0].ID, g2sengine.MessageResultSuperseded, "superseded for export coverage", "", 0, 0, rows[0].TransportMode, rows[0].SentAt, &now); err != nil {
+		t.Fatalf("mark superseded message: %v", err)
+	}
 
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/operator/audit?action_run_id=run-1", nil)
@@ -627,6 +668,30 @@ func TestAuditEvidenceExportIncludesRelatedDataAndNoPrivateKeys(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed target result: %v", err)
 	}
+	messageRows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+		Limit:       20,
+		ActionRunID: "run-1",
+	})
+	if err != nil {
+		t.Fatalf("list message rows: %v", err)
+	}
+	if len(messageRows) == 0 {
+		t.Fatal("expected seeded message rows")
+	}
+	if err := st.UpdateMessageJournalResult(
+		ctx,
+		messageRows[0].ID,
+		g2sengine.MessageResultSuperseded,
+		"superseded for export coverage",
+		"",
+		0,
+		0,
+		messageRows[0].TransportMode,
+		messageRows[0].SentAt,
+		&now,
+	); err != nil {
+		t.Fatalf("update message row to superseded: %v", err)
+	}
 
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/operator/audit/evidence-export?action_run_id=run-1&limit=200", nil)
@@ -654,6 +719,16 @@ func TestAuditEvidenceExportIncludesRelatedDataAndNoPrivateKeys(t *testing.T) {
 	}
 	if len(payload.Messages) == 0 {
 		t.Fatal("expected message rows")
+	}
+	foundSuperseded := false
+	for _, row := range payload.Messages {
+		if row.Result == g2sengine.MessageResultSuperseded {
+			foundSuperseded = true
+			break
+		}
+	}
+	if !foundSuperseded {
+		t.Fatalf("expected superseded message evidence row, rows=%+v", payload.Messages)
 	}
 	if len(payload.ActionRuns) == 0 {
 		t.Fatal("expected action run rows")
@@ -968,6 +1043,7 @@ func TestCommsPageRendersPendingLifecycleResults(t *testing.T) {
 		g2sengine.MessageResultConfirmed,
 		g2sengine.MessageResultFailed,
 		g2sengine.MessageResultExpired,
+		g2sengine.MessageResultSuperseded,
 	}
 	for i, result := range rows {
 		if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
@@ -993,7 +1069,7 @@ func TestCommsPageRendersPendingLifecycleResults(t *testing.T) {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 	body := res.Body.String()
-	for _, expected := range []string{"OFFERED", "CONFIRMED", "FAILED", "EXPIRED"} {
+	for _, expected := range []string{"OFFERED", "CONFIRMED", "FAILED", "EXPIRED", "SUPERSEDED"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in /operator/comms", expected)
 		}
@@ -1023,6 +1099,34 @@ func TestAuditPageRendersInboundAuditRows(t *testing.T) {
 	}
 	body := res.Body.String()
 	for _, expected := range []string{"MESSAGE_RECEIVED", "Inbound message received"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/audit", expected)
+		}
+	}
+}
+
+func TestAuditPageRendersSupersededByReturnEvent(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
+		OccurredAt:  time.Now().UTC(),
+		Severity:    audit.AuditSeverityInfo,
+		EventType:   audit.EventTypeReturnToNormal,
+		Summary:     "Action run superseded by return-to-normal success",
+		ActionRunID: "run-1",
+		Operator:    "operator",
+	}); err != nil {
+		t.Fatalf("seed supersede audit row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"RETURN_TO_NORMAL", "superseded by return-to-normal success"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in /operator/audit", expected)
 		}
