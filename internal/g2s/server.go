@@ -56,6 +56,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 	}
 	sourceIP, sourcePort := parseRemoteEndpoint(r.RemoteAddr)
 
+	var inboundResult inbound.ProcessResult
 	if s.inbounds != nil {
 		headers := map[string]string{}
 		for key, values := range r.Header {
@@ -71,7 +72,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			}
 			query[key] = values[0]
 		}
-		_, _ = s.inbounds.Process(r.Context(), inbound.InboundMessage{
+		inboundResult, _ = s.inbounds.Process(r.Context(), inbound.InboundMessage{
 			ReceivedAt:   time.Now().UTC(),
 			FromEndpoint: strings.TrimSpace(r.RemoteAddr),
 			ToEndpoint:   strings.TrimSpace(r.URL.Path),
@@ -93,7 +94,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			SourceIP:   sourceIP,
 			SourcePort: sourcePort,
 		})
-		writeSOAP(w, "commsOnLineAck", s.hostID, egmID)
+		writeSOAP(w, "commsOnLineAck", s.hostID, egmID, inboundResult.OfferedMessage)
 	case strings.Contains(message, "keepAlive"):
 		s.engine.Submit(engine.Event{
 			Type:       engine.EventKeepAlive,
@@ -103,9 +104,9 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			SourceIP:   sourceIP,
 			SourcePort: sourcePort,
 		})
-		writeSOAP(w, "keepAliveAck", s.hostID, egmID)
+		writeSOAP(w, "keepAliveAck", s.hostID, egmID, inboundResult.OfferedMessage)
 	default:
-		writeSOAP(w, "g2sAck", s.hostID, egmID)
+		writeSOAP(w, "g2sAck", s.hostID, egmID, inboundResult.OfferedMessage)
 	}
 }
 
@@ -128,13 +129,19 @@ func parseRemoteEndpoint(remoteAddr string) (string, int) {
 	return strings.TrimSpace(host), port
 }
 
-func writeSOAP(w http.ResponseWriter, name string, hostID string, egmID string) {
+func writeSOAP(w http.ResponseWriter, name string, hostID string, egmID string, offered *inbound.OfferedMessage) {
 	w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
 	_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>`))
 	_, _ = w.Write([]byte(`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">`))
 	_, _ = w.Write([]byte(`<soap:Body>`))
 	_, _ = w.Write([]byte(`<g2sResponse hostId="` + xmlEscape(hostID) + `" egmId="` + xmlEscape(egmID) + `">`))
 	_, _ = w.Write([]byte(`<` + name + `/>`))
+	if offered != nil {
+		_, _ = w.Write([]byte(`<pendingDelivery messageId="` + strconv.FormatInt(offered.MessageID, 10) + `" actionRunId="` + xmlEscape(offered.ActionRunID) + `" actionStepId="` + xmlEscape(offered.ActionStepID) + `" templateId="` + xmlEscape(offered.TemplateID) + `" templateVersion="` + xmlEscape(offered.TemplateVersion) + `" offerCount="` + strconv.Itoa(offered.OfferCount) + `" offeredAt="` + xmlEscape(offered.OfferedAt.UTC().Format(time.RFC3339)) + `">`))
+		_, _ = w.Write([]byte(`<messageType>` + xmlEscape(offered.MessageType) + `</messageType>`))
+		_, _ = w.Write([]byte(`<payload>` + xmlEscape(offered.RawPayload) + `</payload>`))
+		_, _ = w.Write([]byte(`</pendingDelivery>`))
+	}
 	_, _ = w.Write([]byte(`</g2sResponse>`))
 	_, _ = w.Write([]byte(`</soap:Body></soap:Envelope>`))
 }

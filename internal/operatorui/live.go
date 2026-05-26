@@ -9,32 +9,34 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
+	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/incidents"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
 type LiveView struct {
-	GeneratedAt         time.Time            `json:"generated_at"`
-	LastUpdated         string               `json:"last_updated"`
-	CurrentOperation    string               `json:"current_operation"`
-	ActiveInputID       string               `json:"active_input_id,omitempty"`
-	ActiveInputName     string               `json:"active_input_name,omitempty"`
-	ActivePriority      int                  `json:"active_priority,omitempty"`
-	ActiveInputCount    int                  `json:"active_input_count"`
-	ActiveLatchCount    int                  `json:"active_latch_count"`
-	LatestTransitionAt  string               `json:"latest_transition_at,omitempty"`
-	ActiveIncidentID    string               `json:"active_incident_id,omitempty"`
-	ActiveIncident      *LiveIncidentSummary `json:"active_incident,omitempty"`
-	ActiveInputs        []LiveInputSummary   `json:"active_inputs"`
-	ActiveActions       []LiveActionSummary  `json:"active_actions"`
-	EGMAttention        []LiveEGMAttention   `json:"egm_attention"`
-	RecentMessages      []LiveMessageSummary `json:"recent_messages"`
-	RecentAuditEvents   []LiveAuditSummary   `json:"recent_audit_events"`
-	RuntimeListener     string               `json:"runtime_listener,omitempty"`
-	RuntimeDatabasePath string               `json:"runtime_database_path,omitempty"`
-	InputRuntimeEnabled bool                 `json:"input_runtime_enabled"`
-	CertificateCount    int                  `json:"certificate_count"`
+	GeneratedAt          time.Time            `json:"generated_at"`
+	LastUpdated          string               `json:"last_updated"`
+	CurrentOperation     string               `json:"current_operation"`
+	ActiveInputID        string               `json:"active_input_id,omitempty"`
+	ActiveInputName      string               `json:"active_input_name,omitempty"`
+	ActivePriority       int                  `json:"active_priority,omitempty"`
+	ActiveInputCount     int                  `json:"active_input_count"`
+	ActiveLatchCount     int                  `json:"active_latch_count"`
+	LatestTransitionAt   string               `json:"latest_transition_at,omitempty"`
+	ActiveIncidentID     string               `json:"active_incident_id,omitempty"`
+	ActiveIncident       *LiveIncidentSummary `json:"active_incident,omitempty"`
+	ActiveInputs         []LiveInputSummary   `json:"active_inputs"`
+	ActiveActions        []LiveActionSummary  `json:"active_actions"`
+	EGMAttention         []LiveEGMAttention   `json:"egm_attention"`
+	RecentMessages       []LiveMessageSummary `json:"recent_messages"`
+	RecentAuditEvents    []LiveAuditSummary   `json:"recent_audit_events"`
+	PendingDeliveryCount int                  `json:"pending_delivery_count"`
+	RuntimeListener      string               `json:"runtime_listener,omitempty"`
+	RuntimeDatabasePath  string               `json:"runtime_database_path,omitempty"`
+	InputRuntimeEnabled  bool                 `json:"input_runtime_enabled"`
+	CertificateCount     int                  `json:"certificate_count"`
 }
 
 type LiveIncidentSummary struct {
@@ -352,6 +354,20 @@ func (s *Server) buildLiveView(ctx context.Context) (LiveView, error) {
 	}
 	view.RecentMessages = recentMessages
 
+	pendingRows, err := s.Store.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+		Limit: 500,
+		Results: []g2sengine.MessageResult{
+			g2sengine.MessageResultPrepared,
+			g2sengine.MessageResultPending,
+			g2sengine.MessageResultOffered,
+			g2sengine.MessageResultDelivered,
+		},
+	})
+	if err != nil {
+		return LiveView{}, err
+	}
+	view.PendingDeliveryCount = len(pendingRows)
+
 	auditRows, err := s.Store.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 10})
 	if err != nil {
 		return LiveView{}, err
@@ -439,6 +455,7 @@ func (s *Server) renderLivePanels(view LiveView) string {
 	body.WriteString(`<p>Active Inputs: <span class="mono" id="live-active-count">` + esc(strconv.Itoa(view.ActiveInputCount)) + `</span></p>`)
 	body.WriteString(`<p>Emergency Latches: <span class="mono" id="live-latch-count">` + esc(strconv.Itoa(view.ActiveLatchCount)) + `</span></p>`)
 	body.WriteString(`<p>Latest Transition: <span class="mono" id="live-latest-transition">` + esc(defaultString(view.LatestTransitionAt, "-")) + `</span></p>`)
+	body.WriteString(`<p>Pending Delivery: <span class="mono" id="live-pending-delivery-count">` + esc(strconv.Itoa(view.PendingDeliveryCount)) + `</span></p>`)
 	if view.ActiveIncident != nil {
 		body.WriteString(`<p>Active Incident: <a class="mono" id="live-active-incident" href="/operator/audit?incident_id=` + esc(view.ActiveIncidentID) + `">` + esc(view.ActiveIncidentID) + `</a></p>`)
 		body.WriteString(`<p>Opened: <span class="mono" id="live-incident-opened">` + esc(defaultString(view.ActiveIncident.OpenedAt, "-")) + `</span></p>`)
@@ -640,6 +657,7 @@ func liveRefreshScript() string {
         text('live-active-count', String(payload.active_input_count || 0), '0');
         text('live-latch-count', String(payload.active_latch_count || 0), '0');
         text('live-latest-transition', payload.latest_transition_at, '-');
+        text('live-pending-delivery-count', String(payload.pending_delivery_count || 0), '0');
         if (payload.active_incident_id) {
           var incidentNode = document.getElementById('live-active-incident');
           if (incidentNode) {

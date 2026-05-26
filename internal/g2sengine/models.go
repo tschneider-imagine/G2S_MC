@@ -26,6 +26,10 @@ const (
 	MessageResultDryRun        MessageResult = "DRY_RUN"
 	MessageResultPrepared      MessageResult = "PREPARED"
 	MessageResultPending       MessageResult = "PENDING_DELIVERY"
+	MessageResultOffered       MessageResult = "OFFERED"
+	MessageResultDelivered     MessageResult = "DELIVERED_TO_CLIENT"
+	MessageResultExpired       MessageResult = "EXPIRED"
+	MessageResultSuperseded    MessageResult = "SUPERSEDED"
 	MessageResultSendBlocked   MessageResult = "SEND_BLOCKED"
 	MessageResultSendAttempted MessageResult = "SEND_ATTEMPTED"
 	MessageResultSendFailed    MessageResult = "SEND_FAILED"
@@ -53,6 +57,8 @@ type MessageJournalEntry struct {
 	HTTPStatusCode    int              `json:"http_status_code,omitempty"`
 	LatencyMS         int              `json:"latency_ms,omitempty"`
 	ResponseExcerpt   string           `json:"response_excerpt,omitempty"`
+	OfferedAt         *time.Time       `json:"offered_at,omitempty"`
+	OfferCount        int              `json:"offer_count,omitempty"`
 	SentAt            *time.Time       `json:"sent_at,omitempty"`
 	CompletedAt       *time.Time       `json:"completed_at,omitempty"`
 	TransportMode     string           `json:"transport_mode,omitempty"`
@@ -69,7 +75,7 @@ func (m MessageJournalEntry) Validate() error {
 		return fmt.Errorf("raw_payload is required")
 	}
 	switch m.Result {
-	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun, MessageResultPrepared, MessageResultPending, MessageResultSendBlocked, MessageResultSendAttempted, MessageResultSendFailed, MessageResultSendSucceeded:
+	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun, MessageResultPrepared, MessageResultPending, MessageResultOffered, MessageResultDelivered, MessageResultExpired, MessageResultSuperseded, MessageResultSendBlocked, MessageResultSendAttempted, MessageResultSendFailed, MessageResultSendSucceeded:
 	default:
 		return fmt.Errorf("result is invalid")
 	}

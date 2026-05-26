@@ -123,6 +123,7 @@ func TestOperatorLivePageRendersOperationalPanels(t *testing.T) {
 		"Active Inputs",
 		"Active Actions",
 		"EGM Attention",
+		"Pending Delivery",
 		"Recent Messages",
 		"Recent Audit Events",
 		"Last Updated",
@@ -170,8 +171,40 @@ func TestOperatorLiveJSONReturnsNoStoreAndSummaries(t *testing.T) {
 	if len(payload.RecentMessages) == 0 {
 		t.Fatal("expected recent message rows")
 	}
+	if payload.PendingDeliveryCount < 0 {
+		t.Fatalf("pending_delivery_count=%d", payload.PendingDeliveryCount)
+	}
 	if len(payload.RecentAuditEvents) == 0 {
 		t.Fatal("expected recent audit rows")
+	}
+}
+
+func TestOperatorLiveJSONShowsPendingDeliveryCount(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		RawPayload:  "<prepared/>",
+		Result:      g2sengine.MessageResultPrepared,
+	}); err != nil {
+		t.Fatalf("seed pending message: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/live.json", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var payload LiveView
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.PendingDeliveryCount < 1 {
+		t.Fatalf("pending_delivery_count=%d", payload.PendingDeliveryCount)
 	}
 }
 
@@ -927,6 +960,46 @@ func TestCommsPageRendersPreparedMessageResult(t *testing.T) {
 	}
 }
 
+func TestCommsPageRendersPendingLifecycleResults(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	rows := []g2sengine.MessageResult{
+		g2sengine.MessageResultOffered,
+		g2sengine.MessageResultConfirmed,
+		g2sengine.MessageResultFailed,
+		g2sengine.MessageResultExpired,
+	}
+	for i, result := range rows {
+		if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+			Timestamp:       time.Now().UTC().Add(time.Duration(i) * time.Second),
+			Direction:       g2sengine.DirectionOutbound,
+			EGMID:           "EGM-001",
+			ActionRunID:     "run-1",
+			ActionStepID:    "step-1",
+			TemplateID:      "template-generic-g2s-action",
+			TemplateVersion: "1",
+			MessageType:     "emergency_broadcast_silence",
+			RawPayload:      "<message/>",
+			Result:          result,
+		}); err != nil {
+			t.Fatalf("seed row %d: %v", i, err)
+		}
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"OFFERED", "CONFIRMED", "FAILED", "EXPIRED"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/comms", expected)
+		}
+	}
+}
+
 func TestAuditPageRendersInboundAuditRows(t *testing.T) {
 	mux, st := setupOperatorServerWithStore(t)
 	ctx := context.Background()
@@ -978,6 +1051,46 @@ func TestAuditPageRendersPreparedDeliveryAuditRows(t *testing.T) {
 	}
 	body := res.Body.String()
 	for _, expected := range []string{"MESSAGE_PREPARED", "Message prepared for host listener delivery"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/audit", expected)
+		}
+	}
+}
+
+func TestAuditPageRendersOfferedAndExpiredAuditRows(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	for _, row := range []audit.AuditTimelineEntry{
+		{
+			OccurredAt:  time.Now().UTC(),
+			Severity:    audit.AuditSeverityInfo,
+			EventType:   audit.EventTypeMessageOffered,
+			Summary:     "Prepared message offered to EGM-001",
+			ActionRunID: "run-1",
+			Operator:    "listener",
+		},
+		{
+			OccurredAt:  time.Now().UTC(),
+			Severity:    audit.AuditSeverityWarning,
+			EventType:   audit.EventTypeMessageExpired,
+			Summary:     "Pending delivery expired while waiting confirmation",
+			ActionRunID: "run-1",
+			Operator:    "listener",
+		},
+	} {
+		if _, err := st.RecordAuditTimelineEntry(ctx, row); err != nil {
+			t.Fatalf("seed audit row: %v", err)
+		}
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/audit", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"MESSAGE_OFFERED", "MESSAGE_EXPIRED"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in /operator/audit", expected)
 		}

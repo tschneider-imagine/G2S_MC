@@ -449,6 +449,59 @@ func TestMessageJournalUpdateResultPersistsSendFields(t *testing.T) {
 	}
 }
 
+func TestMessageJournalOfferUpdateAndResultFilter(t *testing.T) {
+	ctx := context.Background()
+	store := newPhaseStore(t, ctx)
+	defer store.Close()
+
+	messageID, err := store.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		MessageType: "mute",
+		RawPayload:  "<mute/>",
+		Result:      g2sengine.MessageResultPrepared,
+	})
+	if err != nil {
+		t.Fatalf("record message journal entry: %v", err)
+	}
+	offeredAt := time.Now().UTC()
+	updated, err := store.UpdateMessageJournalOffer(ctx, messageID, offeredAt, g2sengine.MessageResultOffered)
+	if err != nil {
+		t.Fatalf("update offer: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected offer update to modify a row")
+	}
+	row, err := store.GetMessageJournalEntry(ctx, messageID)
+	if err != nil {
+		t.Fatalf("get message journal entry: %v", err)
+	}
+	if row == nil {
+		t.Fatal("expected row")
+	}
+	if row.Result != g2sengine.MessageResultOffered {
+		t.Fatalf("result=%q want OFFERED", row.Result)
+	}
+	if row.OfferCount != 1 {
+		t.Fatalf("offer_count=%d want 1", row.OfferCount)
+	}
+	if row.OfferedAt == nil {
+		t.Fatal("expected offered_at")
+	}
+	filtered, err := store.ListMessageJournalEntries(ctx, MessageJournalListQuery{
+		Limit:   10,
+		Results: []g2sengine.MessageResult{g2sengine.MessageResultOffered},
+	})
+	if err != nil {
+		t.Fatalf("list filtered messages: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].ID != messageID {
+		t.Fatalf("unexpected filtered rows: %+v", filtered)
+	}
+}
+
 func TestMessageJournalUpdateHandlerRule(t *testing.T) {
 	ctx := context.Background()
 	store := newPhaseStore(t, ctx)
@@ -664,7 +717,7 @@ func assertMessageJournalSendColumns(t *testing.T, store *SQLiteStore) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("table_info rows: %v", err)
 	}
-	for _, column := range []string{"http_status_code", "latency_ms", "response_excerpt", "sent_at", "completed_at", "transport_mode"} {
+	for _, column := range []string{"http_status_code", "latency_ms", "response_excerpt", "offered_at", "offer_count", "sent_at", "completed_at", "transport_mode"} {
 		if !found[column] {
 			t.Fatalf("expected message_journal column %q", column)
 		}

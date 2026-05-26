@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdelivery"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -35,6 +37,9 @@ func (s *Service) Process(ctx context.Context, message InboundMessage) (ProcessR
 	}
 	if correlation.Target != nil && strings.TrimSpace(resolved.EGMID) == "" {
 		resolved.EGMID = correlation.Target.TargetEGMID
+	}
+	if err := s.updateEGMLastContact(ctx, now, resolved.EGMID, message.RemoteAddr); err != nil {
+		return ProcessResult{}, err
 	}
 
 	summaryJSON := encodeSummaryJSON(map[string]any{
@@ -70,6 +75,12 @@ func (s *Service) Process(ctx context.Context, message InboundMessage) (ProcessR
 		ActionRunID: resolved.ActionRunID,
 		Warnings:    append([]string{}, resolved.Warnings...),
 	}
+	finalize := func() (ProcessResult, error) {
+		if err := s.maybeOfferPending(ctx, now, resolved, &result); err != nil {
+			return result, err
+		}
+		return result, nil
+	}
 
 	receiveAuditID, err := s.recordAudit(ctx, audit.AuditTimelineEntry{
 		OccurredAt:       now,
@@ -99,7 +110,7 @@ func (s *Service) Process(ctx context.Context, message InboundMessage) (ProcessR
 			result.Correlated = true
 			result.CorrelationRef = correlation.Target.TargetEGMID
 		}
-		return result, nil
+		return finalize()
 	}
 
 	if !correlation.HasTarget {
@@ -119,7 +130,7 @@ func (s *Service) Process(ctx context.Context, message InboundMessage) (ProcessR
 			}
 			result.AuditEntryIDs = append(result.AuditEntryIDs, auditID)
 		}
-		return result, nil
+		return finalize()
 	}
 
 	result.Correlated = true
@@ -153,7 +164,7 @@ func (s *Service) Process(ctx context.Context, message InboundMessage) (ProcessR
 	result.TargetStatus = matched.TargetStatus
 	result.AuditEntryIDs = append(result.AuditEntryIDs, matched.AuditEntryIDs...)
 	result.Warnings = append(result.Warnings, matched.Warnings...)
-	return result, nil
+	return finalize()
 }
 
 type resolvedMetadata struct {
@@ -399,6 +410,9 @@ func (s *Service) applyMatcher(ctx context.Context, occurredAt time.Time, messag
 		}
 		result.TargetUpdated = true
 		result.TargetStatus = string(target.Status)
+		if err := s.markRelatedOutboundMessage(ctx, occurredAt, run.ID, target.TargetEGMID, g2sengine.MessageResultConfirmed, "confirmed by inbound matcher"); err != nil {
+			return result, err
+		}
 		if err := s.refreshRunState(ctx, run, occurredAt); err != nil {
 			return result, err
 		}
@@ -425,6 +439,9 @@ func (s *Service) applyMatcher(ctx context.Context, occurredAt time.Time, messag
 		}
 		result.TargetUpdated = true
 		result.TargetStatus = string(target.Status)
+		if err := s.markRelatedOutboundMessage(ctx, occurredAt, run.ID, target.TargetEGMID, g2sengine.MessageResultFailed, target.LastError); err != nil {
+			return result, err
+		}
 		if err := s.refreshRunState(ctx, run, occurredAt); err != nil {
 			return result, err
 		}
@@ -545,6 +562,15 @@ func (s *Service) applyHandlerRules(ctx context.Context, occurredAt time.Time, m
 		}
 		result.TargetUpdated = true
 		result.TargetStatus = string(correlation.Target.Status)
+		messageResult := g2sengine.MessageResultConfirmed
+		markReason := "confirmed by handler rule"
+		if selection.Outcome == g2sengine.HandlerRuleOutcomeFailure {
+			messageResult = g2sengine.MessageResultFailed
+			markReason = defaultString(selection.Reason, "failed by handler rule")
+		}
+		if err := s.markRelatedOutboundMessage(ctx, occurredAt, correlation.Run.ID, correlation.Target.TargetEGMID, messageResult, markReason); err != nil {
+			return false, result, err
+		}
 		if err := s.refreshRunState(ctx, correlation.Run, occurredAt); err != nil {
 			return false, result, err
 		}
@@ -587,7 +613,15 @@ func (s *Service) refreshRunState(ctx context.Context, run *actions.ActionRun, o
 	} else if pending > 0 && run.Status == actions.RunStatusPending {
 		run.Status = actions.RunStatusWaitingConfirmation
 	}
-	return s.Store.UpdateActionRun(ctx, *run)
+	if err := s.Store.UpdateActionRun(ctx, *run); err != nil {
+		return err
+	}
+	if run.Status == actions.RunStatusSucceeded || run.Status == actions.RunStatusFailed {
+		if err := s.supersedeRemainingPrepared(ctx, run.ID, occurredAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) now() time.Time {
@@ -599,6 +633,149 @@ func (s *Service) now() time.Time {
 
 func (s *Service) recordAudit(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error) {
 	return s.Store.RecordAuditTimelineEntry(ctx, entry)
+}
+
+func (s *Service) updateEGMLastContact(ctx context.Context, occurredAt time.Time, egmID string, remoteAddr string) error {
+	id := strings.TrimSpace(egmID)
+	if id == "" {
+		return nil
+	}
+	row, err := s.Store.GetEGMRecord(ctx, id)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return nil
+	}
+	updated := *row
+	when := occurredAt.UTC()
+	updated.LastSeenAt = &when
+	if host := remoteHost(remoteAddr); host != "" {
+		updated.IPAddress = host
+	}
+	return s.Store.UpsertEGMRecord(ctx, updated)
+}
+
+func (s *Service) maybeOfferPending(ctx context.Context, occurredAt time.Time, resolved resolvedMetadata, result *ProcessResult) error {
+	if s.PendingDelivery == nil || result == nil {
+		return nil
+	}
+	egmID := strings.TrimSpace(result.EGMID)
+	if egmID == "" {
+		egmID = strings.TrimSpace(resolved.EGMID)
+	}
+	if egmID == "" {
+		return nil
+	}
+	contactResult, err := s.PendingDelivery.HandleClientContact(ctx, pendingdelivery.ContactRequest{
+		EGMID:     egmID,
+		ContactAt: occurredAt.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	result.Warnings = append(result.Warnings, contactResult.Warnings...)
+	if contactResult.Offered == nil {
+		return nil
+	}
+	result.OfferedMessage = &OfferedMessage{
+		MessageID:       contactResult.Offered.MessageID,
+		ActionRunID:     strings.TrimSpace(contactResult.Offered.ActionRunID),
+		ActionStepID:    strings.TrimSpace(contactResult.Offered.ActionStepID),
+		TemplateID:      strings.TrimSpace(contactResult.Offered.TemplateID),
+		TemplateVersion: strings.TrimSpace(contactResult.Offered.TemplateVersion),
+		MessageType:     strings.TrimSpace(contactResult.Offered.MessageType),
+		RawPayload:      contactResult.Offered.RawPayload,
+		OfferedAt:       contactResult.Offered.OfferedAt.UTC(),
+		OfferCount:      contactResult.Offered.OfferCount,
+	}
+	return nil
+}
+
+func (s *Service) markRelatedOutboundMessage(ctx context.Context, occurredAt time.Time, actionRunID string, egmID string, result g2sengine.MessageResult, reason string) error {
+	runID := strings.TrimSpace(actionRunID)
+	targetEGMID := strings.TrimSpace(egmID)
+	if runID == "" || targetEGMID == "" {
+		return nil
+	}
+	rows, err := s.Store.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+		Limit:       200,
+		ActionRunID: runID,
+		EGMID:       targetEGMID,
+		Direction:   g2sengine.DirectionOutbound,
+		Results: []g2sengine.MessageResult{
+			g2sengine.MessageResultOffered,
+			g2sengine.MessageResultPrepared,
+			g2sengine.MessageResultPending,
+			g2sengine.MessageResultDelivered,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	targetRow := rows[0]
+	completedAt := occurredAt.UTC()
+	if err := s.Store.UpdateMessageJournalResult(ctx, targetRow.ID, result, strings.TrimSpace(reason), "", 0, 0, targetRow.TransportMode, targetRow.SentAt, &completedAt); err != nil {
+		return err
+	}
+	eventType := audit.EventTypeConfirmation
+	summary := "Prepared message marked failed from inbound outcome"
+	severity := audit.AuditSeverityWarning
+	if result == g2sengine.MessageResultConfirmed {
+		eventType = audit.EventTypeMessageConfirmed
+		summary = "Prepared message confirmed by inbound outcome"
+		severity = audit.AuditSeverityInfo
+	}
+	_, _ = s.recordAudit(ctx, audit.AuditTimelineEntry{
+		OccurredAt:       completedAt,
+		Severity:         severity,
+		EventType:        eventType,
+		Summary:          summary,
+		DetailJSON:       encodeSummaryJSON(map[string]any{"message_id": targetRow.ID, "message_result": result, "reason": strings.TrimSpace(reason)}),
+		ActionRunID:      runID,
+		MessageJournalID: targetRow.ID,
+	})
+	return nil
+}
+
+func (s *Service) supersedeRemainingPrepared(ctx context.Context, actionRunID string, occurredAt time.Time) error {
+	runID := strings.TrimSpace(actionRunID)
+	if runID == "" {
+		return nil
+	}
+	rows, err := s.Store.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
+		Limit:       400,
+		ActionRunID: runID,
+		Direction:   g2sengine.DirectionOutbound,
+		Results: []g2sengine.MessageResult{
+			g2sengine.MessageResultPrepared,
+			g2sengine.MessageResultPending,
+			g2sengine.MessageResultOffered,
+			g2sengine.MessageResultDelivered,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	when := occurredAt.UTC()
+	for _, row := range rows {
+		if err := s.Store.UpdateMessageJournalResult(ctx, row.ID, g2sengine.MessageResultSuperseded, "run completed before confirmation", "", 0, 0, row.TransportMode, row.SentAt, &when); err != nil {
+			return err
+		}
+		_, _ = s.recordAudit(ctx, audit.AuditTimelineEntry{
+			OccurredAt:       when,
+			Severity:         audit.AuditSeverityInfo,
+			EventType:        audit.EventTypeMessageSuperseded,
+			Summary:          "Pending delivery superseded",
+			DetailJSON:       encodeSummaryJSON(map[string]any{"message_id": row.ID}),
+			ActionRunID:      runID,
+			MessageJournalID: row.ID,
+		})
+	}
+	return nil
 }
 
 func normalizeLookupMap(raw map[string]string) map[string]string {
@@ -698,4 +875,16 @@ func defaultString(primary string, fallback string) string {
 		return fallback
 	}
 	return primary
+}
+
+func remoteHost(remoteAddr string) string {
+	trimmed := strings.TrimSpace(remoteAddr)
+	if trimmed == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(trimmed)
+	if err == nil {
+		return strings.TrimSpace(host)
+	}
+	return trimmed
 }

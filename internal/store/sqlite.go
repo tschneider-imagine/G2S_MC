@@ -250,6 +250,8 @@ func (s *SQLiteStore) ensurePhase2FMessageJournalSendSchema(ctx context.Context)
 		{name: "http_status_code", def: "INTEGER"},
 		{name: "latency_ms", def: "INTEGER"},
 		{name: "response_excerpt", def: "TEXT"},
+		{name: "offered_at", def: "DATETIME"},
+		{name: "offer_count", def: "INTEGER"},
 		{name: "sent_at", def: "DATETIME"},
 		{name: "completed_at", def: "DATETIME"},
 		{name: "transport_mode", def: "TEXT"},

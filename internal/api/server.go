@@ -21,6 +21,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdelivery"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
@@ -58,8 +59,10 @@ type Store interface {
 	ListEGMGroups(ctx context.Context) ([]egms.EGMGroup, error)
 
 	ListMessageJournalEntries(ctx context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error)
+	GetMessageJournalEntry(ctx context.Context, id int64) (*g2sengine.MessageJournalEntry, error)
 	RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error)
 	UpdateMessageJournalResult(ctx context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error
+	UpdateMessageJournalOffer(ctx context.Context, id int64, offeredAt time.Time, result g2sengine.MessageResult) (bool, error)
 	RecordAuditTimelineEntry(ctx context.Context, entry audit.AuditTimelineEntry) (int64, error)
 	ListAuditTimelineEntries(ctx context.Context, query store.AuditTimelineListQuery) ([]audit.AuditTimelineEntry, error)
 	ListCertificateInventory(ctx context.Context) ([]model.CertificateInventory, error)
@@ -115,6 +118,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/audit/timeline", s.handleTimeline)
 	mux.HandleFunc("/api/v2/runtime", s.handleRuntime)
 	mux.HandleFunc("/api/v2/settings/message-delivery-check", s.handleMessageDeliveryCheck)
+	mux.HandleFunc("/api/v2/pending-delivery", s.handlePendingDelivery)
+	mux.HandleFunc("/api/v2/pending-delivery/sweep", s.handlePendingDeliverySweep)
 }
 
 func (s *Server) handleActionRuns(w http.ResponseWriter, r *http.Request) {
@@ -788,6 +793,48 @@ func (s *Server) handleMessageDeliveryCheck(w http.ResponseWriter, r *http.Reque
 		IncludeTLSCheck:     req.IncludeTLSCheck,
 		TimeoutMS:           req.TimeoutMS,
 	})
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handlePendingDelivery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	rows, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{
+		Limit: queryLimit(r, 200),
+		EGMID: strings.TrimSpace(r.URL.Query().Get("egm_id")),
+		Results: []g2sengine.MessageResult{
+			g2sengine.MessageResultPrepared,
+			g2sengine.MessageResultPending,
+			g2sengine.MessageResultOffered,
+			g2sengine.MessageResultDelivered,
+		},
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) handlePendingDeliverySweep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	service := pendingdelivery.Service{
+		Store: s.Store,
+		Clock: time.Now,
+	}
+	result, err := service.SweepWaitingConfirmations(r.Context(), time.Now().UTC())
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return

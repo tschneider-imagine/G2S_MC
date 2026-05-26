@@ -1452,6 +1452,77 @@ func TestPostMessageDeliveryCheckMissingEGMReturnsJSONResult(t *testing.T) {
 	}
 }
 
+func TestGetPendingDeliveryReturnsPendingRows(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC().Add(-time.Minute),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<prepared/>",
+		Result:      g2sengine.MessageResultPrepared,
+	}); err != nil {
+		t.Fatalf("seed prepared message: %v", err)
+	}
+	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<confirmed/>",
+		Result:      g2sengine.MessageResultConfirmed,
+	}); err != nil {
+		t.Fatalf("seed confirmed message: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/pending-delivery?egm_id=EGM-1", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var rows []g2sengine.MessageJournalEntry
+	if err := json.Unmarshal(res.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("unexpected pending rows: %+v", rows)
+	}
+}
+
+func TestPostPendingDeliverySweepRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/sweep", bytes.NewReader([]byte(`{}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d want 1", calls)
+	}
+}
+
 func TestPostTemplatesRenderPreviewReturnsJSON(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)

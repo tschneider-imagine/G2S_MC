@@ -35,6 +35,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/operatorui"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdelivery"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -192,8 +193,16 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	pendingDeliveryService := &pendingdelivery.Service{
+		Store: auditStore,
+		Clock: time.Now,
+	}
 	g2sServer := g2s.NewServer(cfg.G2S.HostID, eng)
-	g2sServer.SetInboundProcessor(&inbound.Service{Store: auditStore, Clock: time.Now})
+	g2sServer.SetInboundProcessor(&inbound.Service{
+		Store:           auditStore,
+		Clock:           time.Now,
+		PendingDelivery: pendingDeliveryService,
+	})
 	g2sServer.RegisterRoutes(mux, cfg.G2S.EndpointPath)
 	rebuildV2API := &rebuildapi.Server{
 		Store: auditStore,

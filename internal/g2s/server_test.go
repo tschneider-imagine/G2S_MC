@@ -225,3 +225,54 @@ func TestInboundProcessorErrorDoesNotBreakG2SResponse(t *testing.T) {
 		t.Fatalf("expected commsOnLineAck, got %s", rr.Body.String())
 	}
 }
+
+func TestInboundOfferedMessageIncludedInResponse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	server := NewServer("HOST-1", eng)
+	server.SetInboundProcessor(&fakeInboundProcessorWithOffer{})
+	server.RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-1"><keepAlive/></g2sBody>`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, expected := range []string{
+		"pendingDelivery",
+		`messageId="77"`,
+		`actionRunId="run-1"`,
+		`<payload>&lt;command&gt;silence&lt;/command&gt;</payload>`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("response missing %q: %s", expected, body)
+		}
+	}
+}
+
+type fakeInboundProcessorWithOffer struct{}
+
+func (f *fakeInboundProcessorWithOffer) Process(_ context.Context, message inbound.InboundMessage) (inbound.ProcessResult, error) {
+	return inbound.ProcessResult{
+		MessageID: 1,
+		EGMID:     message.EGMID,
+		OfferedMessage: &inbound.OfferedMessage{
+			MessageID:       77,
+			ActionRunID:     "run-1",
+			ActionStepID:    "step-1",
+			TemplateID:      "template-generic-g2s-action",
+			TemplateVersion: "1",
+			MessageType:     "NOTICE",
+			RawPayload:      "<command>silence</command>",
+			OfferedAt:       time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC),
+			OfferCount:      1,
+		},
+	}, nil
+}

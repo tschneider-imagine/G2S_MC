@@ -3,6 +3,7 @@ package inbound
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdelivery"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
@@ -25,6 +27,20 @@ type fakeStore struct {
 	auditRows []audit.AuditTimelineEntry
 }
 
+type fakePendingDelivery struct {
+	result pendingdelivery.ContactResult
+	err    error
+	calls  []pendingdelivery.ContactRequest
+}
+
+func (f *fakePendingDelivery) HandleClientContact(_ context.Context, req pendingdelivery.ContactRequest) (pendingdelivery.ContactResult, error) {
+	f.calls = append(f.calls, req)
+	if f.err != nil {
+		return pendingdelivery.ContactResult{}, f.err
+	}
+	return f.result, nil
+}
+
 func (f *fakeStore) RecordMessageJournalEntry(_ context.Context, entry g2sengine.MessageJournalEntry) (int64, error) {
 	entry.ID = int64(len(f.messages) + 1)
 	f.messages = append(f.messages, entry)
@@ -38,6 +54,57 @@ func (f *fakeStore) UpdateMessageJournalHandlerRule(_ context.Context, id int64,
 		}
 	}
 	return nil
+}
+
+func (f *fakeStore) UpdateMessageJournalResult(_ context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error {
+	for i := range f.messages {
+		if f.messages[i].ID != id {
+			continue
+		}
+		f.messages[i].Result = result
+		f.messages[i].Error = errText
+		f.messages[i].ResponseExcerpt = responseExcerpt
+		f.messages[i].HTTPStatusCode = httpStatusCode
+		f.messages[i].LatencyMS = latencyMS
+		f.messages[i].TransportMode = transportMode
+		f.messages[i].SentAt = sentAt
+		f.messages[i].CompletedAt = completedAt
+		return nil
+	}
+	return nil
+}
+
+func (f *fakeStore) ListMessageJournalEntries(_ context.Context, query store.MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error) {
+	rows := []g2sengine.MessageJournalEntry{}
+	allowedResults := map[g2sengine.MessageResult]struct{}{}
+	for _, value := range query.Results {
+		allowedResults[value] = struct{}{}
+	}
+	for _, row := range f.messages {
+		if strings.TrimSpace(query.EGMID) != "" && !strings.EqualFold(strings.TrimSpace(row.EGMID), strings.TrimSpace(query.EGMID)) {
+			continue
+		}
+		if strings.TrimSpace(query.ActionRunID) != "" && !strings.EqualFold(strings.TrimSpace(row.ActionRunID), strings.TrimSpace(query.ActionRunID)) {
+			continue
+		}
+		if query.Direction != "" && row.Direction != query.Direction {
+			continue
+		}
+		if len(allowedResults) > 0 {
+			if _, ok := allowedResults[row.Result]; !ok {
+				continue
+			}
+		}
+		rows = append(rows, row)
+	}
+	// return newest first to mirror store behavior.
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	if query.Limit > 0 && len(rows) > query.Limit {
+		rows = rows[:query.Limit]
+	}
+	return rows, nil
 }
 
 func (f *fakeStore) RecordAuditTimelineEntry(_ context.Context, entry audit.AuditTimelineEntry) (int64, error) {
@@ -104,6 +171,11 @@ func (f *fakeStore) GetEGMRecord(_ context.Context, egmID string) (*egms.EGMReco
 	}
 	copy := row
 	return &copy, nil
+}
+
+func (f *fakeStore) UpsertEGMRecord(_ context.Context, row egms.EGMRecord) error {
+	f.egms[row.EGMID] = row
+	return nil
 }
 
 func (f *fakeStore) GetActiveG2STemplateVersion(_ context.Context, templateID string) (*templates.G2STemplateVersion, error) {
@@ -242,8 +314,60 @@ func TestInboundFailureMatcherMarksTargetFailed(t *testing.T) {
 	}
 }
 
+func TestInboundContactOffersPendingMessageAndUpdatesLastSeen(t *testing.T) {
+	store := newInboundStoreFixture()
+	pending := &fakePendingDelivery{
+		result: pendingdelivery.ContactResult{
+			Offered: &pendingdelivery.OfferedMessage{
+				MessageID:       42,
+				ActionRunID:     "run-1",
+				ActionStepID:    "step-1",
+				TemplateID:      "template-generic-g2s-action",
+				TemplateVersion: "1",
+				MessageType:     "NOTICE",
+				RawPayload:      "<cmd/>",
+				OfferedAt:       fixedClock()(),
+				OfferCount:      1,
+			},
+		},
+	}
+	svc := &Service{Store: store, Clock: fixedClock(), PendingDelivery: pending}
+
+	result, err := svc.Process(context.Background(), InboundMessage{
+		RawPayload:  `<g2sBody egmId="EGM-001"><keepAlive/></g2sBody>`,
+		EGMID:       "EGM-001",
+		RemoteAddr:  "10.11.12.13:9555",
+		MessageType: "keepAlive",
+	})
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if result.OfferedMessage == nil || result.OfferedMessage.MessageID != 42 {
+		t.Fatalf("expected offered message in result, got %+v", result.OfferedMessage)
+	}
+	if len(pending.calls) != 1 || pending.calls[0].EGMID != "EGM-001" {
+		t.Fatalf("pending calls=%+v", pending.calls)
+	}
+	updated := store.egms["EGM-001"]
+	if updated.LastSeenAt == nil || !updated.LastSeenAt.Equal(fixedClock()()) {
+		t.Fatalf("last seen not updated: %+v", updated.LastSeenAt)
+	}
+	if updated.IPAddress != "10.11.12.13" {
+		t.Fatalf("ip_address=%q want 10.11.12.13", updated.IPAddress)
+	}
+}
+
 func TestInboundExpectedMatcherConfirmsWaitingTarget(t *testing.T) {
 	store := newInboundStoreFixture()
+	store.messages = append(store.messages, g2sengine.MessageJournalEntry{
+		ID:          900,
+		Timestamp:   fixedClock()().Add(-time.Second),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		Result:      g2sengine.MessageResultOffered,
+		RawPayload:  "<cmd/>",
+	})
 	run := store.runs["run-1"]
 	run.Status = actions.RunStatusWaitingConfirmation
 	store.runs["run-1"] = run
@@ -269,10 +393,22 @@ func TestInboundExpectedMatcherConfirmsWaitingTarget(t *testing.T) {
 	if updatedRun.Status != actions.RunStatusSucceeded {
 		t.Fatalf("run status=%q want SUCCEEDED", updatedRun.Status)
 	}
+	if store.messages[0].Result != g2sengine.MessageResultConfirmed {
+		t.Fatalf("expected outbound message confirmed, got %q", store.messages[0].Result)
+	}
 }
 
 func TestInboundFailureMatcherFailsWaitingTarget(t *testing.T) {
 	store := newInboundStoreFixture()
+	store.messages = append(store.messages, g2sengine.MessageJournalEntry{
+		ID:          901,
+		Timestamp:   fixedClock()().Add(-time.Second),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		Result:      g2sengine.MessageResultOffered,
+		RawPayload:  "<cmd/>",
+	})
 	run := store.runs["run-1"]
 	run.Status = actions.RunStatusWaitingConfirmation
 	store.runs["run-1"] = run
@@ -293,6 +429,9 @@ func TestInboundFailureMatcherFailsWaitingTarget(t *testing.T) {
 	updatedRun := store.runs["run-1"]
 	if updatedRun.Status != actions.RunStatusFailed {
 		t.Fatalf("run status=%q want FAILED", updatedRun.Status)
+	}
+	if store.messages[0].Result != g2sengine.MessageResultFailed {
+		t.Fatalf("expected outbound message failed, got %q", store.messages[0].Result)
 	}
 }
 

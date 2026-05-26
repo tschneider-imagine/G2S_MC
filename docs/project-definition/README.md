@@ -71,6 +71,7 @@ Visible seed data in Operator Console must remain product-neutral (for example c
 - `PHASE_6D_DELIVERY_TOPOLOGY_CHECK.md`
 - `PHASE_6E_HOST_LISTENER_PENDING_DELIVERY.md`
 - `PHASE_6F_RETURN_TO_NORMAL_MANUAL_CLEAR_ACTION.md`
+- `PHASE_6G_HOST_LISTENER_PENDING_MESSAGE_PICKUP.md`
 - `TRANSPORT_POLICY_REVIEW.md`
 
 ## Archived Old Plans

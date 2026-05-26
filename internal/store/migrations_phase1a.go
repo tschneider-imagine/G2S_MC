@@ -115,7 +115,9 @@ CREATE TABLE IF NOT EXISTS message_journal (
     raw_payload TEXT NOT NULL,
     parsed_summary_json TEXT,
     result TEXT NOT NULL,
-    error TEXT
+    error TEXT,
+    offered_at DATETIME,
+    offer_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS handler_rules (

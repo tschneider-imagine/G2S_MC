@@ -24,6 +24,7 @@ type MessageJournalListQuery struct {
 	IncidentID        string
 	InputTransitionID int64
 	Direction         g2sengine.MessageDirection
+	Results           []g2sengine.MessageResult
 }
 
 type AuditTimelineListQuery struct {
@@ -1088,8 +1089,8 @@ func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sen
 		    timestamp, direction, from_endpoint, to_endpoint, egm_id, action_run_id, action_step_id,
 		    input_transition_id, template_id, template_version, handler_rule_id, message_type,
 		    raw_payload, parsed_summary_json, result, error, http_status_code, latency_ms,
-		    response_excerpt, sent_at, completed_at, transport_mode
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    response_excerpt, offered_at, offer_count, sent_at, completed_at, transport_mode
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp,
 		entry.Direction,
 		nullableTrimmed(entry.FromEndpoint),
@@ -1109,6 +1110,8 @@ func (s *SQLiteStore) RecordMessageJournalEntry(ctx context.Context, entry g2sen
 		nullablePositiveInt(entry.HTTPStatusCode),
 		nullablePositiveInt(entry.LatencyMS),
 		nullableTrimmed(entry.ResponseExcerpt),
+		nullableTime(entry.OfferedAt),
+		nullablePositiveInt(entry.OfferCount),
 		nullableTime(entry.SentAt),
 		nullableTime(entry.CompletedAt),
 		nullableTrimmed(entry.TransportMode),
@@ -1130,7 +1133,7 @@ func (s *SQLiteStore) GetMessageJournalEntry(ctx context.Context, id int64) (*g2
 		        COALESCE(template_id, ''), COALESCE(template_version, ''), COALESCE(handler_rule_id, ''), COALESCE(message_type, ''),
 		        raw_payload, COALESCE(parsed_summary_json, ''), result, COALESCE(error, ''),
 		        COALESCE(http_status_code, 0), COALESCE(latency_ms, 0), COALESCE(response_excerpt, ''),
-		        sent_at, completed_at, COALESCE(transport_mode, '')
+		        offered_at, COALESCE(offer_count, 0), sent_at, completed_at, COALESCE(transport_mode, '')
 		   FROM message_journal
 		  WHERE id = ?`,
 		id,
@@ -1139,6 +1142,7 @@ func (s *SQLiteStore) GetMessageJournalEntry(ctx context.Context, id int64) (*g2
 	var inputTransitionID sql.NullInt64
 	var sentAt sql.NullTime
 	var completedAt sql.NullTime
+	var offeredAt sql.NullTime
 	if err := row.Scan(
 		&entry.ID,
 		&entry.Timestamp,
@@ -1160,6 +1164,8 @@ func (s *SQLiteStore) GetMessageJournalEntry(ctx context.Context, id int64) (*g2
 		&entry.HTTPStatusCode,
 		&entry.LatencyMS,
 		&entry.ResponseExcerpt,
+		&offeredAt,
+		&entry.OfferCount,
 		&sentAt,
 		&completedAt,
 		&entry.TransportMode,
@@ -1175,6 +1181,10 @@ func (s *SQLiteStore) GetMessageJournalEntry(ctx context.Context, id int64) (*g2
 	if sentAt.Valid {
 		value := sentAt.Time
 		entry.SentAt = &value
+	}
+	if offeredAt.Valid {
+		value := offeredAt.Time
+		entry.OfferedAt = &value
 	}
 	if completedAt.Valid {
 		value := completedAt.Time
@@ -1211,7 +1221,7 @@ func (s *SQLiteStore) UpdateMessageJournalResult(
 	completedAt *time.Time,
 ) error {
 	switch result {
-	case g2sengine.MessageResultSent, g2sengine.MessageResultReceived, g2sengine.MessageResultAcked, g2sengine.MessageResultConfirmed, g2sengine.MessageResultFailed, g2sengine.MessageResultIgnored, g2sengine.MessageResultEscalated, g2sengine.MessageResultDryRun, g2sengine.MessageResultPrepared, g2sengine.MessageResultPending, g2sengine.MessageResultSendBlocked, g2sengine.MessageResultSendAttempted, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendSucceeded:
+	case g2sengine.MessageResultSent, g2sengine.MessageResultReceived, g2sengine.MessageResultAcked, g2sengine.MessageResultConfirmed, g2sengine.MessageResultFailed, g2sengine.MessageResultIgnored, g2sengine.MessageResultEscalated, g2sengine.MessageResultDryRun, g2sengine.MessageResultPrepared, g2sengine.MessageResultPending, g2sengine.MessageResultOffered, g2sengine.MessageResultDelivered, g2sengine.MessageResultExpired, g2sengine.MessageResultSuperseded, g2sengine.MessageResultSendBlocked, g2sengine.MessageResultSendAttempted, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendSucceeded:
 	default:
 		return fmt.Errorf("result is invalid")
 	}
@@ -1243,6 +1253,43 @@ func (s *SQLiteStore) UpdateMessageJournalResult(
 	return err
 }
 
+func (s *SQLiteStore) UpdateMessageJournalOffer(ctx context.Context, id int64, offeredAt time.Time, result g2sengine.MessageResult) (bool, error) {
+	switch result {
+	case g2sengine.MessageResultOffered, g2sengine.MessageResultDelivered:
+	default:
+		return false, fmt.Errorf("offer result is invalid")
+	}
+	if id <= 0 {
+		return false, fmt.Errorf("message journal id is required")
+	}
+	if offeredAt.IsZero() {
+		offeredAt = time.Now().UTC()
+	}
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE message_journal
+		    SET result = ?,
+		        offered_at = ?,
+		        offer_count = COALESCE(offer_count, 0) + 1
+		  WHERE id = ?
+		    AND result IN (?, ?, ?)`,
+		result,
+		offeredAt.UTC(),
+		id,
+		g2sengine.MessageResultPrepared,
+		g2sengine.MessageResultPending,
+		g2sengine.MessageResultOffered,
+	)
+	if err != nil {
+		return false, err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query MessageJournalListQuery) ([]g2sengine.MessageJournalEntry, error) {
 	limit := normalizeLimit(query.Limit)
 	where := []string{}
@@ -1267,13 +1314,26 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 		where = append(where, "direction = ?")
 		args = append(args, query.Direction)
 	}
+	if len(query.Results) > 0 {
+		placeholders := make([]string, 0, len(query.Results))
+		for _, value := range query.Results {
+			if strings.TrimSpace(string(value)) == "" {
+				continue
+			}
+			placeholders = append(placeholders, "?")
+			args = append(args, value)
+		}
+		if len(placeholders) > 0 {
+			where = append(where, "result IN ("+strings.Join(placeholders, ", ")+")")
+		}
+	}
 	sqlBuilder := strings.Builder{}
 	sqlBuilder.WriteString(`SELECT id, timestamp, direction, COALESCE(from_endpoint, ''), COALESCE(to_endpoint, ''), COALESCE(egm_id, ''),
 		        COALESCE(action_run_id, ''), COALESCE(action_step_id, ''), input_transition_id,
 		        COALESCE(template_id, ''), COALESCE(template_version, ''), COALESCE(handler_rule_id, ''), COALESCE(message_type, ''),
 		        raw_payload, COALESCE(parsed_summary_json, ''), result, COALESCE(error, ''),
 		        COALESCE(http_status_code, 0), COALESCE(latency_ms, 0), COALESCE(response_excerpt, ''),
-		        sent_at, completed_at, COALESCE(transport_mode, '')
+		        offered_at, COALESCE(offer_count, 0), sent_at, completed_at, COALESCE(transport_mode, '')
 		   FROM message_journal`)
 	if len(where) > 0 {
 		sqlBuilder.WriteString(" WHERE ")
@@ -1294,6 +1354,7 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 		var inputTransitionID sql.NullInt64
 		var sentAt sql.NullTime
 		var completedAt sql.NullTime
+		var offeredAt sql.NullTime
 		if err := rows.Scan(
 			&entry.ID,
 			&entry.Timestamp,
@@ -1315,6 +1376,8 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 			&entry.HTTPStatusCode,
 			&entry.LatencyMS,
 			&entry.ResponseExcerpt,
+			&offeredAt,
+			&entry.OfferCount,
 			&sentAt,
 			&completedAt,
 			&entry.TransportMode,
@@ -1327,6 +1390,10 @@ func (s *SQLiteStore) ListMessageJournalEntries(ctx context.Context, query Messa
 		if sentAt.Valid {
 			value := sentAt.Time
 			entry.SentAt = &value
+		}
+		if offeredAt.Valid {
+			value := offeredAt.Time
+			entry.OfferedAt = &value
 		}
 		if completedAt.Valid {
 			value := completedAt.Time
