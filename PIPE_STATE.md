@@ -16,15 +16,15 @@ Repo state and installed runtime state are separate.
 - Pi DB: /var/lib/g2s-mute/controller.db
 
 ## Current Known State
-- Remote HEAD: 71b5fbd
-- PC HEAD: 71b5fbd
+- Remote HEAD: 12b10c8
+- PC HEAD: 12b10c8
 - Pi repo HEAD: unknown
 - Pi runtime revision: unknown
 - Runtime service: g2s-mute.service
-- Current PC task: Add PIPE_STATE.md to track repo/runtime pipeline state.
-- Current Pi task: Deploy/verify only for the currently pushed PC commit.
+- Current PC task: Config-backed runtime mode.
+- Current Pi task: deploy/verify only after PC push.
 - Last proven runtime flow: HOST_LISTENER prepared/pending flow, manual-clear return action, inbound confirmation, exports.
-- Open blocker: none recorded.
+- Open blocker: hidden systemd runtime flags being moved into config.
 
 ## Pipeline
 1. PC codes and pushes.

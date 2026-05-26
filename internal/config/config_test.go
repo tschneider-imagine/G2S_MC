@@ -301,3 +301,26 @@ func TestLoadFileRuntimeDefaultsWhenSectionMissing(t *testing.T) {
 		t.Fatalf("delivery_topology=%q, want %q", cfg.Runtime.DeliveryTopology, DefaultDeliveryTopology)
 	}
 }
+
+func TestPiFieldTestConfigEnablesRuntimeExecution(t *testing.T) {
+	path := filepath.Join("..", "..", "configs", "config.pi-field-test.example.json")
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("load %s: %v", path, err)
+	}
+	if !cfg.Runtime.InputRuntimeEnabled {
+		t.Fatalf("input_runtime_enabled=false, want true")
+	}
+	if !cfg.Runtime.InputRuntimeSeedDefaults {
+		t.Fatalf("input_runtime_seed_defaults=false, want true")
+	}
+	if !cfg.Runtime.InputRuntimeExecuteActions {
+		t.Fatalf("input_runtime_execute_actions=false, want true")
+	}
+	if cfg.Runtime.InputRuntimeIntervalMS != 100 {
+		t.Fatalf("input_runtime_interval_ms=%d, want 100", cfg.Runtime.InputRuntimeIntervalMS)
+	}
+	if cfg.Runtime.DeliveryTopology != "HOST_LISTENER" {
+		t.Fatalf("delivery_topology=%q, want HOST_LISTENER", cfg.Runtime.DeliveryTopology)
+	}
+}

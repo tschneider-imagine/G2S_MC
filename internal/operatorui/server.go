@@ -136,6 +136,7 @@ type Options struct {
 	DeliveryEndpointDefaults   g2stransport.EndpointDefaults
 	DeliveryClientConfig       g2stransport.HTTPClientConfig
 	InputRuntimeEnabled        bool
+	InputRuntimeSeedDefaults   bool
 	InputRuntimeExecuteActions bool
 	InputRuntimeIntervalMS     int
 	StartedAt                  time.Time
@@ -3678,6 +3679,7 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 	body.WriteString(`<div class="panel"><h2>Delivery Settings</h2><table>`)
 	body.WriteString(`<tr><th>Field</th><th>Value</th></tr>`)
 	body.WriteString(`<tr><td>Input Runtime Enabled</td><td>` + esc(enabledText(s.Options.InputRuntimeEnabled)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Seed Defaults</td><td>` + esc(enabledText(s.Options.InputRuntimeSeedDefaults)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Execute Actions</td><td>` + esc(enabledText(s.Options.InputRuntimeExecuteActions)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Runtime Interval (ms)</td><td class="mono">` + esc(strconv.Itoa(s.Options.InputRuntimeIntervalMS)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Delivery Topology</td><td class="mono">` + esc(defaultString(strings.TrimSpace(s.Options.DeliveryTopology), string(g2stransport.DeliveryTopologyHostListener))) + `</td></tr>`)
@@ -3695,6 +3697,7 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 
 	body.WriteString(`<div class="panel"><h2>Current Runtime Notes</h2><ul>`)
 	body.WriteString(`<li>Input Runtime Enabled: ` + esc(enabledText(s.Options.InputRuntimeEnabled)) + `.</li>`)
+	body.WriteString(`<li>Seed Defaults: ` + esc(enabledText(s.Options.InputRuntimeSeedDefaults)) + `.</li>`)
 	body.WriteString(`<li>Execute Actions: ` + esc(enabledText(s.Options.InputRuntimeExecuteActions)) + `.</li>`)
 	body.WriteString(`<li>Runtime Interval: ` + esc(strconv.Itoa(s.Options.InputRuntimeIntervalMS)) + ` ms.</li>`)
 	body.WriteString(`<li>Delivery Topology: ` + esc(defaultString(strings.TrimSpace(s.Options.DeliveryTopology), string(g2stransport.DeliveryTopologyHostListener))) + `.</li>`)

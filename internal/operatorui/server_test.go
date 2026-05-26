@@ -2160,6 +2160,7 @@ func TestSettingsPageShowsDeliverySettings(t *testing.T) {
 	for _, expected := range []string{
 		"Delivery Settings",
 		"Input Runtime Enabled",
+		"Seed Defaults",
 		"Execute Actions",
 		"Runtime Interval (ms)",
 		"Delivery Topology",
@@ -3309,6 +3310,7 @@ func defaultOperatorOptions() Options {
 			DefaultTimeoutMS: 5000,
 		},
 		InputRuntimeEnabled:        true,
+		InputRuntimeSeedDefaults:   true,
 		InputRuntimeExecuteActions: false,
 		InputRuntimeIntervalMS:     100,
 		StartedAt:                  time.Now().UTC().Add(-5 * time.Minute),

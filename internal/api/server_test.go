@@ -1123,16 +1123,22 @@ func TestGetRuntimeReturnsBuildAndRuntimeFields(t *testing.T) {
 	server := &Server{
 		Store: db,
 		RuntimeInfo: RuntimeInfo{
-			Version:       "dev",
-			Revision:      "1234567890abcdef",
-			RevisionShort: "1234567890ab",
-			Modified:      true,
-			BuildTime:     "2026-05-25T00:00:00Z",
-			GoVersion:     "go1.test",
-			StartedAt:     time.Now().UTC().Add(-time.Minute),
-			ConfigPath:    "/etc/g2s-mute/config.json",
-			DatabasePath:  "/var/lib/g2s-mute/controller.db",
-			BindAddress:   "0.0.0.0:8444",
+			Version:                    "dev",
+			Revision:                   "1234567890abcdef",
+			RevisionShort:              "1234567890ab",
+			Modified:                   true,
+			BuildTime:                  "2026-05-25T00:00:00Z",
+			GoVersion:                  "go1.test",
+			StartedAt:                  time.Now().UTC().Add(-time.Minute),
+			ConfigPath:                 "/etc/g2s-mute/config.json",
+			DatabasePath:               "/var/lib/g2s-mute/controller.db",
+			BindAddress:                "0.0.0.0:8444",
+			InputRuntimeEnabled:        true,
+			InputRuntimeSeedDefaults:   true,
+			InputRuntimeExecuteActions: true,
+			InputRuntimeIntervalMS:     100,
+			DeliveryTopology:           "HOST_LISTENER",
+			DeliveryMode:               "DISABLED",
 		},
 	}
 	server.RegisterRoutes(mux)
@@ -1148,6 +1154,12 @@ func TestGetRuntimeReturnsBuildAndRuntimeFields(t *testing.T) {
 		t.Fatalf("decode runtime response: %v", err)
 	}
 	if payload.RevisionShort != "1234567890ab" || payload.ConfigPath != "/etc/g2s-mute/config.json" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if !payload.InputRuntimeEnabled || !payload.InputRuntimeSeedDefaults || !payload.InputRuntimeExecuteActions {
+		t.Fatalf("runtime flags missing from payload: %+v", payload)
+	}
+	if payload.InputRuntimeIntervalMS != 100 || payload.DeliveryTopology != "HOST_LISTENER" || payload.DeliveryMode != "DISABLED" {
 		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }

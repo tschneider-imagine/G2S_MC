@@ -104,6 +104,9 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   echo "installed config template at ${CONFIG_DIR}/config.json"
 else
   echo "kept existing config at ${CONFIG_DIR}/config.json"
+  if ! grep -q '"runtime"' "${CONFIG_DIR}/config.json"; then
+    echo "note: existing config does not include a runtime section; runtime behavior may rely on command-line defaults"
+  fi
 fi
 
 run_cmd install -m 0644 "${REPO_ROOT}/packaging/systemd/g2s-mute.service" "${SERVICE_PATH}"

@@ -71,16 +71,22 @@ type Store interface {
 }
 
 type RuntimeInfo struct {
-	Version       string
-	Revision      string
-	RevisionShort string
-	Modified      bool
-	BuildTime     string
-	GoVersion     string
-	StartedAt     time.Time
-	ConfigPath    string
-	DatabasePath  string
-	BindAddress   string
+	Version                    string
+	Revision                   string
+	RevisionShort              string
+	Modified                   bool
+	BuildTime                  string
+	GoVersion                  string
+	StartedAt                  time.Time
+	ConfigPath                 string
+	DatabasePath               string
+	BindAddress                string
+	InputRuntimeEnabled        bool
+	InputRuntimeSeedDefaults   bool
+	InputRuntimeExecuteActions bool
+	InputRuntimeIntervalMS     int
+	DeliveryTopology           string
+	DeliveryMode               string
 }
 
 type Server struct {
@@ -747,16 +753,22 @@ func (s *Server) handleRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, RuntimeInfoResponse{
-		Version:       strings.TrimSpace(s.RuntimeInfo.Version),
-		Revision:      strings.TrimSpace(s.RuntimeInfo.Revision),
-		RevisionShort: strings.TrimSpace(s.RuntimeInfo.RevisionShort),
-		Modified:      s.RuntimeInfo.Modified,
-		BuildTime:     strings.TrimSpace(s.RuntimeInfo.BuildTime),
-		GoVersion:     strings.TrimSpace(s.RuntimeInfo.GoVersion),
-		StartedAt:     s.RuntimeInfo.StartedAt,
-		ConfigPath:    strings.TrimSpace(s.RuntimeInfo.ConfigPath),
-		DatabasePath:  strings.TrimSpace(s.RuntimeInfo.DatabasePath),
-		BindAddress:   strings.TrimSpace(s.RuntimeInfo.BindAddress),
+		Version:                    strings.TrimSpace(s.RuntimeInfo.Version),
+		Revision:                   strings.TrimSpace(s.RuntimeInfo.Revision),
+		RevisionShort:              strings.TrimSpace(s.RuntimeInfo.RevisionShort),
+		Modified:                   s.RuntimeInfo.Modified,
+		BuildTime:                  strings.TrimSpace(s.RuntimeInfo.BuildTime),
+		GoVersion:                  strings.TrimSpace(s.RuntimeInfo.GoVersion),
+		StartedAt:                  s.RuntimeInfo.StartedAt,
+		ConfigPath:                 strings.TrimSpace(s.RuntimeInfo.ConfigPath),
+		DatabasePath:               strings.TrimSpace(s.RuntimeInfo.DatabasePath),
+		BindAddress:                strings.TrimSpace(s.RuntimeInfo.BindAddress),
+		InputRuntimeEnabled:        s.RuntimeInfo.InputRuntimeEnabled,
+		InputRuntimeSeedDefaults:   s.RuntimeInfo.InputRuntimeSeedDefaults,
+		InputRuntimeExecuteActions: s.RuntimeInfo.InputRuntimeExecuteActions,
+		InputRuntimeIntervalMS:     s.RuntimeInfo.InputRuntimeIntervalMS,
+		DeliveryTopology:           strings.TrimSpace(s.RuntimeInfo.DeliveryTopology),
+		DeliveryMode:               strings.TrimSpace(s.RuntimeInfo.DeliveryMode),
 	})
 }
 
