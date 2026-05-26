@@ -239,6 +239,8 @@ func TestLoadFileRuntimeSectionParses(t *testing.T) {
     "input_runtime_seed_defaults": true,
     "input_runtime_execute_actions": true,
     "input_runtime_interval_ms": 175,
+    "pending_delivery_sweep_enabled": true,
+    "pending_delivery_sweep_interval_ms": 2500,
     "delivery_topology": "HOST_LISTENER"
   }
 }`
@@ -260,6 +262,12 @@ func TestLoadFileRuntimeSectionParses(t *testing.T) {
 	}
 	if cfg.Runtime.DeliveryTopology != "HOST_LISTENER" {
 		t.Fatalf("delivery_topology=%q, want HOST_LISTENER", cfg.Runtime.DeliveryTopology)
+	}
+	if !cfg.Runtime.PendingDeliverySweepEnabled {
+		t.Fatalf("pending_delivery_sweep_enabled=false, want true")
+	}
+	if cfg.Runtime.PendingDeliverySweepIntervalMS != 2500 {
+		t.Fatalf("pending_delivery_sweep_interval_ms=%d, want 2500", cfg.Runtime.PendingDeliverySweepIntervalMS)
 	}
 }
 
@@ -300,6 +308,12 @@ func TestLoadFileRuntimeDefaultsWhenSectionMissing(t *testing.T) {
 	if cfg.Runtime.DeliveryTopology != DefaultDeliveryTopology {
 		t.Fatalf("delivery_topology=%q, want %q", cfg.Runtime.DeliveryTopology, DefaultDeliveryTopology)
 	}
+	if cfg.Runtime.PendingDeliverySweepEnabled {
+		t.Fatalf("pending_delivery_sweep_enabled=true, want false")
+	}
+	if cfg.Runtime.PendingDeliverySweepIntervalMS != DefaultPendingDeliverySweepIntervalMS {
+		t.Fatalf("pending_delivery_sweep_interval_ms=%d, want %d", cfg.Runtime.PendingDeliverySweepIntervalMS, DefaultPendingDeliverySweepIntervalMS)
+	}
 }
 
 func TestPiFieldTestConfigEnablesRuntimeExecution(t *testing.T) {
@@ -322,5 +336,11 @@ func TestPiFieldTestConfigEnablesRuntimeExecution(t *testing.T) {
 	}
 	if cfg.Runtime.DeliveryTopology != "HOST_LISTENER" {
 		t.Fatalf("delivery_topology=%q, want HOST_LISTENER", cfg.Runtime.DeliveryTopology)
+	}
+	if cfg.Runtime.PendingDeliverySweepEnabled {
+		t.Fatalf("pending_delivery_sweep_enabled=true, want false")
+	}
+	if cfg.Runtime.PendingDeliverySweepIntervalMS != 5000 {
+		t.Fatalf("pending_delivery_sweep_interval_ms=%d, want 5000", cfg.Runtime.PendingDeliverySweepIntervalMS)
 	}
 }

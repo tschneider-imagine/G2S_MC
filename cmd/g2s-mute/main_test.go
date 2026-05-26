@@ -18,6 +18,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/engine"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2stransport"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdeliveryruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -2002,5 +2003,37 @@ func TestSystemdUnitDoesNotEncodeHiddenRuntimeFlags(t *testing.T) {
 	}
 	if !strings.Contains(text, "-config /etc/g2s-mute/config.json") {
 		t.Fatalf("systemd unit missing config path")
+	}
+}
+
+func TestPendingDeliverySweepOptionsFromConfigEnabled(t *testing.T) {
+	cfg := config.Config{
+		Runtime: config.Runtime{
+			PendingDeliverySweepEnabled:    true,
+			PendingDeliverySweepIntervalMS: 2200,
+		},
+	}
+	options := pendingDeliverySweepOptionsFromConfig(cfg)
+	if !options.Enabled {
+		t.Fatalf("enabled=%t, want true", options.Enabled)
+	}
+	if options.Interval != 2200*time.Millisecond {
+		t.Fatalf("interval=%s, want 2200ms", options.Interval)
+	}
+}
+
+func TestPendingDeliverySweepOptionsFromConfigDefaultsInterval(t *testing.T) {
+	cfg := config.Config{
+		Runtime: config.Runtime{
+			PendingDeliverySweepEnabled:    false,
+			PendingDeliverySweepIntervalMS: 0,
+		},
+	}
+	options := pendingDeliverySweepOptionsFromConfig(cfg)
+	if options.Enabled {
+		t.Fatalf("enabled=%t, want false", options.Enabled)
+	}
+	if options.Interval != pendingdeliveryruntime.DefaultSweepInterval {
+		t.Fatalf("interval=%s, want %s", options.Interval, pendingdeliveryruntime.DefaultSweepInterval)
 	}
 }

@@ -40,7 +40,10 @@ type Result struct {
 }
 
 type Options struct {
-	DeliveryTopology string
+	DeliveryTopology               string
+	InputRuntimeExecuteActions     bool
+	PendingDeliverySweepEnabled    bool
+	PendingDeliverySweepIntervalMS int
 }
 
 type Store interface {
@@ -238,6 +241,12 @@ func (s *Service) Validate(ctx context.Context) (Result, error) {
 		}
 		if row.Severity == actions.SeverityEmergency && strings.TrimSpace(row.ReturnActionID) == "" {
 			item.Errors = append(item.Errors, "Return Action is required for emergency action")
+		}
+		if s.Options.InputRuntimeExecuteActions && !s.Options.PendingDeliverySweepEnabled {
+			item.Warnings = append(item.Warnings, "Pending Delivery Sweep is disabled while Execute Actions is enabled")
+		}
+		if s.Options.PendingDeliverySweepEnabled && s.Options.PendingDeliverySweepIntervalMS <= 0 {
+			item.Errors = append(item.Errors, "Pending Delivery Sweep interval must be greater than zero")
 		}
 		if strings.TrimSpace(row.ReturnActionID) != "" {
 			if _, ok := actionByID[row.ReturnActionID]; !ok {

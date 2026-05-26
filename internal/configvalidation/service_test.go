@@ -249,6 +249,40 @@ func TestValidateInvalidEndpointQuirksJSONReturnsError(t *testing.T) {
 	assertItemStatus(t, result.Templates, "template-generic-g2s-action", StatusError)
 }
 
+func TestValidateWarnsWhenExecuteActionsEnabledAndSweepDisabled(t *testing.T) {
+	ctx := context.Background()
+	st := seedValidStore()
+	svc := Service{
+		Store: st,
+		Options: Options{
+			InputRuntimeExecuteActions:  true,
+			PendingDeliverySweepEnabled: false,
+		},
+	}
+	result, err := svc.Validate(ctx)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	assertItemStatus(t, result.Actions, "emergency-broadcast-trigger", StatusWarn)
+}
+
+func TestValidateErrorsWhenSweepEnabledWithInvalidInterval(t *testing.T) {
+	ctx := context.Background()
+	st := seedValidStore()
+	svc := Service{
+		Store: st,
+		Options: Options{
+			PendingDeliverySweepEnabled:    true,
+			PendingDeliverySweepIntervalMS: 0,
+		},
+	}
+	result, err := svc.Validate(ctx)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	assertItemStatus(t, result.Actions, "emergency-broadcast-trigger", StatusError)
+}
+
 func assertItemStatus(t *testing.T, rows []ItemResult, id string, expected string) {
 	t.Helper()
 	for _, row := range rows {

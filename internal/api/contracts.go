@@ -76,22 +76,24 @@ type MessageDeliveryCheckRequest struct {
 }
 
 type RuntimeInfoResponse struct {
-	Version                    string    `json:"version"`
-	Revision                   string    `json:"revision"`
-	RevisionShort              string    `json:"revision_short"`
-	Modified                   bool      `json:"modified"`
-	BuildTime                  string    `json:"build_time"`
-	GoVersion                  string    `json:"go_version"`
-	StartedAt                  time.Time `json:"started_at"`
-	ConfigPath                 string    `json:"config_path"`
-	DatabasePath               string    `json:"database_path"`
-	BindAddress                string    `json:"bind_address"`
-	InputRuntimeEnabled        bool      `json:"input_runtime_enabled"`
-	InputRuntimeSeedDefaults   bool      `json:"input_runtime_seed_defaults"`
-	InputRuntimeExecuteActions bool      `json:"input_runtime_execute_actions"`
-	InputRuntimeIntervalMS     int       `json:"input_runtime_interval_ms"`
-	DeliveryTopology           string    `json:"delivery_topology"`
-	DeliveryMode               string    `json:"delivery_mode"`
+	Version                        string    `json:"version"`
+	Revision                       string    `json:"revision"`
+	RevisionShort                  string    `json:"revision_short"`
+	Modified                       bool      `json:"modified"`
+	BuildTime                      string    `json:"build_time"`
+	GoVersion                      string    `json:"go_version"`
+	StartedAt                      time.Time `json:"started_at"`
+	ConfigPath                     string    `json:"config_path"`
+	DatabasePath                   string    `json:"database_path"`
+	BindAddress                    string    `json:"bind_address"`
+	InputRuntimeEnabled            bool      `json:"input_runtime_enabled"`
+	InputRuntimeSeedDefaults       bool      `json:"input_runtime_seed_defaults"`
+	InputRuntimeExecuteActions     bool      `json:"input_runtime_execute_actions"`
+	InputRuntimeIntervalMS         int       `json:"input_runtime_interval_ms"`
+	PendingDeliverySweepEnabled    bool      `json:"pending_delivery_sweep_enabled"`
+	PendingDeliverySweepIntervalMS int       `json:"pending_delivery_sweep_interval_ms"`
+	DeliveryTopology               string    `json:"delivery_topology"`
+	DeliveryMode                   string    `json:"delivery_mode"`
 }
 
 type MessageDeliveryCheckResponse = deliverycheck.CheckResult

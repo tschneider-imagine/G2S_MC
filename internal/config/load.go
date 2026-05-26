@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	DefaultHeartbeatWarningAfterMissed = 3
-	DefaultHeartbeatBlockAfterMissed   = 6
-	DefaultInputRuntimeIntervalMS      = 100
-	DefaultDeliveryTopology            = "HOST_LISTENER"
+	DefaultHeartbeatWarningAfterMissed    = 3
+	DefaultHeartbeatBlockAfterMissed      = 6
+	DefaultInputRuntimeIntervalMS         = 100
+	DefaultPendingDeliverySweepIntervalMS = 5000
+	DefaultDeliveryTopology               = "HOST_LISTENER"
 )
 
 func LoadFile(path string) (Config, error) {
@@ -92,6 +93,9 @@ func (c Config) Validate() error {
 	if c.Runtime.InputRuntimeIntervalMS <= 0 {
 		problems = append(problems, "runtime.input_runtime_interval_ms must be greater than zero")
 	}
+	if c.Runtime.PendingDeliverySweepIntervalMS <= 0 {
+		problems = append(problems, "runtime.pending_delivery_sweep_interval_ms must be greater than zero")
+	}
 	switch strings.ToUpper(strings.TrimSpace(c.Runtime.DeliveryTopology)) {
 	case "HOST_LISTENER", "OUTBOUND_ENDPOINT", "CAPTURE_ENDPOINT":
 	default:
@@ -115,6 +119,9 @@ func (c Config) Validate() error {
 func applyDefaults(cfg Config) Config {
 	if cfg.Runtime.InputRuntimeIntervalMS <= 0 {
 		cfg.Runtime.InputRuntimeIntervalMS = DefaultInputRuntimeIntervalMS
+	}
+	if cfg.Runtime.PendingDeliverySweepIntervalMS <= 0 {
+		cfg.Runtime.PendingDeliverySweepIntervalMS = DefaultPendingDeliverySweepIntervalMS
 	}
 	if strings.TrimSpace(cfg.Runtime.DeliveryTopology) == "" {
 		cfg.Runtime.DeliveryTopology = DefaultDeliveryTopology

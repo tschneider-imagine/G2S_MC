@@ -16,15 +16,15 @@ Repo state and installed runtime state are separate.
 - Pi DB: /var/lib/g2s-mute/controller.db
 
 ## Current Known State
-- Remote HEAD: 12b10c8
-- PC HEAD: 12b10c8
+- Remote HEAD: bb9192d
+- PC HEAD: bb9192d
 - Pi repo HEAD: unknown
 - Pi runtime revision: unknown
 - Runtime service: g2s-mute.service
-- Current PC task: Config-backed runtime mode.
-- Current Pi task: deploy/verify only after PC push.
+- Current PC task: Config-backed pending-delivery sweep runtime.
+- Current Pi task: one-version-behind deploy/verify only.
 - Last proven runtime flow: HOST_LISTENER prepared/pending flow, manual-clear return action, inbound confirmation, exports.
-- Open blocker: hidden systemd runtime flags being moved into config.
+- Open blocker: waiting-confirmation lifecycle should be automated/config-backed.
 
 ## Pipeline
 1. PC codes and pushes.

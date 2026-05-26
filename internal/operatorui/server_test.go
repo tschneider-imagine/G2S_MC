@@ -2165,6 +2165,8 @@ func TestSettingsPageShowsDeliverySettings(t *testing.T) {
 		"Runtime Interval (ms)",
 		"Delivery Topology",
 		"Delivery Mode",
+		"Pending Delivery Sweep",
+		"Sweep Interval (ms)",
 		"DISABLED",
 		"Delivery Default",
 		"Approved Delivery",
@@ -3309,11 +3311,13 @@ func defaultOperatorOptions() Options {
 			ClientKeyPath:    "/certs/client.key",
 			DefaultTimeoutMS: 5000,
 		},
-		InputRuntimeEnabled:        true,
-		InputRuntimeSeedDefaults:   true,
-		InputRuntimeExecuteActions: false,
-		InputRuntimeIntervalMS:     100,
-		StartedAt:                  time.Now().UTC().Add(-5 * time.Minute),
+		InputRuntimeEnabled:            true,
+		InputRuntimeSeedDefaults:       true,
+		InputRuntimeExecuteActions:     false,
+		InputRuntimeIntervalMS:         100,
+		PendingDeliverySweepEnabled:    false,
+		PendingDeliverySweepIntervalMS: 5000,
+		StartedAt:                      time.Now().UTC().Add(-5 * time.Minute),
 	}
 }
 

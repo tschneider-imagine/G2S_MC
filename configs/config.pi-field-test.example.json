@@ -69,6 +69,8 @@
     "input_runtime_seed_defaults": true,
     "input_runtime_execute_actions": true,
     "input_runtime_interval_ms": 100,
+    "pending_delivery_sweep_enabled": false,
+    "pending_delivery_sweep_interval_ms": 5000,
     "delivery_topology": "HOST_LISTENER"
   },
   "egm_roster": [

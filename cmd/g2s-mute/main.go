@@ -36,6 +36,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
 	"github.com/tschneider-imagine/G2S_MC/internal/operatorui"
 	"github.com/tschneider-imagine/G2S_MC/internal/pendingdelivery"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdeliveryruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 )
 
@@ -217,22 +218,24 @@ func main() {
 		G2SHostURL:       cfg.G2S.HostURL,
 		G2SHostID:        cfg.G2S.HostID,
 		RuntimeInfo: rebuildapi.RuntimeInfo{
-			Version:                    build.Version,
-			Revision:                   build.Revision,
-			RevisionShort:              build.RevisionShort,
-			Modified:                   build.Modified,
-			BuildTime:                  build.BuildTime,
-			GoVersion:                  build.GoVersion,
-			StartedAt:                  startedAt,
-			ConfigPath:                 *configPath,
-			DatabasePath:               cfg.Database.Path,
-			BindAddress:                cfg.WebUI.BindAddress,
-			InputRuntimeEnabled:        runtimeOptions.Enabled,
-			InputRuntimeSeedDefaults:   runtimeOptions.SeedDefaultInputs,
-			InputRuntimeExecuteActions: runtimeOptions.ExecuteActions,
-			InputRuntimeIntervalMS:     int(runtimeOptions.PollInterval / time.Millisecond),
-			DeliveryTopology:           string(runtimeTopology),
-			DeliveryMode:               string(deliverySettings.Mode),
+			Version:                        build.Version,
+			Revision:                       build.Revision,
+			RevisionShort:                  build.RevisionShort,
+			Modified:                       build.Modified,
+			BuildTime:                      build.BuildTime,
+			GoVersion:                      build.GoVersion,
+			StartedAt:                      startedAt,
+			ConfigPath:                     *configPath,
+			DatabasePath:                   cfg.Database.Path,
+			BindAddress:                    cfg.WebUI.BindAddress,
+			InputRuntimeEnabled:            runtimeOptions.Enabled,
+			InputRuntimeSeedDefaults:       runtimeOptions.SeedDefaultInputs,
+			InputRuntimeExecuteActions:     runtimeOptions.ExecuteActions,
+			InputRuntimeIntervalMS:         int(runtimeOptions.PollInterval / time.Millisecond),
+			PendingDeliverySweepEnabled:    cfg.Runtime.PendingDeliverySweepEnabled,
+			PendingDeliverySweepIntervalMS: cfg.Runtime.PendingDeliverySweepIntervalMS,
+			DeliveryTopology:               string(runtimeTopology),
+			DeliveryMode:                   string(deliverySettings.Mode),
 		},
 		DefaultDeliverySettings: g2stransport.DeliverySettings{
 			Mode:          g2stransport.DeliveryModeDisabled,
@@ -279,11 +282,13 @@ func main() {
 				ClientKeyPath:    strings.TrimSpace(cfg.Crypto.G2SClientKeyPath),
 				DefaultTimeoutMS: cfg.Timeouts.G2SRequestTimeoutMS,
 			},
-			InputRuntimeEnabled:        runtimeOptions.Enabled,
-			InputRuntimeSeedDefaults:   runtimeOptions.SeedDefaultInputs,
-			InputRuntimeExecuteActions: runtimeOptions.ExecuteActions,
-			InputRuntimeIntervalMS:     int(runtimeOptions.PollInterval / time.Millisecond),
-			StartedAt:                  startedAt,
+			InputRuntimeEnabled:            runtimeOptions.Enabled,
+			InputRuntimeSeedDefaults:       runtimeOptions.SeedDefaultInputs,
+			InputRuntimeExecuteActions:     runtimeOptions.ExecuteActions,
+			InputRuntimeIntervalMS:         int(runtimeOptions.PollInterval / time.Millisecond),
+			PendingDeliverySweepEnabled:    cfg.Runtime.PendingDeliverySweepEnabled,
+			PendingDeliverySweepIntervalMS: cfg.Runtime.PendingDeliverySweepIntervalMS,
+			StartedAt:                      startedAt,
 		},
 		func(w http.ResponseWriter, r *http.Request) bool {
 			return requireMutationAuth(w, r, cfg)
@@ -444,6 +449,22 @@ func main() {
 		Build:            build,
 	}))
 	mux.HandleFunc("/", operatorEntryHandler())
+
+	pendingSweepRuntime := &pendingdeliveryruntime.Runtime{
+		Sweeper: pendingDeliveryService,
+		Logger:  log.Default(),
+		Clock:   time.Now,
+		Options: pendingDeliverySweepOptionsFromConfig(cfg),
+	}
+	if pendingSweepRuntime.Options.Enabled {
+		go func() {
+			if err := pendingSweepRuntime.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("pending_delivery_sweep stopped error=%v", err)
+			}
+		}()
+	} else {
+		log.Printf("pending_delivery_sweep disabled")
+	}
 
 	if runtimeLoop != nil {
 		go func() {
@@ -2080,6 +2101,17 @@ func runtimeOptionsFromConfigAndFlags(cfg config.Config, explicitFlags map[strin
 		Actor:            "g2s-mute",
 	}
 	return runtimeOptions, deliveryTopology, nil
+}
+
+func pendingDeliverySweepOptionsFromConfig(cfg config.Config) pendingdeliveryruntime.Options {
+	interval := time.Duration(cfg.Runtime.PendingDeliverySweepIntervalMS) * time.Millisecond
+	if interval <= 0 {
+		interval = pendingdeliveryruntime.DefaultSweepInterval
+	}
+	return pendingdeliveryruntime.Options{
+		Enabled:  cfg.Runtime.PendingDeliverySweepEnabled,
+		Interval: interval,
+	}
 }
 
 func parseDeliveryModeFlag(raw string) (g2stransport.DeliveryMode, error) {

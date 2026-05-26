@@ -107,39 +107,41 @@ type Store interface {
 }
 
 type Options struct {
-	AppVersion                 string
-	RuntimeVersion             string
-	BuildRevision              string
-	BuildTime                  string
-	GoVersion                  string
-	ControllerID               string
-	SiteName                   string
-	DatabasePath               string
-	ConfigPath                 string
-	BindAddress                string
-	G2SHostURL                 string
-	G2SEndpointPath            string
-	G2SHostID                  string
-	TLSRequired                bool
-	ClientCertRequired         bool
-	WebLoginRequired           bool
-	AdminClientCertRequired    bool
-	CAConfigured               bool
-	ClientCertConfigured       bool
-	ServerCertConfigured       bool
-	DeliveryMode               string
-	DeliveryTopology           string
-	DeliveryCaptureEndpoint    string
-	AllowDeliveryDefault       bool
-	CaptureOnlyDefault         bool
-	DeliveryTimeoutMS          int
-	DeliveryEndpointDefaults   g2stransport.EndpointDefaults
-	DeliveryClientConfig       g2stransport.HTTPClientConfig
-	InputRuntimeEnabled        bool
-	InputRuntimeSeedDefaults   bool
-	InputRuntimeExecuteActions bool
-	InputRuntimeIntervalMS     int
-	StartedAt                  time.Time
+	AppVersion                     string
+	RuntimeVersion                 string
+	BuildRevision                  string
+	BuildTime                      string
+	GoVersion                      string
+	ControllerID                   string
+	SiteName                       string
+	DatabasePath                   string
+	ConfigPath                     string
+	BindAddress                    string
+	G2SHostURL                     string
+	G2SEndpointPath                string
+	G2SHostID                      string
+	TLSRequired                    bool
+	ClientCertRequired             bool
+	WebLoginRequired               bool
+	AdminClientCertRequired        bool
+	CAConfigured                   bool
+	ClientCertConfigured           bool
+	ServerCertConfigured           bool
+	DeliveryMode                   string
+	DeliveryTopology               string
+	DeliveryCaptureEndpoint        string
+	AllowDeliveryDefault           bool
+	CaptureOnlyDefault             bool
+	DeliveryTimeoutMS              int
+	DeliveryEndpointDefaults       g2stransport.EndpointDefaults
+	DeliveryClientConfig           g2stransport.HTTPClientConfig
+	InputRuntimeEnabled            bool
+	InputRuntimeSeedDefaults       bool
+	InputRuntimeExecuteActions     bool
+	InputRuntimeIntervalMS         int
+	PendingDeliverySweepEnabled    bool
+	PendingDeliverySweepIntervalMS int
+	StartedAt                      time.Time
 }
 
 type Server struct {
@@ -3684,6 +3686,8 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 	body.WriteString(`<tr><td>Runtime Interval (ms)</td><td class="mono">` + esc(strconv.Itoa(s.Options.InputRuntimeIntervalMS)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Delivery Topology</td><td class="mono">` + esc(defaultString(strings.TrimSpace(s.Options.DeliveryTopology), string(g2stransport.DeliveryTopologyHostListener))) + `</td></tr>`)
 	body.WriteString(`<tr><td>Delivery Mode</td><td class="mono">` + esc(defaultString(strings.TrimSpace(s.Options.DeliveryMode), "DISABLED")) + `</td></tr>`)
+	body.WriteString(`<tr><td>Pending Delivery Sweep</td><td>` + esc(enabledText(s.Options.PendingDeliverySweepEnabled)) + `</td></tr>`)
+	body.WriteString(`<tr><td>Sweep Interval (ms)</td><td class="mono">` + esc(strconv.Itoa(s.Options.PendingDeliverySweepIntervalMS)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Delivery Default</td><td>` + esc(enabledText(s.Options.AllowDeliveryDefault)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Approved Delivery</td><td>` + esc(enabledText(s.Options.AllowDeliveryDefault)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Capture Only</td><td>` + esc(enabledText(s.Options.CaptureOnlyDefault)) + `</td></tr>`)
@@ -3701,6 +3705,8 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 	body.WriteString(`<li>Execute Actions: ` + esc(enabledText(s.Options.InputRuntimeExecuteActions)) + `.</li>`)
 	body.WriteString(`<li>Runtime Interval: ` + esc(strconv.Itoa(s.Options.InputRuntimeIntervalMS)) + ` ms.</li>`)
 	body.WriteString(`<li>Delivery Topology: ` + esc(defaultString(strings.TrimSpace(s.Options.DeliveryTopology), string(g2stransport.DeliveryTopologyHostListener))) + `.</li>`)
+	body.WriteString(`<li>Pending Delivery Sweep: ` + esc(enabledText(s.Options.PendingDeliverySweepEnabled)) + `.</li>`)
+	body.WriteString(`<li>Sweep Interval: ` + esc(strconv.Itoa(s.Options.PendingDeliverySweepIntervalMS)) + ` ms.</li>`)
 	body.WriteString(`<li>Settings view is read-only.</li>`)
 	body.WriteString(`<li>Certificate material details are metadata-only; private keys are not displayed.</li>`)
 	body.WriteString(`<li>Message delivery behavior is unchanged in this view.</li>`)
