@@ -336,6 +336,7 @@ func TestInboundContactOffersPendingMessageAndUpdatesLastSeen(t *testing.T) {
 	result, err := svc.Process(context.Background(), InboundMessage{
 		RawPayload:  `<g2sBody egmId="EGM-001"><keepAlive/></g2sBody>`,
 		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
 		RemoteAddr:  "10.11.12.13:9555",
 		MessageType: "keepAlive",
 	})
@@ -347,6 +348,9 @@ func TestInboundContactOffersPendingMessageAndUpdatesLastSeen(t *testing.T) {
 	}
 	if len(pending.calls) != 1 || pending.calls[0].EGMID != "EGM-001" {
 		t.Fatalf("pending calls=%+v", pending.calls)
+	}
+	if pending.calls[0].ActionRunID != "run-1" {
+		t.Fatalf("pending action_run_id=%q want run-1", pending.calls[0].ActionRunID)
 	}
 	updated := store.egms["EGM-001"]
 	if updated.LastSeenAt == nil || !updated.LastSeenAt.Equal(fixedClock()()) {

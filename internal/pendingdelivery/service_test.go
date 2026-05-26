@@ -217,6 +217,149 @@ func TestHandleClientContactWrongEGMDoesNotOfferDifferentEGMMessage(t *testing.T
 	}
 }
 
+func TestHandleClientContactWithActionRunIDOffersRequestedRunMessage(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := &fakeStore{
+		messages: []g2sengine.MessageJournalEntry{
+			{
+				ID:          1,
+				Timestamp:   now.Add(-2 * time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-001",
+				ActionRunID: "run-old",
+				Result:      g2sengine.MessageResultPrepared,
+				RawPayload:  "<old/>",
+			},
+			{
+				ID:          2,
+				Timestamp:   now.Add(-time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-001",
+				ActionRunID: "run-new",
+				Result:      g2sengine.MessageResultPrepared,
+				RawPayload:  "<new/>",
+			},
+		},
+		runs:    map[string]actions.ActionRun{},
+		defs:    map[string]actions.ActionDefinition{},
+		targets: map[string][]actions.ActionTargetResult{},
+		egms:    map[string]egms.EGMRecord{},
+		tpls:    map[string]templates.G2STemplate{},
+		audits:  []audit.AuditTimelineEntry{},
+	}
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	result, err := svc.HandleClientContact(context.Background(), ContactRequest{
+		EGMID:       "EGM-001",
+		ActionRunID: "run-new",
+		ContactAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("handle contact: %v", err)
+	}
+	if result.Offered == nil || result.Offered.MessageID != 2 {
+		t.Fatalf("expected run-new message offered, got %+v", result.Offered)
+	}
+	if st.messages[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("run-old message changed unexpectedly: %q", st.messages[0].Result)
+	}
+	if st.messages[1].Result != g2sengine.MessageResultOffered {
+		t.Fatalf("run-new message result=%q want OFFERED", st.messages[1].Result)
+	}
+	if st.messages[1].OfferCount != 1 {
+		t.Fatalf("offer_count=%d want 1", st.messages[1].OfferCount)
+	}
+}
+
+func TestHandleClientContactWithActionRunIDDoesNotOfferUnrelatedMessage(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := &fakeStore{
+		messages: []g2sengine.MessageJournalEntry{
+			{
+				ID:          1,
+				Timestamp:   now.Add(-2 * time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-001",
+				ActionRunID: "run-old",
+				Result:      g2sengine.MessageResultPrepared,
+				RawPayload:  "<old/>",
+			},
+		},
+		runs:    map[string]actions.ActionRun{},
+		defs:    map[string]actions.ActionDefinition{},
+		targets: map[string][]actions.ActionTargetResult{},
+		egms:    map[string]egms.EGMRecord{},
+		tpls:    map[string]templates.G2STemplate{},
+		audits:  []audit.AuditTimelineEntry{},
+	}
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	result, err := svc.HandleClientContact(context.Background(), ContactRequest{
+		EGMID:       "EGM-001",
+		ActionRunID: "run-new",
+		ContactAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("handle contact: %v", err)
+	}
+	if result.Offered != nil {
+		t.Fatalf("did not expect offered message, got %+v", result.Offered)
+	}
+	if len(result.Warnings) == 0 || result.Warnings[0] != "No pending message for requested action run." {
+		t.Fatalf("unexpected warnings: %+v", result.Warnings)
+	}
+	if st.messages[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("unrelated message should stay PREPARED, got %q", st.messages[0].Result)
+	}
+}
+
+func TestHandleClientContactWithoutActionRunIDUsesOldestMessageForEGM(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := &fakeStore{
+		messages: []g2sengine.MessageJournalEntry{
+			{
+				ID:          1,
+				Timestamp:   now.Add(-2 * time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-001",
+				ActionRunID: "run-old",
+				Result:      g2sengine.MessageResultPrepared,
+				RawPayload:  "<old/>",
+			},
+			{
+				ID:          2,
+				Timestamp:   now.Add(-time.Minute),
+				Direction:   g2sengine.DirectionOutbound,
+				EGMID:       "EGM-001",
+				ActionRunID: "run-new",
+				Result:      g2sengine.MessageResultPrepared,
+				RawPayload:  "<new/>",
+			},
+		},
+		runs:    map[string]actions.ActionRun{},
+		defs:    map[string]actions.ActionDefinition{},
+		targets: map[string][]actions.ActionTargetResult{},
+		egms:    map[string]egms.EGMRecord{},
+		tpls:    map[string]templates.G2STemplate{},
+		audits:  []audit.AuditTimelineEntry{},
+	}
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	result, err := svc.HandleClientContact(context.Background(), ContactRequest{EGMID: "EGM-001", ContactAt: now})
+	if err != nil {
+		t.Fatalf("handle contact: %v", err)
+	}
+	if result.Offered == nil || result.Offered.MessageID != 1 {
+		t.Fatalf("expected oldest EGM message offered, got %+v", result.Offered)
+	}
+	if st.messages[0].Result != g2sengine.MessageResultOffered {
+		t.Fatalf("oldest message should become OFFERED, got %q", st.messages[0].Result)
+	}
+	if st.messages[1].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("newer message should remain PREPARED, got %q", st.messages[1].Result)
+	}
+}
+
 func TestSweepWaitingConfirmationsExpiresMessageAndFailsRun(t *testing.T) {
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	st := newFixture(now)

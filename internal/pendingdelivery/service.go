@@ -41,8 +41,10 @@ type Store interface {
 }
 
 type ContactRequest struct {
-	EGMID     string
-	ContactAt time.Time
+	EGMID       string
+	ActionRunID string
+	MessageType string
+	ContactAt   time.Time
 }
 
 type OfferedMessage struct {
@@ -86,24 +88,30 @@ func (s *Service) HandleClientContact(ctx context.Context, req ContactRequest) (
 	if egmID == "" {
 		return ContactResult{Warnings: []string{"egm id is required for pending delivery lookup"}}, nil
 	}
+	actionRunID := strings.TrimSpace(req.ActionRunID)
 	offeredAt := req.ContactAt.UTC()
 	if offeredAt.IsZero() {
 		offeredAt = s.now()
 	}
 
-	rows, err := s.Store.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{
-		Limit:     200,
-		EGMID:     egmID,
-		Direction: g2sengine.DirectionOutbound,
+	query := store.MessageJournalListQuery{
+		Limit:       200,
+		EGMID:       egmID,
+		ActionRunID: actionRunID,
+		Direction:   g2sengine.DirectionOutbound,
 		Results: []g2sengine.MessageResult{
 			g2sengine.MessageResultPrepared,
 			g2sengine.MessageResultPending,
 		},
-	})
+	}
+	rows, err := s.Store.ListMessageJournalEntries(ctx, query)
 	if err != nil {
 		return ContactResult{}, err
 	}
 	if len(rows) == 0 {
+		if actionRunID != "" {
+			return ContactResult{Warnings: []string{"No pending message for requested action run."}}, nil
+		}
 		return ContactResult{}, nil
 	}
 	sort.Slice(rows, func(i, j int) bool {

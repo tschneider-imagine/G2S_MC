@@ -668,8 +668,10 @@ func (s *Service) maybeOfferPending(ctx context.Context, occurredAt time.Time, r
 		return nil
 	}
 	contactResult, err := s.PendingDelivery.HandleClientContact(ctx, pendingdelivery.ContactRequest{
-		EGMID:     egmID,
-		ContactAt: occurredAt.UTC(),
+		EGMID:       egmID,
+		ActionRunID: strings.TrimSpace(result.ActionRunID),
+		MessageType: strings.TrimSpace(resolved.MessageType),
+		ContactAt:   occurredAt.UTC(),
 	})
 	if err != nil {
 		return err
