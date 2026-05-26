@@ -9,11 +9,9 @@ This folder contains appliance service packaging for Raspberry Pi deployment.
 The unit starts `g2s-mute` with:
 
 - `/etc/g2s-mute/config.json`
-- input runtime enabled
-- default input seeding enabled
-- input runtime interval `100ms`
 
-Action execution is not enabled by default in the unit.
+Runtime mode now comes from config (`runtime.*`) rather than hidden systemd flags.
+CLI flags remain available and override config only when explicitly supplied.
 Message delivery remains disabled by default unless explicitly configured.
 
 ## Install Scripts

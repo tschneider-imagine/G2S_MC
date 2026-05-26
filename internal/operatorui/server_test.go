@@ -2159,12 +2159,15 @@ func TestSettingsPageShowsDeliverySettings(t *testing.T) {
 	body := res.Body.String()
 	for _, expected := range []string{
 		"Delivery Settings",
+		"Input Runtime Enabled",
+		"Execute Actions",
+		"Runtime Interval (ms)",
+		"Delivery Topology",
 		"Delivery Mode",
 		"DISABLED",
 		"Delivery Default",
 		"Approved Delivery",
 		"Delivery Timeout (ms)",
-		"Input Runtime Enabled",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in settings page", expected)
@@ -3307,6 +3310,7 @@ func defaultOperatorOptions() Options {
 		},
 		InputRuntimeEnabled:        true,
 		InputRuntimeExecuteActions: false,
+		InputRuntimeIntervalMS:     100,
 		StartedAt:                  time.Now().UTC().Add(-5 * time.Minute),
 	}
 }

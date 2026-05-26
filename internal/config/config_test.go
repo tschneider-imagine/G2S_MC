@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -213,5 +214,90 @@ func TestValidateCabinetProfileRules(t *testing.T) {
 				t.Fatalf("expected profile validation failure")
 			}
 		})
+	}
+}
+
+func TestLoadFileRuntimeSectionParses(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+	content := `{
+  "controller_id": "controller",
+  "site_name": "lab",
+  "cabinet_profile": {
+    "wire_host_url": "https://host.example/g2s",
+    "listener_dns_name": "host.example",
+    "required_san_dns": ["host.example"],
+    "host_id": "HOST-1",
+    "first_test_egm_ids": ["EGM-1"]
+  },
+  "hardware_io": {"voltage_drop_threshold_ms": 250},
+  "database": {"path": "controller.db"},
+  "web_ui": {"bind_address": "127.0.0.1:8444"},
+  "g2s": {"host_id": "HOST-1", "host_url": "http://127.0.0.1:8444/g2s", "endpoint_path": "/g2s"},
+  "runtime": {
+    "input_runtime_enabled": true,
+    "input_runtime_seed_defaults": true,
+    "input_runtime_execute_actions": true,
+    "input_runtime_interval_ms": 175,
+    "delivery_topology": "HOST_LISTENER"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.Runtime.InputRuntimeEnabled {
+		t.Fatalf("input_runtime_enabled=false, want true")
+	}
+	if !cfg.Runtime.InputRuntimeExecuteActions {
+		t.Fatalf("input_runtime_execute_actions=false, want true")
+	}
+	if cfg.Runtime.InputRuntimeIntervalMS != 175 {
+		t.Fatalf("input_runtime_interval_ms=%d, want 175", cfg.Runtime.InputRuntimeIntervalMS)
+	}
+	if cfg.Runtime.DeliveryTopology != "HOST_LISTENER" {
+		t.Fatalf("delivery_topology=%q, want HOST_LISTENER", cfg.Runtime.DeliveryTopology)
+	}
+}
+
+func TestLoadFileRuntimeDefaultsWhenSectionMissing(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+	content := `{
+  "controller_id": "controller",
+  "site_name": "lab",
+  "cabinet_profile": {
+    "wire_host_url": "https://host.example/g2s",
+    "listener_dns_name": "host.example",
+    "required_san_dns": ["host.example"],
+    "host_id": "HOST-1",
+    "first_test_egm_ids": ["EGM-1"]
+  },
+  "hardware_io": {"voltage_drop_threshold_ms": 250},
+  "database": {"path": "controller.db"},
+  "web_ui": {"bind_address": "127.0.0.1:8444"},
+  "g2s": {"host_id": "HOST-1", "host_url": "http://127.0.0.1:8444/g2s", "endpoint_path": "/g2s"}
+}`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Runtime.InputRuntimeEnabled {
+		t.Fatalf("input_runtime_enabled=true, want false")
+	}
+	if cfg.Runtime.InputRuntimeExecuteActions {
+		t.Fatalf("input_runtime_execute_actions=true, want false")
+	}
+	if cfg.Runtime.InputRuntimeIntervalMS != DefaultInputRuntimeIntervalMS {
+		t.Fatalf("input_runtime_interval_ms=%d, want %d", cfg.Runtime.InputRuntimeIntervalMS, DefaultInputRuntimeIntervalMS)
+	}
+	if cfg.Runtime.DeliveryTopology != DefaultDeliveryTopology {
+		t.Fatalf("delivery_topology=%q, want %q", cfg.Runtime.DeliveryTopology, DefaultDeliveryTopology)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -1895,5 +1897,110 @@ func TestValidateInputRuntimeFlags(t *testing.T) {
 	}
 	if err := validateInputRuntimeFlags(100*time.Millisecond, g2stransport.DeliveryModeDisabled, true, 5000); err == nil {
 		t.Fatal("expected allow-delivery/mode validation error")
+	}
+}
+
+func TestRuntimeOptionsFromConfigAndFlagsUsesConfigDefaults(t *testing.T) {
+	cfg := config.Config{
+		Timeouts: config.Timeouts{G2SRequestTimeoutMS: 7000},
+		Runtime: config.Runtime{
+			InputRuntimeEnabled:        true,
+			InputRuntimeSeedDefaults:   true,
+			InputRuntimeExecuteActions: true,
+			InputRuntimeIntervalMS:     125,
+			DeliveryTopology:           "HOST_LISTENER",
+		},
+	}
+	options, topology, err := runtimeOptionsFromConfigAndFlags(cfg, map[string]bool{}, runtimeFlagValues{})
+	if err != nil {
+		t.Fatalf("runtimeOptionsFromConfigAndFlags: %v", err)
+	}
+	if !options.Enabled || !options.SeedDefaultInputs || !options.ExecuteActions {
+		t.Fatalf("runtime booleans did not honor config defaults: %+v", options)
+	}
+	if options.PollInterval != 125*time.Millisecond {
+		t.Fatalf("poll interval = %s, want 125ms", options.PollInterval)
+	}
+	if topology != g2stransport.DeliveryTopologyHostListener {
+		t.Fatalf("topology = %q, want HOST_LISTENER", topology)
+	}
+	if options.DeliverySettings.Mode != g2stransport.DeliveryModeDisabled || options.DeliverySettings.AllowDelivery {
+		t.Fatalf("delivery defaults changed unexpectedly: %+v", options.DeliverySettings)
+	}
+	if options.DeliverySettings.TimeoutMS != 7000 {
+		t.Fatalf("delivery timeout = %d, want 7000", options.DeliverySettings.TimeoutMS)
+	}
+}
+
+func TestRuntimeOptionsFromConfigAndFlagsExplicitFlagsOverrideConfig(t *testing.T) {
+	cfg := config.Config{
+		Timeouts: config.Timeouts{G2SRequestTimeoutMS: 5000},
+		Runtime: config.Runtime{
+			InputRuntimeEnabled:        false,
+			InputRuntimeSeedDefaults:   false,
+			InputRuntimeExecuteActions: false,
+			InputRuntimeIntervalMS:     100,
+			DeliveryTopology:           "HOST_LISTENER",
+		},
+	}
+	explicit := map[string]bool{
+		"input-runtime":                 true,
+		"input-runtime-seed-defaults":   true,
+		"input-runtime-execute-actions": true,
+		"input-runtime-interval":        true,
+		"delivery-mode":                 true,
+		"delivery-topology":             true,
+		"allow-delivery":                true,
+		"delivery-timeout-ms":           true,
+	}
+	options, topology, err := runtimeOptionsFromConfigAndFlags(cfg, explicit, runtimeFlagValues{
+		InputRuntimeEnabled:        true,
+		InputRuntimeSeedDefaults:   true,
+		InputRuntimeExecuteActions: true,
+		InputRuntimeInterval:       225 * time.Millisecond,
+		DeliveryModeRaw:            "http",
+		DeliveryTopologyRaw:        "OUTBOUND_ENDPOINT",
+		AllowDelivery:              true,
+		DeliveryTimeoutMS:          9000,
+	})
+	if err != nil {
+		t.Fatalf("runtimeOptionsFromConfigAndFlags: %v", err)
+	}
+	if !options.Enabled || !options.SeedDefaultInputs || !options.ExecuteActions {
+		t.Fatalf("runtime booleans did not honor explicit flags: %+v", options)
+	}
+	if options.PollInterval != 225*time.Millisecond {
+		t.Fatalf("poll interval = %s, want 225ms", options.PollInterval)
+	}
+	if topology != g2stransport.DeliveryTopologyOutboundEndpoint {
+		t.Fatalf("topology = %q, want OUTBOUND_ENDPOINT", topology)
+	}
+	if options.DeliverySettings.Mode != g2stransport.DeliveryModeHTTP || !options.DeliverySettings.AllowDelivery {
+		t.Fatalf("delivery settings did not honor explicit flags: %+v", options.DeliverySettings)
+	}
+	if options.DeliverySettings.TimeoutMS != 9000 {
+		t.Fatalf("delivery timeout = %d, want 9000", options.DeliverySettings.TimeoutMS)
+	}
+}
+
+func TestSystemdUnitDoesNotEncodeHiddenRuntimeFlags(t *testing.T) {
+	unitPath := filepath.Join("..", "..", "packaging", "systemd", "g2s-mute.service")
+	raw, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("read systemd unit: %v", err)
+	}
+	text := string(raw)
+	for _, forbidden := range []string{
+		"-input-runtime",
+		"-input-runtime-seed-defaults",
+		"-input-runtime-interval",
+		"-input-runtime-execute-actions",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("systemd unit still contains hidden runtime flag %q", forbidden)
+		}
+	}
+	if !strings.Contains(text, "-config /etc/g2s-mute/config.json") {
+		t.Fatalf("systemd unit missing config path")
 	}
 }

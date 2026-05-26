@@ -10,10 +10,7 @@ Group=g2s-mute
 SupplementaryGroups=gpio
 WorkingDirectory=/var/lib/g2s-mute
 ExecStart=/usr/local/bin/g2s-mute \
-  -config /etc/g2s-mute/config.json \
-  -input-runtime \
-  -input-runtime-seed-defaults \
-  -input-runtime-interval 100ms
+  -config /etc/g2s-mute/config.json
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true

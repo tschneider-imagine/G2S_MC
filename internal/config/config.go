@@ -13,7 +13,16 @@ type Config struct {
 	Database        Database        `json:"database"`
 	WebUI           WebUI           `json:"web_ui"`
 	G2S             G2S             `json:"g2s"`
+	Runtime         Runtime         `json:"runtime"`
 	EGMRoster       []EGM           `json:"egm_roster"`
+}
+
+type Runtime struct {
+	InputRuntimeEnabled        bool   `json:"input_runtime_enabled"`
+	InputRuntimeSeedDefaults   bool   `json:"input_runtime_seed_defaults"`
+	InputRuntimeExecuteActions bool   `json:"input_runtime_execute_actions"`
+	InputRuntimeIntervalMS     int    `json:"input_runtime_interval_ms"`
+	DeliveryTopology           string `json:"delivery_topology"`
 }
 
 type HardwareIO struct {

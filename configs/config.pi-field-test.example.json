@@ -64,6 +64,13 @@
     "require_tls": false,
     "require_client_cert": false
   },
+  "runtime": {
+    "input_runtime_enabled": true,
+    "input_runtime_seed_defaults": true,
+    "input_runtime_execute_actions": true,
+    "input_runtime_interval_ms": 100,
+    "delivery_topology": "HOST_LISTENER"
+  },
   "egm_roster": [
     {
       "egm_id": "EGM-001",

@@ -14,6 +14,8 @@ import (
 const (
 	DefaultHeartbeatWarningAfterMissed = 3
 	DefaultHeartbeatBlockAfterMissed   = 6
+	DefaultInputRuntimeIntervalMS      = 100
+	DefaultDeliveryTopology            = "HOST_LISTENER"
 )
 
 func LoadFile(path string) (Config, error) {
@@ -26,6 +28,7 @@ func LoadFile(path string) (Config, error) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, err
 	}
+	cfg = applyDefaults(cfg)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -43,6 +46,7 @@ func ChecksumFile(path string) (string, error) {
 }
 
 func (c Config) Validate() error {
+	c = applyDefaults(c)
 	var problems []string
 
 	requireText(&problems, "controller_id", c.ControllerID)
@@ -85,6 +89,14 @@ func (c Config) Validate() error {
 	if c.WebUI.AllowTrustedPrivateNetworkMutations && c.WebUI.RequireLogin {
 		problems = append(problems, "web_ui.allow_trusted_private_network_mutations requires web_ui.require_login=false")
 	}
+	if c.Runtime.InputRuntimeIntervalMS <= 0 {
+		problems = append(problems, "runtime.input_runtime_interval_ms must be greater than zero")
+	}
+	switch strings.ToUpper(strings.TrimSpace(c.Runtime.DeliveryTopology)) {
+	case "HOST_LISTENER", "OUTBOUND_ENDPOINT", "CAPTURE_ENDPOINT":
+	default:
+		problems = append(problems, "runtime.delivery_topology must be HOST_LISTENER, OUTBOUND_ENDPOINT, or CAPTURE_ENDPOINT")
+	}
 	for i, egm := range c.EGMRoster {
 		prefix := fmt.Sprintf("egm_roster[%d]", i)
 		requireText(&problems, prefix+".egm_id", egm.EGMID)
@@ -98,6 +110,18 @@ func (c Config) Validate() error {
 		return fmt.Errorf("invalid config: %s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func applyDefaults(cfg Config) Config {
+	if cfg.Runtime.InputRuntimeIntervalMS <= 0 {
+		cfg.Runtime.InputRuntimeIntervalMS = DefaultInputRuntimeIntervalMS
+	}
+	if strings.TrimSpace(cfg.Runtime.DeliveryTopology) == "" {
+		cfg.Runtime.DeliveryTopology = DefaultDeliveryTopology
+	} else {
+		cfg.Runtime.DeliveryTopology = strings.ToUpper(strings.TrimSpace(cfg.Runtime.DeliveryTopology))
+	}
+	return cfg
 }
 
 func EffectiveHeartbeatWarningAfterMissed(timeouts Timeouts) int {

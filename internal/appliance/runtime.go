@@ -26,6 +26,7 @@ type RuntimeOptions struct {
 	SeedDefaultInputs bool
 	ExecuteActions    bool
 	DeliverySettings  g2stransport.DeliverySettings
+	DeliveryTopology  g2stransport.DeliveryTopology
 	Actor             string
 }
 
@@ -70,6 +71,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 		options.PollInterval = defaultPollInterval
 	}
 	options.DeliverySettings = options.DeliverySettings.Normalize()
+	if strings.TrimSpace(string(options.DeliveryTopology)) == "" {
+		options.DeliveryTopology = g2stransport.DeliveryTopologyHostListener
+	}
 	options.Actor = strings.TrimSpace(options.Actor)
 	if options.Actor == "" {
 		options.Actor = "g2s-mute"
@@ -235,7 +239,7 @@ func (r *Runtime) runOnce(ctx context.Context, options RuntimeOptions) error {
 			Actor:       options.Actor,
 			RequestedAt: result.ObservedAt,
 			Delivery:    options.DeliverySettings,
-			Topology:    string(g2stransport.DeliveryTopologyHostListener),
+			Topology:    string(options.DeliveryTopology),
 		})
 		if executeErr != nil {
 			r.logf("action_execution_failed run_id=%s error=%s", runID, executeErr.Error())
