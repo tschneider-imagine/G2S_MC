@@ -130,6 +130,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/config-validation", s.handleConfigValidation)
 	mux.HandleFunc("/api/v2/settings/message-delivery-check", s.handleMessageDeliveryCheck)
 	mux.HandleFunc("/api/v2/pending-delivery", s.handlePendingDelivery)
+	mux.HandleFunc("/api/v2/pending-delivery/messages/", s.handlePendingDeliveryMessageByID)
 	mux.HandleFunc("/api/v2/pending-delivery/sweep", s.handlePendingDeliverySweep)
 }
 
@@ -883,6 +884,59 @@ func (s *Server) handlePendingDeliverySweep(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handlePendingDeliveryMessageByID(w http.ResponseWriter, r *http.Request) {
+	messageID, action, ok := pendingDeliveryMessageRoute(r.URL.Path)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	var req PendingDeliveryLifecycleRequest
+	if r.ContentLength > 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+	service := pendingdelivery.Service{
+		Store: s.Store,
+		Clock: time.Now,
+	}
+	var (
+		result pendingdelivery.MessageLifecycleResult
+		err    error
+	)
+	switch action {
+	case "expire":
+		result, err = service.ExpireMessage(r.Context(), messageID, strings.TrimSpace(req.Actor), strings.TrimSpace(req.Reason))
+	case "supersede":
+		result, err = service.SupersedeMessage(r.Context(), messageID, strings.TrimSpace(req.Actor), strings.TrimSpace(req.Reason))
+	case "reprepare":
+		result, err = service.ReprepareMessage(r.Context(), messageID, strings.TrimSpace(req.Actor), strings.TrimSpace(req.Reason))
+	default:
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		switch {
+		case strings.Contains(lower, "not found"):
+			writeJSONError(w, http.StatusNotFound, err.Error())
+		case strings.Contains(lower, "cannot be changed"):
+			writeJSONError(w, http.StatusConflict, err.Error())
+		default:
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) authorizeMutation(w http.ResponseWriter, r *http.Request) bool {
 	if s.AuthorizeMutation == nil {
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
@@ -1018,6 +1072,28 @@ func actionRunRoute(path string) (id string, action string, ok bool) {
 		return "", "", false
 	}
 	return trimmed, "run", true
+}
+
+func pendingDeliveryMessageRoute(path string) (id int64, action string, ok bool) {
+	const prefix = "/api/v2/pending-delivery/messages/"
+	if !strings.HasPrefix(path, prefix) {
+		return 0, "", false
+	}
+	trimmed := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 {
+		return 0, "", false
+	}
+	messageID, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+	if err != nil || messageID <= 0 {
+		return 0, "", false
+	}
+	switch strings.ToLower(strings.TrimSpace(parts[1])) {
+	case "expire", "supersede", "reprepare":
+		return messageID, strings.ToLower(strings.TrimSpace(parts[1])), true
+	default:
+		return 0, "", false
+	}
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {

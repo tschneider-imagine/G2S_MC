@@ -72,6 +72,7 @@ type SweepResult struct {
 	TargetsFailed      int      `json:"targets_failed"`
 	RunsFailed         int      `json:"runs_failed"`
 	RunsEscalated      int      `json:"runs_escalated"`
+	EscalationsQueued  int      `json:"escalations_queued"`
 	Warnings           []string `json:"warnings,omitempty"`
 }
 
@@ -96,6 +97,14 @@ type ResolveAfterReturnStore interface {
 type Service struct {
 	Store Store
 	Clock func() time.Time
+}
+
+type MessageLifecycleResult struct {
+	MessageID      int64                   `json:"message_id"`
+	ActionRunID    string                  `json:"action_run_id,omitempty"`
+	EGMID          string                  `json:"egm_id,omitempty"`
+	PreviousResult g2sengine.MessageResult `json:"previous_result"`
+	Result         g2sengine.MessageResult `json:"result"`
 }
 
 func ResolveIncidentAfterReturnSuccess(ctx context.Context, st ResolveAfterReturnStore, incidentID string, returnRunID string, occurredAt time.Time) (ResolveAfterReturnResult, error) {
@@ -321,6 +330,122 @@ func (s *Service) HandleClientContact(ctx context.Context, req ContactRequest) (
 	}, nil
 }
 
+func (s *Service) ExpireMessage(ctx context.Context, messageID int64, actor string, reason string) (MessageLifecycleResult, error) {
+	return s.updateMessageLifecycle(ctx, messageID, actor, reason, g2sengine.MessageResultExpired)
+}
+
+func (s *Service) SupersedeMessage(ctx context.Context, messageID int64, actor string, reason string) (MessageLifecycleResult, error) {
+	return s.updateMessageLifecycle(ctx, messageID, actor, reason, g2sengine.MessageResultSuperseded)
+}
+
+func (s *Service) ReprepareMessage(ctx context.Context, messageID int64, actor string, reason string) (MessageLifecycleResult, error) {
+	return s.updateMessageLifecycle(ctx, messageID, actor, reason, g2sengine.MessageResultPrepared)
+}
+
+func (s *Service) updateMessageLifecycle(ctx context.Context, messageID int64, actor string, reason string, result g2sengine.MessageResult) (MessageLifecycleResult, error) {
+	if s.Store == nil {
+		return MessageLifecycleResult{}, fmt.Errorf("store is required")
+	}
+	if messageID <= 0 {
+		return MessageLifecycleResult{}, fmt.Errorf("message id is required")
+	}
+	switch result {
+	case g2sengine.MessageResultExpired, g2sengine.MessageResultSuperseded, g2sengine.MessageResultPrepared:
+	default:
+		return MessageLifecycleResult{}, fmt.Errorf("unsupported lifecycle result %q", result)
+	}
+
+	row, err := s.Store.GetMessageJournalEntry(ctx, messageID)
+	if err != nil {
+		return MessageLifecycleResult{}, err
+	}
+	if row == nil {
+		return MessageLifecycleResult{}, fmt.Errorf("message journal entry %d not found", messageID)
+	}
+	previous := row.Result
+	if !canMutateLifecycle(row.Result) {
+		return MessageLifecycleResult{}, fmt.Errorf("message result %s cannot be changed by this lifecycle operation", row.Result)
+	}
+
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "operator"
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		switch result {
+		case g2sengine.MessageResultPrepared:
+			reason = "operator requested reprepare"
+		case g2sengine.MessageResultExpired:
+			reason = "operator expired pending delivery"
+		case g2sengine.MessageResultSuperseded:
+			reason = "operator superseded pending delivery"
+		default:
+			reason = "operator lifecycle action"
+		}
+	}
+
+	var (
+		completedAt *time.Time
+		sentAt      *time.Time
+		eventType   string
+		summary     string
+		severity    audit.AuditSeverity
+	)
+	when := s.now()
+	switch result {
+	case g2sengine.MessageResultPrepared:
+		eventType = audit.EventTypeRetry
+		summary = "Pending delivery returned to PREPARED by operator"
+		severity = audit.AuditSeverityInfo
+	case g2sengine.MessageResultExpired:
+		eventType = audit.EventTypeMessageExpired
+		summary = "Pending delivery expired by operator"
+		severity = audit.AuditSeverityWarning
+		completedAt = &when
+		sentAt = row.SentAt
+	case g2sengine.MessageResultSuperseded:
+		eventType = audit.EventTypeMessageSuperseded
+		summary = "Pending delivery superseded by operator"
+		severity = audit.AuditSeverityInfo
+		completedAt = &when
+		sentAt = row.SentAt
+	}
+
+	if err := s.Store.UpdateMessageJournalResult(ctx, row.ID, result, reason, row.ResponseExcerpt, row.HTTPStatusCode, row.LatencyMS, row.TransportMode, sentAt, completedAt); err != nil {
+		return MessageLifecycleResult{}, err
+	}
+	if _, err := s.Store.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
+		OccurredAt:       when,
+		Severity:         severity,
+		EventType:        eventType,
+		Summary:          summary,
+		DetailJSON:       encodeDetail(map[string]any{"message_id": row.ID, "previous_result": previous, "result": result, "reason": reason, "egm_id": row.EGMID}),
+		ActionRunID:      strings.TrimSpace(row.ActionRunID),
+		MessageJournalID: row.ID,
+		Operator:         actor,
+	}); err != nil {
+		return MessageLifecycleResult{}, err
+	}
+
+	return MessageLifecycleResult{
+		MessageID:      row.ID,
+		ActionRunID:    strings.TrimSpace(row.ActionRunID),
+		EGMID:          strings.TrimSpace(row.EGMID),
+		PreviousResult: previous,
+		Result:         result,
+	}, nil
+}
+
+func canMutateLifecycle(result g2sengine.MessageResult) bool {
+	switch result {
+	case g2sengine.MessageResultPrepared, g2sengine.MessageResultPending, g2sengine.MessageResultOffered:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Service) SweepWaitingConfirmations(ctx context.Context, now time.Time) (SweepResult, error) {
 	if s.Store == nil {
 		return SweepResult{}, fmt.Errorf("store is required")
@@ -489,6 +614,7 @@ func (s *Service) SweepWaitingConfirmations(ctx context.Context, now time.Time) 
 				run.EscalatedCount++
 				run.Status = actions.RunStatusEscalated
 				result.RunsEscalated++
+				result.EscalationsQueued++
 				if _, err := s.Store.RecordAuditTimelineEntry(ctx, audit.AuditTimelineEntry{
 					OccurredAt:  when,
 					Severity:    audit.AuditSeverityWarning,

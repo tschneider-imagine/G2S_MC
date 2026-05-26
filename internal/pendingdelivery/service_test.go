@@ -420,6 +420,130 @@ func TestSweepWaitingConfirmationsExpiresMessageAndFailsRun(t *testing.T) {
 	}
 }
 
+func TestExpireMessagePreparedUpdatesLifecycleAndAudit(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := newFixture(now)
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	result, err := svc.ExpireMessage(context.Background(), 1, "operator", "manual expire")
+	if err != nil {
+		t.Fatalf("expire message: %v", err)
+	}
+	if result.Result != g2sengine.MessageResultExpired {
+		t.Fatalf("result=%q want EXPIRED", result.Result)
+	}
+	if st.messages[0].Result != g2sengine.MessageResultExpired {
+		t.Fatalf("message result=%q want EXPIRED", st.messages[0].Result)
+	}
+	if st.messages[0].RawPayload != "<cmd/>" {
+		t.Fatalf("raw payload changed unexpectedly: %q", st.messages[0].RawPayload)
+	}
+	found := false
+	for _, row := range st.audits {
+		if row.EventType == audit.EventTypeMessageExpired && strings.Contains(strings.ToLower(row.Summary), "expired by operator") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected message expired audit row, rows=%+v", st.audits)
+	}
+}
+
+func TestExpireMessageConfirmedRejected(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := newFixture(now)
+	st.messages[0].Result = g2sengine.MessageResultConfirmed
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	if _, err := svc.ExpireMessage(context.Background(), 1, "operator", "manual expire"); err == nil {
+		t.Fatal("expected expire confirmed message to fail")
+	}
+}
+
+func TestExpireMessageOfferedUpdatesLifecycle(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := newFixture(now)
+	st.messages[0].Result = g2sengine.MessageResultOffered
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	result, err := svc.ExpireMessage(context.Background(), 1, "operator", "manual expire offered")
+	if err != nil {
+		t.Fatalf("expire offered message: %v", err)
+	}
+	if result.Result != g2sengine.MessageResultExpired {
+		t.Fatalf("result=%q want EXPIRED", result.Result)
+	}
+}
+
+func TestSupersedeMessageOfferedUpdatesLifecycleAndAudit(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := newFixture(now)
+	st.messages[0].Result = g2sengine.MessageResultOffered
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	result, err := svc.SupersedeMessage(context.Background(), 1, "operator", "manual supersede")
+	if err != nil {
+		t.Fatalf("supersede message: %v", err)
+	}
+	if result.Result != g2sengine.MessageResultSuperseded {
+		t.Fatalf("result=%q want SUPERSEDED", result.Result)
+	}
+	if st.messages[0].Result != g2sengine.MessageResultSuperseded {
+		t.Fatalf("message result=%q want SUPERSEDED", st.messages[0].Result)
+	}
+}
+
+func TestReprepareMessageOfferedUpdatesLifecycleAndAudit(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := newFixture(now)
+	st.messages[0].Result = g2sengine.MessageResultOffered
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	result, err := svc.ReprepareMessage(context.Background(), 1, "operator", "manual reprepare")
+	if err != nil {
+		t.Fatalf("reprepare message: %v", err)
+	}
+	if result.Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("result=%q want PREPARED", result.Result)
+	}
+	if st.messages[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("message result=%q want PREPARED", st.messages[0].Result)
+	}
+	found := false
+	for _, row := range st.audits {
+		if row.EventType == audit.EventTypeRetry && strings.Contains(strings.ToLower(row.Summary), "returned to prepared") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected retry audit row, rows=%+v", st.audits)
+	}
+}
+
+func TestReprepareMessageConfirmedRejected(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := newFixture(now)
+	st.messages[0].Result = g2sengine.MessageResultConfirmed
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	if _, err := svc.ReprepareMessage(context.Background(), 1, "operator", "manual reprepare"); err == nil {
+		t.Fatal("expected reprepare confirmed message to fail")
+	}
+}
+
+func TestSupersedeMessageFailedRejected(t *testing.T) {
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	st := newFixture(now)
+	st.messages[0].Result = g2sengine.MessageResultFailed
+	svc := &Service{Store: st, Clock: func() time.Time { return now }}
+
+	if _, err := svc.SupersedeMessage(context.Background(), 1, "operator", "manual supersede"); err == nil {
+		t.Fatal("expected supersede failed message to be rejected")
+	}
+}
+
 func TestResolveIncidentAfterReturnSuccessSupersedesOlderUnresolvedRuns(t *testing.T) {
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	st := &fakeStore{

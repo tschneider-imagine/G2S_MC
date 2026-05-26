@@ -11,6 +11,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdelivery"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
 
@@ -75,6 +76,11 @@ type MessageDeliveryCheckRequest struct {
 	TimeoutMS           int    `json:"timeout_ms,omitempty"`
 }
 
+type PendingDeliveryLifecycleRequest struct {
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
 type RuntimeInfoResponse struct {
 	Version                        string    `json:"version"`
 	Revision                       string    `json:"revision"`
@@ -98,6 +104,7 @@ type RuntimeInfoResponse struct {
 
 type MessageDeliveryCheckResponse = deliverycheck.CheckResult
 type ConfigValidationResponse = configvalidation.Result
+type PendingDeliveryLifecycleResponse = pendingdelivery.MessageLifecycleResult
 
 type TemplatesListResponse struct {
 	Templates []templates.G2STemplate `json:"templates"`

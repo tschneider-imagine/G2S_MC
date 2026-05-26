@@ -76,6 +76,7 @@ Visible seed data in Operator Console must remain product-neutral (for example c
 - `PHASE_6I_INCIDENT_RETURN_LIFECYCLE_CLEANUP.md`
 - `PHASE_6J_CONFIG_BACKED_RUNTIME_MODE.md`
 - `PHASE_6K_CONFIG_BACKED_PENDING_DELIVERY_SWEEP.md`
+- `PHASE_6L_OPERATOR_PENDING_DELIVERY_CONTROLS.md`
 - `TRANSPORT_POLICY_REVIEW.md`
 
 ## Archived Old Plans

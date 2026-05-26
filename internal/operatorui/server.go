@@ -27,6 +27,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/inputruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/inputs"
 	"github.com/tschneider-imagine/G2S_MC/internal/model"
+	"github.com/tschneider-imagine/G2S_MC/internal/pendingdelivery"
 	"github.com/tschneider-imagine/G2S_MC/internal/store"
 	"github.com/tschneider-imagine/G2S_MC/internal/templates"
 )
@@ -88,6 +89,7 @@ type Store interface {
 	GetMessageJournalEntry(ctx context.Context, id int64) (*g2sengine.MessageJournalEntry, error)
 	RecordMessageJournalEntry(ctx context.Context, entry g2sengine.MessageJournalEntry) (int64, error)
 	UpdateMessageJournalResult(ctx context.Context, id int64, result g2sengine.MessageResult, errText string, responseExcerpt string, httpStatusCode int, latencyMS int, transportMode string, sentAt *time.Time, completedAt *time.Time) error
+	UpdateMessageJournalOffer(ctx context.Context, id int64, offeredAt time.Time, result g2sengine.MessageResult) (bool, error)
 	UpdateMessageJournalHandlerRule(ctx context.Context, id int64, handlerRuleID string) error
 	UpsertHandlerRule(ctx context.Context, rule g2sengine.HandlerRule) error
 	GetHandlerRule(ctx context.Context, id string) (*g2sengine.HandlerRule, error)
@@ -176,10 +178,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute("/templates"), s.handleTemplates)
 	mux.HandleFunc(operatorRoute("/templates/"), s.handleTemplateByID)
 	mux.HandleFunc(operatorRoute("/comms"), s.handleComms)
+	mux.HandleFunc(operatorRoute("/comms/messages/"), s.handleCommsMessageByID)
 	mux.HandleFunc(operatorRoute("/comms/export"), s.handleCommsExport)
 	mux.HandleFunc(operatorRoute("/comms/handler-rules"), s.handleCommsHandlerRules)
 	mux.HandleFunc(operatorRoute("/comms/handler-rules/"), s.handleCommsHandlerRuleByID)
 	mux.HandleFunc(operatorRoute("/comms/handler-rules/new"), s.handleCommsHandlerRuleNew)
+	mux.HandleFunc(operatorRoute("/actions/pending-delivery-sweep"), s.handlePendingDeliverySweepFromActions)
 	mux.HandleFunc(operatorRoute("/audit"), s.handleAudit)
 	mux.HandleFunc(operatorRoute("/audit/notes"), s.handleAuditNotes)
 	mux.HandleFunc(operatorRoute("/audit/export"), s.handleAuditExport)
@@ -901,6 +905,27 @@ func (s *Server) handleActionByID(w http.ResponseWriter, r *http.Request) {
 	s.renderActionsPage(w, r, "Action updated: "+actionID, "")
 }
 
+func (s *Server) handlePendingDeliverySweepFromActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	service := pendingdelivery.Service{
+		Store: s.Store,
+		Clock: time.Now,
+	}
+	result, err := service.SweepWaitingConfirmations(r.Context(), time.Now().UTC())
+	if err != nil {
+		s.renderActionsPage(w, r, "", err.Error())
+		return
+	}
+	message := fmt.Sprintf("Pending delivery sweep complete: runs=%d expired=%d reprepared=%d escalations=%d", result.CheckedRuns, result.MessagesExpired, result.MessagesReprepared, result.EscalationsQueued)
+	s.renderActionsPage(w, r, message, "")
+}
+
 func (s *Server) upsertActionFromForm(ctx context.Context, actionID string, r *http.Request) error {
 	existing, err := s.Store.GetActionDefinition(ctx, actionID)
 	if err != nil {
@@ -1001,8 +1026,51 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		}
 	}
 	planner := actionplanner.Planner{Store: s.Store}
+	waitingRuns, err := s.Store.ListActionRuns(r.Context(), store.ActionRunListQuery{
+		Limit:  120,
+		Status: actions.RunStatusWaitingConfirmation,
+	})
+	if err != nil {
+		s.renderError(w, "/operator/actions", "Operator Console Actions", err)
+		return
+	}
 	body := strings.Builder{}
 	body.WriteString(renderConfigurationValidationPanel(validationResult, "actions"))
+	body.WriteString(`<div class="panel"><h2>Waiting Confirmation</h2>`)
+	if len(waitingRuns) == 0 {
+		body.WriteString(`<p>No action runs are currently waiting for inbound confirmation.</p>`)
+	} else {
+		body.WriteString(`<table><tr><th>Run ID</th><th>Action</th><th>Incident</th><th>Pending Delivery</th><th>Confirmed</th><th>Failed</th><th>Comms</th></tr>`)
+		for _, run := range waitingRuns {
+			pendingRows, listErr := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{
+				Limit:       300,
+				ActionRunID: run.ID,
+				Direction:   g2sengine.DirectionOutbound,
+				Results: []g2sengine.MessageResult{
+					g2sengine.MessageResultPrepared,
+					g2sengine.MessageResultPending,
+					g2sengine.MessageResultOffered,
+					g2sengine.MessageResultDelivered,
+				},
+			})
+			pendingCount := 0
+			if listErr == nil {
+				pendingCount = len(pendingRows)
+			}
+			body.WriteString(`<tr>`)
+			body.WriteString(`<td class="mono">` + esc(run.ID) + `</td>`)
+			body.WriteString(`<td class="mono">` + esc(run.ActionDefinitionID) + `</td>`)
+			body.WriteString(`<td>` + esc(defaultString(strings.TrimSpace(run.IncidentID), "-")) + `</td>`)
+			body.WriteString(`<td>` + esc(strconv.Itoa(pendingCount)) + `</td>`)
+			body.WriteString(`<td>` + esc(strconv.Itoa(run.ConfirmedCount)) + `</td>`)
+			body.WriteString(`<td>` + esc(strconv.Itoa(run.FailedCount)) + `</td>`)
+			body.WriteString(`<td><a href="/operator/comms?action_run_id=` + url.QueryEscape(run.ID) + `">View Comms</a></td>`)
+			body.WriteString(`</tr>`)
+		}
+		body.WriteString(`</table>`)
+	}
+	body.WriteString(`<form class="inline-form" method="post" action="/operator/actions/pending-delivery-sweep"><button type="submit">Run Pending Delivery Sweep</button></form>`)
+	body.WriteString(`</div>`)
 	body.WriteString(`<div class="panel"><h2>Action Definitions</h2><table>`)
 	body.WriteString(`<tr><th>ID</th><th>Name</th><th>Severity</th><th>Enabled</th><th>Target Selector</th><th>Template Selector</th><th>Template Action Key</th><th>Return Action</th><th>Retry Count</th><th>Retry Delay (ms)</th><th>Escalation Action</th><th>Escalation After Attempts</th><th>Target Preview</th><th>Configuration Validation</th><th>Edit</th></tr>`)
 	for _, definition := range definitions {
@@ -2239,7 +2307,61 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	rows, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: queryLimit(r, 120)})
+	s.renderCommsPage(w, r, strings.TrimSpace(r.URL.Query().Get("message")), strings.TrimSpace(r.URL.Query().Get("error")))
+}
+
+func (s *Server) handleCommsMessageByID(w http.ResponseWriter, r *http.Request) {
+	id, action, ok := commsMessageRoute(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeMutation(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.renderCommsPage(w, r, "", "invalid form payload")
+		return
+	}
+	service := pendingdelivery.Service{
+		Store: s.Store,
+		Clock: time.Now,
+	}
+	actor := strings.TrimSpace(r.FormValue("actor"))
+	reason := strings.TrimSpace(r.FormValue("reason"))
+	var (
+		result pendingdelivery.MessageLifecycleResult
+		err    error
+	)
+	switch action {
+	case "expire":
+		result, err = service.ExpireMessage(r.Context(), id, actor, reason)
+	case "supersede":
+		result, err = service.SupersedeMessage(r.Context(), id, actor, reason)
+	case "reprepare":
+		result, err = service.ReprepareMessage(r.Context(), id, actor, reason)
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.renderCommsPage(w, r, "", err.Error())
+		return
+	}
+	s.renderCommsPage(w, r, fmt.Sprintf("Message %d updated: %s -> %s", result.MessageID, result.PreviousResult, result.Result), "")
+}
+
+func (s *Server) renderCommsPage(w http.ResponseWriter, r *http.Request, message string, errText string) {
+	query := store.MessageJournalListQuery{
+		Limit:       queryLimit(r, 120),
+		EGMID:       strings.TrimSpace(r.URL.Query().Get("egm_id")),
+		ActionRunID: strings.TrimSpace(r.URL.Query().Get("action_run_id")),
+	}
+	rows, err := s.Store.ListMessageJournalEntries(r.Context(), query)
 	if err != nil {
 		s.renderError(w, "/operator/comms", "Operator Console Comms Journal", err)
 		return
@@ -2250,9 +2372,21 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.Builder{}
-	body.WriteString(`<div class="panel"><h2>Message Journal</h2><p><a href="/operator/comms/export">Export JSON</a> | <a href="/operator/comms/handler-rules">Handler Rules</a></p><table>`)
-	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Input Transition</th><th>Template</th><th>Message</th><th>Result</th><th>Match</th><th>Rule</th><th>Delivery</th><th>Error</th><th>Payload</th><th>Summary</th></tr>`)
+	filterSummary := []string{}
+	if query.EGMID != "" {
+		filterSummary = append(filterSummary, "EGM="+query.EGMID)
+	}
+	if query.ActionRunID != "" {
+		filterSummary = append(filterSummary, "Run="+query.ActionRunID)
+	}
+	filterText := "all rows"
+	if len(filterSummary) > 0 {
+		filterText = strings.Join(filterSummary, ", ")
+	}
+	body.WriteString(`<div class="panel"><h2>Message Journal</h2><p><a href="/operator/comms/export">Export JSON</a> | <a href="/operator/comms/handler-rules">Handler Rules</a><br>Filter: <span class="mono">` + esc(filterText) + `</span></p><table>`)
+	body.WriteString(`<tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Input Transition</th><th>Template</th><th>Message</th><th>Result</th><th>Match</th><th>Rule</th><th>Lifecycle</th><th>Delivery</th><th>Error</th><th>Payload</th><th>Summary</th></tr>`)
 	versionCache := map[string]*templates.G2STemplateVersion{}
+	returnQuery := strings.TrimSpace(r.URL.Query().Encode())
 	for _, row := range rows {
 		templateRef := row.TemplateID
 		if row.TemplateVersion != "" {
@@ -2277,6 +2411,7 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		createRuleLink := `/operator/comms/handler-rules/new?message_id=` + strconv.FormatInt(row.ID, 10)
 		ruleSummary := defaultString(strings.TrimSpace(row.HandlerRuleID), "-")
 		body.WriteString(`<td><span class="mono">` + esc(ruleSummary) + `</span><br><a href="` + esc(createRuleLink) + `">Create Handler Rule</a></td>`)
+		body.WriteString(`<td>` + renderCommsLifecycleControls(row, returnQuery) + `</td>`)
 		body.WriteString(`<td>` + esc(deliverySummary(row)) + `</td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.Error, "-")) + `</pre></details></td>`)
 		body.WriteString(`<td><details><summary>view</summary><pre>` + esc(payload) + `</pre></details></td>`)
@@ -2284,7 +2419,7 @@ func (s *Server) handleComms(w http.ResponseWriter, r *http.Request) {
 		body.WriteString(`</tr>`)
 	}
 	body.WriteString(`</table></div>`)
-	s.renderPage(w, operatorRoute("/comms"), "Operator Message Journal", body.String(), "", "")
+	s.renderPage(w, operatorRoute("/comms"), "Operator Message Journal", body.String(), message, errText)
 }
 
 func (s *Server) handleCommsExport(w http.ResponseWriter, r *http.Request) {
@@ -2716,6 +2851,28 @@ func parseOptionalInt64(raw string) (int64, bool) {
 		return 0, false
 	}
 	return value, true
+}
+
+func commsMessageRoute(path string) (id int64, action string, ok bool) {
+	prefix := operatorRoute("/comms/messages/")
+	if !strings.HasPrefix(path, prefix) {
+		return 0, "", false
+	}
+	trimmed := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 {
+		return 0, "", false
+	}
+	value, valid := parseOptionalInt64(parts[0])
+	if !valid {
+		return 0, "", false
+	}
+	switch strings.ToLower(strings.TrimSpace(parts[1])) {
+	case "expire", "supersede", "reprepare":
+		return value, strings.ToLower(strings.TrimSpace(parts[1])), true
+	default:
+		return 0, "", false
+	}
 }
 
 func optionalInt64String(value int64) string {
@@ -3327,6 +3484,35 @@ func deliverySummary(row g2sengine.MessageJournalEntry) string {
 		return "-"
 	}
 	return strings.Join(parts, "; ")
+}
+
+func renderCommsLifecycleControls(row g2sengine.MessageJournalEntry, returnQuery string) string {
+	if row.Direction != g2sengine.DirectionOutbound {
+		return "-"
+	}
+	switch row.Result {
+	case g2sengine.MessageResultPrepared, g2sengine.MessageResultPending, g2sengine.MessageResultOffered:
+	default:
+		return "-"
+	}
+	base := "/operator/comms/messages/" + strconv.FormatInt(row.ID, 10)
+	return strings.Join([]string{
+		renderCommsLifecycleForm(base+"/reprepare", "Reprepare", "operator", "operator requested reprepare", returnQuery),
+		renderCommsLifecycleForm(base+"/expire", "Expire", "operator", "operator expired pending delivery", returnQuery),
+		renderCommsLifecycleForm(base+"/supersede", "Supersede", "operator", "operator superseded pending delivery", returnQuery),
+	}, " ")
+}
+
+func renderCommsLifecycleForm(actionURL string, buttonLabel string, actor string, reason string, returnQuery string) string {
+	body := strings.Builder{}
+	if strings.TrimSpace(returnQuery) != "" {
+		actionURL += "?" + returnQuery
+	}
+	body.WriteString(`<form class="inline-form" method="post" action="` + esc(actionURL) + `">`)
+	body.WriteString(`<input type="hidden" name="actor" value="` + esc(actor) + `">`)
+	body.WriteString(`<input type="hidden" name="reason" value="` + esc(reason) + `">`)
+	body.WriteString(`<button type="submit">` + esc(buttonLabel) + `</button></form>`)
+	return body.String()
 }
 
 func auditRelatedEGMID(row audit.AuditTimelineEntry) string {

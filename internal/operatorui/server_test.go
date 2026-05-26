@@ -1076,6 +1076,162 @@ func TestCommsPageRendersPendingLifecycleResults(t *testing.T) {
 	}
 }
 
+func TestCommsPageRendersLifecycleControlsOnlyForPendingRows(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	preparedID, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:       time.Now().UTC(),
+		Direction:       g2sengine.DirectionOutbound,
+		EGMID:           "EGM-001",
+		ActionRunID:     "run-1",
+		ActionStepID:    "step-1",
+		TemplateID:      "template-generic-g2s-action",
+		TemplateVersion: "1",
+		MessageType:     "emergency_broadcast_silence",
+		RawPayload:      "<prepared/>",
+		Result:          g2sengine.MessageResultPrepared,
+	})
+	if err != nil {
+		t.Fatalf("seed prepared row: %v", err)
+	}
+	confirmedID, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:       time.Now().UTC().Add(time.Second),
+		Direction:       g2sengine.DirectionOutbound,
+		EGMID:           "EGM-001",
+		ActionRunID:     "run-1",
+		ActionStepID:    "step-1",
+		TemplateID:      "template-generic-g2s-action",
+		TemplateVersion: "1",
+		MessageType:     "emergency_broadcast_silence",
+		RawPayload:      "<confirmed/>",
+		Result:          g2sengine.MessageResultConfirmed,
+	})
+	if err != nil {
+		t.Fatalf("seed confirmed row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/comms", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "/operator/comms/messages/"+strconv.FormatInt(preparedID, 10)+"/expire") {
+		t.Fatalf("expected expire control for prepared row, body=%s", body)
+	}
+	if strings.Contains(body, "/operator/comms/messages/"+strconv.FormatInt(confirmedID, 10)+"/expire") {
+		t.Fatalf("did not expect expire control for confirmed row, body=%s", body)
+	}
+}
+
+func TestCommsLifecycleControlRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t, ctx)
+	t.Cleanup(func() { st.Close() })
+	seedOperatorData(t, ctx, st)
+	messageID, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		RawPayload:  "<prepared/>",
+		Result:      g2sengine.MessageResultPrepared,
+	})
+	if err != nil {
+		t.Fatalf("seed prepared row: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := NewServer(st, defaultOperatorOptions(), func(w http.ResponseWriter, _ *http.Request) bool {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	})
+	server.RegisterRoutes(mux)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/operator/comms/messages/"+strconv.FormatInt(messageID, 10)+"/expire", strings.NewReader("actor=operator&reason=manual"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=401 body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestCommsLifecycleExpireMutatesRowAndShowsSuccessMessage(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	messageID, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-1",
+		RawPayload:  "<prepared/>",
+		Result:      g2sengine.MessageResultPrepared,
+	})
+	if err != nil {
+		t.Fatalf("seed prepared row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/operator/comms/messages/"+strconv.FormatInt(messageID, 10)+"/expire", strings.NewReader("actor=operator&reason=manual"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Message "+strconv.FormatInt(messageID, 10)+" updated") {
+		t.Fatalf("expected success message, body=%s", res.Body.String())
+	}
+	row, err := st.GetMessageJournalEntry(ctx, messageID)
+	if err != nil {
+		t.Fatalf("get message row: %v", err)
+	}
+	if row == nil || row.Result != g2sengine.MessageResultExpired {
+		t.Fatalf("message result=%v want EXPIRED", row)
+	}
+}
+
+func TestActionsPageShowsWaitingConfirmationPendingSummary(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.CreateActionRun(ctx, actions.ActionRun{
+		ID:                 "run-waiting-1",
+		ActionDefinitionID: "emergency-broadcast-trigger",
+		Status:             actions.RunStatusWaitingConfirmation,
+		StartedAt:          time.Now().UTC(),
+		IncidentID:         "101",
+		TargetCount:        2,
+		ConfirmedCount:     0,
+		FailedCount:        0,
+	}); err != nil {
+		t.Fatalf("create waiting run: %v", err)
+	}
+	if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-001",
+		ActionRunID: "run-waiting-1",
+		RawPayload:  "<prepared/>",
+		Result:      g2sengine.MessageResultPrepared,
+	}); err != nil {
+		t.Fatalf("seed pending row: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/actions", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{"Waiting Confirmation", "run-waiting-1", "View Comms", "Run Pending Delivery Sweep"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/actions body=%s", expected, body)
+		}
+	}
+}
+
 func TestAuditPageRendersInboundAuditRows(t *testing.T) {
 	mux, st := setupOperatorServerWithStore(t)
 	ctx := context.Background()

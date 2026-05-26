@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1614,6 +1615,292 @@ func TestPostPendingDeliverySweepRequiresMutationAuth(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("authorize calls=%d want 1", calls)
+	}
+}
+
+func TestPostPendingDeliveryExpireRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:  time.Now().UTC(),
+		Direction:  g2sengine.DirectionOutbound,
+		EGMID:      "EGM-1",
+		RawPayload: "<prepared/>",
+		Result:     g2sengine.MessageResultPrepared,
+	}); err != nil {
+		t.Fatalf("seed prepared message: %v", err)
+	}
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/1/expire", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d want 1", calls)
+	}
+}
+
+func TestPostPendingDeliverySupersedeRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:  time.Now().UTC(),
+		Direction:  g2sengine.DirectionOutbound,
+		EGMID:      "EGM-1",
+		RawPayload: "<prepared/>",
+		Result:     g2sengine.MessageResultPrepared,
+	}); err != nil {
+		t.Fatalf("seed prepared message: %v", err)
+	}
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/1/supersede", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d want 1", calls)
+	}
+}
+
+func TestPostPendingDeliveryReprepareRequiresMutationAuth(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	if _, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:  time.Now().UTC(),
+		Direction:  g2sengine.DirectionOutbound,
+		EGMID:      "EGM-1",
+		RawPayload: "<offered/>",
+		Result:     g2sengine.MessageResultOffered,
+	}); err != nil {
+		t.Fatalf("seed offered message: %v", err)
+	}
+
+	calls := 0
+	mux := http.NewServeMux()
+	server := &Server{
+		Store: db,
+		AuthorizeMutation: func(_ http.ResponseWriter, _ *http.Request) bool {
+			calls++
+			return false
+		},
+	}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/1/reprepare", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("authorize calls=%d want 1", calls)
+	}
+}
+
+func TestPostPendingDeliveryExpireMutatesPreparedRow(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	id, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<prepared/>",
+		Result:      g2sengine.MessageResultPrepared,
+	})
+	if err != nil {
+		t.Fatalf("seed prepared message: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/"+strconv.FormatInt(id, 10)+"/expire", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	row, err := db.GetMessageJournalEntry(ctx, id)
+	if err != nil {
+		t.Fatalf("get message row: %v", err)
+	}
+	if row == nil || row.Result != g2sengine.MessageResultExpired {
+		t.Fatalf("message result=%v want EXPIRED", row)
+	}
+}
+
+func TestPostPendingDeliveryReprepareMutatesOfferedRow(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	id, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<offered/>",
+		Result:      g2sengine.MessageResultOffered,
+	})
+	if err != nil {
+		t.Fatalf("seed offered message: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/"+strconv.FormatInt(id, 10)+"/reprepare", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	row, err := db.GetMessageJournalEntry(ctx, id)
+	if err != nil {
+		t.Fatalf("get message row: %v", err)
+	}
+	if row == nil || row.Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("message result=%v want PREPARED", row)
+	}
+}
+
+func TestPostPendingDeliverySupersedeConfirmedRowRejected(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	id, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<confirmed/>",
+		Result:      g2sengine.MessageResultConfirmed,
+	})
+	if err != nil {
+		t.Fatalf("seed confirmed message: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/"+strconv.FormatInt(id, 10)+"/supersede", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusConflict, res.Body.String())
+	}
+}
+
+func TestPostPendingDeliveryExpireFailedRowRejected(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	id, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<failed/>",
+		Result:      g2sengine.MessageResultFailed,
+	})
+	if err != nil {
+		t.Fatalf("seed failed message: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/"+strconv.FormatInt(id, 10)+"/expire", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusConflict, res.Body.String())
+	}
+}
+
+func TestPostPendingDeliverySupersedeMutatesPreparedRow(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	id, err := db.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:   time.Now().UTC(),
+		Direction:   g2sengine.DirectionOutbound,
+		EGMID:       "EGM-1",
+		ActionRunID: "run-1",
+		RawPayload:  "<prepared/>",
+		Result:      g2sengine.MessageResultPrepared,
+	})
+	if err != nil {
+		t.Fatalf("seed prepared message: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/"+strconv.FormatInt(id, 10)+"/supersede", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	row, err := db.GetMessageJournalEntry(ctx, id)
+	if err != nil {
+		t.Fatalf("get message row: %v", err)
+	}
+	if row == nil || row.Result != g2sengine.MessageResultSuperseded {
+		t.Fatalf("message result=%v want SUPERSEDED", row)
+	}
+}
+
+func TestPostPendingDeliveryMessageMutationInvalidIDReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, AuthorizeMutation: allowMutation}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/pending-delivery/messages/999/expire", bytes.NewReader([]byte(`{"actor":"operator","reason":"manual"}`)))
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusNotFound, res.Body.String())
 	}
 }
 

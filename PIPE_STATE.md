@@ -21,10 +21,10 @@ Repo state and installed runtime state are separate.
 - Pi repo HEAD: unknown
 - Pi runtime revision: unknown
 - Runtime service: g2s-mute.service
-- Current PC task: Config-backed pending-delivery sweep runtime.
+- Current PC task: Operator pending delivery lifecycle controls.
 - Current Pi task: one-version-behind deploy/verify only.
 - Last proven runtime flow: HOST_LISTENER prepared/pending flow, manual-clear return action, inbound confirmation, exports.
-- Open blocker: waiting-confirmation lifecycle should be automated/config-backed.
+- Open blocker: operator control for stale pending delivery lifecycle.
 
 ## Pipeline
 1. PC codes and pushes.
