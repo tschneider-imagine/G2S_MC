@@ -5,6 +5,7 @@ import (
 
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/configvalidation"
 	"github.com/tschneider-imagine/G2S_MC/internal/deliverycheck"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
@@ -88,6 +89,7 @@ type RuntimeInfoResponse struct {
 }
 
 type MessageDeliveryCheckResponse = deliverycheck.CheckResult
+type ConfigValidationResponse = configvalidation.Result
 
 type TemplatesListResponse struct {
 	Templates []templates.G2STemplate `json:"templates"`

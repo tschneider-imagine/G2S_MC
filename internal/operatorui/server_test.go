@@ -1657,6 +1657,21 @@ func TestTemplatesPageRendersTemplateRowsActiveVersionAndActionKeys(t *testing.T
 	}
 }
 
+func TestOperatorPagesRenderConfigurationValidationSummary(t *testing.T) {
+	mux := setupOperatorServer(t)
+	for _, path := range []string{"/operator/actions", "/operator/templates", "/operator/egms"} {
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		mux.ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, res.Code, res.Body.String())
+		}
+		if !strings.Contains(res.Body.String(), "Configuration Validation") {
+			t.Fatalf("expected configuration validation summary on %s", path)
+		}
+	}
+}
+
 func TestPostTemplatesCreatesOrUpsertsTemplate(t *testing.T) {
 	mux, st := setupOperatorServerWithStore(t)
 	body := url.Values{
@@ -1717,6 +1732,44 @@ func TestPostTemplateVersionCreatesVersionWithActionsAndMatchers(t *testing.T) {
 	}
 	if strings.TrimSpace(versionRow.ConfirmationRulesJSON) == "" || strings.TrimSpace(versionRow.FailureRulesJSON) == "" || strings.TrimSpace(versionRow.ActionsJSON) == "" {
 		t.Fatalf("expected matcher/actions json saved: %+v", *versionRow)
+	}
+}
+
+func TestPostTemplateVersionBlocksActiveVersionOverwriteWhenInUse(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	before, err := st.GetG2STemplateVersion(ctx, "template-generic-g2s-action", 1)
+	if err != nil {
+		t.Fatalf("get before version: %v", err)
+	}
+	if before == nil {
+		t.Fatal("expected active template version")
+	}
+
+	body := url.Values{
+		"version_label": {"1"},
+		"actions_json":  {`{"actions":{"emergency_broadcast_silence":{"message_type":"NOTICE","payload_template":"<changed/>"}}}`},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/operator/templates/template-generic-g2s-action/versions", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "active template version is in use") {
+		t.Fatalf("expected overwrite block error, body=%s", res.Body.String())
+	}
+
+	after, err := st.GetG2STemplateVersion(ctx, "template-generic-g2s-action", 1)
+	if err != nil {
+		t.Fatalf("get after version: %v", err)
+	}
+	if after == nil {
+		t.Fatal("expected version row after blocked update")
+	}
+	if after.ActionsJSON != before.ActionsJSON {
+		t.Fatalf("expected active version unchanged")
 	}
 }
 

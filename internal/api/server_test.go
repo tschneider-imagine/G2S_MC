@@ -1152,6 +1152,73 @@ func TestGetRuntimeReturnsBuildAndRuntimeFields(t *testing.T) {
 	}
 }
 
+func TestGetConfigValidationReturnsJSON(t *testing.T) {
+	ctx := context.Background()
+	db := newTestStore(t, ctx)
+	defer db.Close()
+	seedDeliveryCheckFixtures(t, ctx, db)
+	if err := db.UpsertEGMGroup(ctx, egms.EGMGroup{
+		ID:     "group-main-floor",
+		Name:   "Main Floor",
+		EGMIDs: []string{"EGM-001"},
+	}); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+	if err := db.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "emergency-broadcast-trigger",
+		Name:             "Emergency Broadcast Trigger",
+		Severity:         actions.SeverityEmergency,
+		Enabled:          true,
+		TargetSelector:   "GROUP:group-main-floor",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-1",
+			Name:              "Emergency Silence",
+			Sequence:          0,
+			TemplateActionKey: "emergency_broadcast_silence",
+		}},
+		ReturnActionID: "emergency-broadcast-normal",
+		Version:        1,
+	}); err != nil {
+		t.Fatalf("seed action: %v", err)
+	}
+	if err := db.UpsertActionDefinition(ctx, actions.ActionDefinition{
+		ID:               "emergency-broadcast-normal",
+		Name:             "Emergency Broadcast Normal",
+		Severity:         actions.SeverityRestore,
+		Enabled:          true,
+		TargetSelector:   "GROUP:group-main-floor",
+		TemplateSelector: "template-by-egm",
+		Steps: []actions.ActionStep{{
+			ID:                "step-1",
+			Name:              "Emergency Restore",
+			Sequence:          0,
+			TemplateActionKey: "emergency_broadcast_silence",
+		}},
+		Version: 1,
+	}); err != nil {
+		t.Fatalf("seed return action: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	server := &Server{Store: db, DeliveryTopology: string(g2stransport.DeliveryTopologyHostListener)}
+	server.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/config-validation", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var payload ConfigValidationResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if strings.TrimSpace(payload.Status) == "" {
+		t.Fatalf("expected status in payload: %+v", payload)
+	}
+}
+
 func TestPostMessageDeliveryCheckReadOnlyReturnsJSONAndIsNonMutating(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)

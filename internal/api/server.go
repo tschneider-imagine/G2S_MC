@@ -14,6 +14,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actionplanner"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/configvalidation"
 	"github.com/tschneider-imagine/G2S_MC/internal/deliverycheck"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
@@ -51,6 +52,7 @@ type Store interface {
 	GetActiveG2STemplateVersion(ctx context.Context, templateID string) (*templates.G2STemplateVersion, error)
 	UpsertG2STemplate(ctx context.Context, tpl templates.G2STemplate) error
 	ListG2STemplates(ctx context.Context) ([]templates.G2STemplate, error)
+	ListG2STemplateVersions(ctx context.Context, templateID string) ([]templates.G2STemplateVersion, error)
 
 	GetEGMRecord(ctx context.Context, egmID string) (*egms.EGMRecord, error)
 	UpsertEGMRecord(ctx context.Context, record egms.EGMRecord) error
@@ -117,6 +119,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/comms/messages", s.handleMessages)
 	mux.HandleFunc("/api/v2/audit/timeline", s.handleTimeline)
 	mux.HandleFunc("/api/v2/runtime", s.handleRuntime)
+	mux.HandleFunc("/api/v2/config-validation", s.handleConfigValidation)
 	mux.HandleFunc("/api/v2/settings/message-delivery-check", s.handleMessageDeliveryCheck)
 	mux.HandleFunc("/api/v2/pending-delivery", s.handlePendingDelivery)
 	mux.HandleFunc("/api/v2/pending-delivery/sweep", s.handlePendingDeliverySweep)
@@ -755,6 +758,25 @@ func (s *Server) handleRuntime(w http.ResponseWriter, r *http.Request) {
 		DatabasePath:  strings.TrimSpace(s.RuntimeInfo.DatabasePath),
 		BindAddress:   strings.TrimSpace(s.RuntimeInfo.BindAddress),
 	})
+}
+
+func (s *Server) handleConfigValidation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	validator := configvalidation.Service{
+		Store: s.Store,
+		Options: configvalidation.Options{
+			DeliveryTopology: s.DeliveryTopology,
+		},
+	}
+	result, err := validator.Validate(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleMessageDeliveryCheck(w http.ResponseWriter, r *http.Request) {

@@ -18,6 +18,7 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/actionruntime"
 	"github.com/tschneider-imagine/G2S_MC/internal/actions"
 	"github.com/tschneider-imagine/G2S_MC/internal/audit"
+	"github.com/tschneider-imagine/G2S_MC/internal/configvalidation"
 	"github.com/tschneider-imagine/G2S_MC/internal/deliverycheck"
 	"github.com/tschneider-imagine/G2S_MC/internal/egms"
 	"github.com/tschneider-imagine/G2S_MC/internal/g2sengine"
@@ -984,10 +985,22 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		s.renderError(w, "/operator/actions", "Operator Console Actions", err)
 		return
 	}
+	validationResult, err := s.runConfigurationValidation(r.Context())
+	if err != nil {
+		s.renderError(w, "/operator/actions", "Operator Console Actions", err)
+		return
+	}
+	actionValidationByID := map[string]configvalidation.ItemResult{}
+	if validationResult != nil {
+		for _, row := range validationResult.Actions {
+			actionValidationByID[row.ID] = row
+		}
+	}
 	planner := actionplanner.Planner{Store: s.Store}
 	body := strings.Builder{}
+	body.WriteString(renderConfigurationValidationPanel(validationResult, "actions"))
 	body.WriteString(`<div class="panel"><h2>Action Definitions</h2><table>`)
-	body.WriteString(`<tr><th>ID</th><th>Name</th><th>Severity</th><th>Enabled</th><th>Target Selector</th><th>Template Selector</th><th>Template Action Key</th><th>Return Action</th><th>Retry Count</th><th>Retry Delay (ms)</th><th>Escalation Action</th><th>Escalation After Attempts</th><th>Target Preview</th><th>Edit</th></tr>`)
+	body.WriteString(`<tr><th>ID</th><th>Name</th><th>Severity</th><th>Enabled</th><th>Target Selector</th><th>Template Selector</th><th>Template Action Key</th><th>Return Action</th><th>Retry Count</th><th>Retry Delay (ms)</th><th>Escalation Action</th><th>Escalation After Attempts</th><th>Target Preview</th><th>Configuration Validation</th><th>Edit</th></tr>`)
 	for _, definition := range definitions {
 		stepKeys := []string{}
 		for _, step := range definition.Steps {
@@ -1042,6 +1055,7 @@ func (s *Server) renderActionsPage(w http.ResponseWriter, r *http.Request, messa
 		body.WriteString(`<td class="mono">` + esc(escalationPolicy.ActionID) + `</td>`)
 		body.WriteString(`<td>` + esc(strconv.Itoa(escalationPolicy.AfterAttempts)) + `</td>`)
 		body.WriteString(`<td><details><summary>summary</summary><pre>` + esc(previewSummary) + `</pre></details><a href="/api/v2/actions/` + esc(definition.ID) + `/preview" target="_blank" rel="noreferrer">View API Preview</a></td>`)
+		body.WriteString(`<td>` + esc(renderConfigValidationCell(actionValidationByID[definition.ID])) + `</td>`)
 		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/actions/` + esc(definition.ID) + `">`)
 		body.WriteString(`<input type="hidden" name="id" value="` + esc(definition.ID) + `">`)
 		body.WriteString(`name <input type="text" name="name" value="` + esc(definition.Name) + `" style="width:140px"> `)
@@ -1475,6 +1489,21 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
 		return
 	}
+	validationResult, err := s.runConfigurationValidation(r.Context())
+	if err != nil {
+		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
+		return
+	}
+	egmValidationByID := map[string]configvalidation.ItemResult{}
+	groupValidationByID := map[string]configvalidation.ItemResult{}
+	if validationResult != nil {
+		for _, row := range validationResult.EGMs {
+			egmValidationByID[row.ID] = row
+		}
+		for _, row := range validationResult.Groups {
+			groupValidationByID[row.ID] = row
+		}
+	}
 	templatesList, err := s.Store.ListG2STemplates(r.Context())
 	if err != nil {
 		s.renderError(w, "/operator/egms", "Operator Console EGMs", err)
@@ -1524,6 +1553,7 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 	}
 
 	body := strings.Builder{}
+	body.WriteString(renderConfigurationValidationPanel(validationResult, "egms"))
 	body.WriteString(`<div class="panel"><h2>EGM Registry</h2><p><a href="/operator/egms/export">Export Registry</a></p><table>`)
 	body.WriteString(`<tr><th>EGM ID</th><th>Cabinet</th><th>IP Address</th><th>Endpoint</th><th>Vendor</th><th>Cabinet Family</th><th>Game Title</th><th>Software Version</th><th>Zone</th><th>Enabled</th><th>Emergency Enabled</th><th>Template</th><th>Groups</th><th>Current Action State</th><th>Last Seen</th><th>Notes</th><th>Status</th><th>Edit</th></tr>`)
 	for _, record := range records {
@@ -1533,6 +1563,10 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 		}
 		if !record.Enabled && record.EmergencyEnabled {
 			warnings = append(warnings, "Emergency participation requires Enabled.")
+		}
+		if validation := egmValidationByID[record.EGMID]; len(validation.Warnings) > 0 || len(validation.Errors) > 0 {
+			warnings = append(warnings, validation.Errors...)
+			warnings = append(warnings, validation.Warnings...)
 		}
 		body.WriteString(`<tr>`)
 		body.WriteString(`<td class="mono">` + esc(record.EGMID) + `</td>`)
@@ -1600,6 +1634,10 @@ func (s *Server) renderEGMsPage(w http.ResponseWriter, r *http.Request, message 
 			groupWarnings := []string{}
 			if missing := groupMissingMembers[group.ID]; len(missing) > 0 {
 				groupWarnings = append(groupWarnings, "Unknown members: "+strings.Join(missing, ", "))
+			}
+			if validation := groupValidationByID[group.ID]; len(validation.Warnings) > 0 || len(validation.Errors) > 0 {
+				groupWarnings = append(groupWarnings, validation.Errors...)
+				groupWarnings = append(groupWarnings, validation.Warnings...)
 			}
 			body.WriteString(`<tr>`)
 			body.WriteString(`<td class="mono">` + esc(group.ID) + `</td>`)
@@ -1795,6 +1833,31 @@ func (s *Server) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
 		if err := validateTemplateVersionPayload(row); err != nil {
 			s.renderTemplatesPage(w, r, "", err.Error(), nil)
 			return
+		}
+		templateRow, getTemplateErr := s.Store.GetG2STemplate(r.Context(), templateID)
+		if getTemplateErr != nil {
+			s.renderTemplatesPage(w, r, "", getTemplateErr.Error(), nil)
+			return
+		}
+		existingVersion, getVersionErr := s.Store.GetG2STemplateVersion(r.Context(), templateID, versionValue)
+		if getVersionErr != nil {
+			s.renderTemplatesPage(w, r, "", getVersionErr.Error(), nil)
+			return
+		}
+		if existingVersion != nil && templateRow != nil {
+			current := strings.TrimSpace(templateRow.CurrentVersionID)
+			isActiveVersion := strings.EqualFold(current, strings.TrimSpace(existingVersion.VersionLabel)) || strings.EqualFold(current, strings.TrimSpace(existingVersion.ID))
+			if isActiveVersion {
+				inUse, usageErr := configvalidation.ActiveTemplateVersionInUse(r.Context(), s.Store, templateID, existingVersion.VersionLabel)
+				if usageErr != nil {
+					s.renderTemplatesPage(w, r, "", usageErr.Error(), nil)
+					return
+				}
+				if inUse {
+					s.renderTemplatesPage(w, r, "", "active template version is in use; create a new version instead of overwriting the active version", nil)
+					return
+				}
+			}
 		}
 		if err := s.Store.UpsertG2STemplateVersion(r.Context(), row); err != nil {
 			s.renderTemplatesPage(w, r, "", err.Error(), nil)
@@ -2013,6 +2076,17 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 		s.renderError(w, "/operator/templates", "Operator Console Templates", err)
 		return
 	}
+	validationResult, err := s.runConfigurationValidation(r.Context())
+	if err != nil {
+		s.renderError(w, "/operator/templates", "Operator Console Templates", err)
+		return
+	}
+	templateValidationByID := map[string]configvalidation.ItemResult{}
+	if validationResult != nil {
+		for _, row := range validationResult.Templates {
+			templateValidationByID[row.ID] = row
+		}
+	}
 	versionsByTemplate := map[string][]templates.G2STemplateVersion{}
 	for _, tpl := range templateRows {
 		rows, err := s.Store.ListG2STemplateVersions(r.Context(), tpl.ID)
@@ -2024,8 +2098,9 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 	}
 
 	body := strings.Builder{}
+	body.WriteString(renderConfigurationValidationPanel(validationResult, "templates"))
 	body.WriteString(`<div class="panel"><h2>Templates</h2><table>`)
-	body.WriteString(`<tr><th>Template ID</th><th>Name</th><th>Vendor</th><th>Status</th><th>Active Version</th><th>Version Count</th><th>ActionsJSON</th><th>Expected Response Matcher</th><th>Failure Matcher</th><th>Action Keys</th><th>Edit</th></tr>`)
+	body.WriteString(`<tr><th>Template ID</th><th>Name</th><th>Vendor</th><th>Status</th><th>Active Version</th><th>Version Count</th><th>ActionsJSON</th><th>Expected Response Matcher</th><th>Failure Matcher</th><th>Action Keys</th><th>Configuration Validation</th><th>Edit</th></tr>`)
 	for _, tpl := range templateRows {
 		versionRows := versionsByTemplate[tpl.ID]
 		versionLabels := make([]string, 0, len(versionRows))
@@ -2060,6 +2135,7 @@ func (s *Server) renderTemplatesPage(w http.ResponseWriter, r *http.Request, mes
 		body.WriteString(`<td>` + yesNo(activeHasExpectedMatcher) + `</td>`)
 		body.WriteString(`<td>` + yesNo(activeHasFailureMatcher) + `</td>`)
 		body.WriteString(`<td class="mono">` + esc(defaultString(strings.Join(activeActionKeys, ", "), "-")) + `</td>`)
+		body.WriteString(`<td>` + esc(renderConfigValidationCell(templateValidationByID[tpl.ID])) + `</td>`)
 		body.WriteString(`<td><form class="inline-form" method="post" action="/operator/templates/` + esc(tpl.ID) + `">`)
 		body.WriteString(`<label>Name <input type="text" name="name" value="` + esc(tpl.Name) + `" style="width:120px"></label>`)
 		body.WriteString(`<label>Vendor <input type="text" name="vendor" value="` + esc(tpl.Vendor) + `" style="width:100px"></label>`)
@@ -3343,6 +3419,89 @@ func encodeSummaryJSON(payload map[string]any) string {
 		return "{}"
 	}
 	return string(raw)
+}
+
+func (s *Server) runConfigurationValidation(ctx context.Context) (*configvalidation.Result, error) {
+	validator := configvalidation.Service{
+		Store: s.Store,
+		Options: configvalidation.Options{
+			DeliveryTopology: s.Options.DeliveryTopology,
+		},
+	}
+	result, err := validator.Validate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func renderConfigurationValidationPanel(result *configvalidation.Result, section string) string {
+	if result == nil {
+		return ""
+	}
+	body := strings.Builder{}
+	body.WriteString(`<div class="panel"><h2>Configuration Validation</h2>`)
+	body.WriteString(`<p>Status: <span class="mono">` + esc(result.Status) + `</span></p>`)
+	counts := countValidationSection(result, section)
+	body.WriteString(`<p>Valid ` + esc(strconv.Itoa(counts.OK)) + ` | Warning ` + esc(strconv.Itoa(counts.Warn)) + ` | Error ` + esc(strconv.Itoa(counts.Error)) + `</p>`)
+	body.WriteString(`</div>`)
+	return body.String()
+}
+
+type validationCounts struct {
+	OK    int
+	Warn  int
+	Error int
+}
+
+func countValidationSection(result *configvalidation.Result, section string) validationCounts {
+	rows := []configvalidation.ItemResult{}
+	switch strings.ToLower(strings.TrimSpace(section)) {
+	case "actions":
+		rows = result.Actions
+	case "templates":
+		rows = result.Templates
+	case "egms":
+		rows = append(rows, result.EGMs...)
+		rows = append(rows, result.Groups...)
+	default:
+		rows = append(rows, result.Actions...)
+		rows = append(rows, result.Templates...)
+		rows = append(rows, result.EGMs...)
+		rows = append(rows, result.Groups...)
+	}
+	counts := validationCounts{}
+	for _, row := range rows {
+		switch row.Status {
+		case configvalidation.StatusError:
+			counts.Error++
+		case configvalidation.StatusWarn:
+			counts.Warn++
+		default:
+			counts.OK++
+		}
+	}
+	return counts
+}
+
+func renderConfigValidationCell(row configvalidation.ItemResult) string {
+	status := strings.TrimSpace(row.Status)
+	if status == "" {
+		return "Valid"
+	}
+	if len(row.Errors) > 0 {
+		return "Error: " + strings.Join(row.Errors, "; ")
+	}
+	if len(row.Warnings) > 0 {
+		return "Warning: " + strings.Join(row.Warnings, "; ")
+	}
+	if status == configvalidation.StatusWarn {
+		return "Warning"
+	}
+	if status == configvalidation.StatusError {
+		return "Error"
+	}
+	return "Valid"
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
