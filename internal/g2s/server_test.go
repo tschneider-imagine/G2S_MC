@@ -34,14 +34,17 @@ func TestCommsOnlineUpdatesEngine(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "commsSyncAck") {
-		t.Fatalf("expected commsSyncAck, got %s", body)
+	if !strings.Contains(body, "commsOnLineAck") {
+		t.Fatalf("expected commsOnLineAck, got %s", body)
 	}
 	if !strings.Contains(body, `xmlns:g2s="http://www.gamingstandards.com/g2s/schemas/v1.0.3"`) {
 		t.Fatalf("expected g2s namespace, got %s", body)
 	}
 	if !strings.Contains(body, `syncTimer="30000"`) {
 		t.Fatalf("expected syncTimer=30000, got %s", body)
+	}
+	if strings.Contains(body, "g2sResponse") {
+		t.Fatalf("unexpected g2sResponse wrapper in %s", body)
 	}
 	if strings.Contains(body, "commsOnLineResponse") {
 		t.Fatalf("unexpected commsOnLineResponse in %s", body)
@@ -81,8 +84,8 @@ func TestCommsOnlineDiscoversUnknownEGM(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "commsSyncAck") {
-		t.Fatalf("expected commsSyncAck, got %s", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), "commsOnLineAck") {
+		t.Fatalf("expected commsOnLineAck, got %s", rr.Body.String())
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -119,8 +122,12 @@ func TestKeepAliveDiscoversUnknownEGM(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "keepAliveAck") {
-		t.Fatalf("expected keepAliveAck, got %s", rr.Body.String())
+	body := rr.Body.String()
+	if !strings.Contains(body, "keepAliveAck") {
+		t.Fatalf("expected keepAliveAck, got %s", body)
+	}
+	if strings.Contains(body, "g2sResponse") {
+		t.Fatalf("unexpected g2sResponse wrapper in %s", body)
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -238,8 +245,11 @@ func TestInboundProcessorErrorDoesNotBreakG2SResponse(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "commsSyncAck") {
-		t.Fatalf("expected commsSyncAck, got %s", body)
+	if !strings.Contains(body, "commsOnLineAck") {
+		t.Fatalf("expected commsOnLineAck, got %s", body)
+	}
+	if strings.Contains(body, "g2sResponse") {
+		t.Fatalf("unexpected g2sResponse wrapper in %s", body)
 	}
 	if strings.Contains(body, "commsOnLineResponse") {
 		t.Fatalf("unexpected commsOnLineResponse in %s", body)
@@ -272,8 +282,11 @@ func TestCommsOnlineSOAPInboundGetsSOAPResponse(t *testing.T) {
 	if !strings.Contains(body, "<soap:Envelope") {
 		t.Fatalf("expected SOAP envelope, got %s", body)
 	}
-	if !strings.Contains(body, "commsSyncAck") {
-		t.Fatalf("expected commsSyncAck, got %s", body)
+	if !strings.Contains(body, "commsOnLineAck") {
+		t.Fatalf("expected commsOnLineAck, got %s", body)
+	}
+	if strings.Contains(body, "g2sResponse") {
+		t.Fatalf("unexpected g2sResponse wrapper in %s", body)
 	}
 	if strings.Contains(body, "commsOnLineResponse") {
 		t.Fatalf("unexpected commsOnLineResponse in %s", body)
