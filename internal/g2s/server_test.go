@@ -33,8 +33,18 @@ func TestCommsOnlineUpdatesEngine(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "commsOnLineAck") {
-		t.Fatalf("expected commsOnLineAck, got %s", rr.Body.String())
+	body := rr.Body.String()
+	if !strings.Contains(body, "commsSyncAck") {
+		t.Fatalf("expected commsSyncAck, got %s", body)
+	}
+	if !strings.Contains(body, `xmlns:g2s="http://www.gamingstandards.com/g2s/schemas/v1.0.3"`) {
+		t.Fatalf("expected g2s namespace, got %s", body)
+	}
+	if !strings.Contains(body, `syncTimer="30000"`) {
+		t.Fatalf("expected syncTimer=30000, got %s", body)
+	}
+	if strings.Contains(body, "commsOnLineResponse") {
+		t.Fatalf("unexpected commsOnLineResponse in %s", body)
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -71,6 +81,9 @@ func TestCommsOnlineDiscoversUnknownEGM(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
+	if !strings.Contains(rr.Body.String(), "commsSyncAck") {
+		t.Fatalf("expected commsSyncAck, got %s", rr.Body.String())
+	}
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -105,6 +118,9 @@ func TestKeepAliveDiscoversUnknownEGM(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "keepAliveAck") {
+		t.Fatalf("expected keepAliveAck, got %s", rr.Body.String())
 	}
 
 	deadline := time.Now().Add(time.Second)
@@ -221,8 +237,46 @@ func TestInboundProcessorErrorDoesNotBreakG2SResponse(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "commsOnLineAck") {
-		t.Fatalf("expected commsOnLineAck, got %s", rr.Body.String())
+	body := rr.Body.String()
+	if !strings.Contains(body, "commsSyncAck") {
+		t.Fatalf("expected commsSyncAck, got %s", body)
+	}
+	if strings.Contains(body, "commsOnLineResponse") {
+		t.Fatalf("unexpected commsOnLineResponse in %s", body)
+	}
+}
+
+func TestCommsOnlineSOAPInboundGetsSOAPResponse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
+
+	soapReq := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">` +
+		`<soap:Body><g2sBody egmId="EGM-1"><commsOnLine/></g2sBody></soap:Body>` +
+		`</soap:Envelope>`
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(soapReq))
+	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "<soap:Envelope") {
+		t.Fatalf("expected SOAP envelope, got %s", body)
+	}
+	if !strings.Contains(body, "commsSyncAck") {
+		t.Fatalf("expected commsSyncAck, got %s", body)
+	}
+	if strings.Contains(body, "commsOnLineResponse") {
+		t.Fatalf("unexpected commsOnLineResponse in %s", body)
 	}
 }
 

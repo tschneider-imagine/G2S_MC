@@ -14,6 +14,8 @@ import (
 	"github.com/tschneider-imagine/G2S_MC/internal/inbound"
 )
 
+const g2sSchemaNamespace = "http://www.gamingstandards.com/g2s/schemas/v1.0.3"
+
 type Server struct {
 	hostID   string
 	engine   *engine.Engine
@@ -94,7 +96,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			SourceIP:   sourceIP,
 			SourcePort: sourcePort,
 		})
-		writeSOAP(w, "commsOnLineAck", s.hostID, egmID, inboundResult.OfferedMessage)
+		writeSOAP(w, `g2s:commsSyncAck xmlns:g2s="`+g2sSchemaNamespace+`" syncTimer="30000"`, s.hostID, egmID, inboundResult.OfferedMessage)
 	case strings.Contains(message, "keepAlive"):
 		s.engine.Submit(engine.Event{
 			Type:       engine.EventKeepAlive,
