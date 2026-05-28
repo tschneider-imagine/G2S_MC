@@ -276,8 +276,11 @@ func TestFallbackEGMIDFromSourceIP(t *testing.T) {
 }
 
 type fakeInboundProcessor struct {
-	calls []inbound.InboundMessage
-	err   error
+	calls          []inbound.InboundMessage
+	outboundCalls  []inbound.OutboundResponse
+	err            error
+	processResult  inbound.ProcessResult
+	recordOutbound error
 }
 
 func (f *fakeInboundProcessor) Process(_ context.Context, message inbound.InboundMessage) (inbound.ProcessResult, error) {
@@ -285,7 +288,19 @@ func (f *fakeInboundProcessor) Process(_ context.Context, message inbound.Inboun
 	if f.err != nil {
 		return inbound.ProcessResult{}, f.err
 	}
+	if f.processResult.MessageID != 0 || strings.TrimSpace(f.processResult.EGMID) != "" || strings.TrimSpace(f.processResult.ActionRunID) != "" || f.processResult.OfferedMessage != nil {
+		result := f.processResult
+		if strings.TrimSpace(result.EGMID) == "" {
+			result.EGMID = message.EGMID
+		}
+		return result, nil
+	}
 	return inbound.ProcessResult{MessageID: 1, EGMID: message.EGMID}, nil
+}
+
+func (f *fakeInboundProcessor) RecordOutboundResponse(_ context.Context, response inbound.OutboundResponse) error {
+	f.outboundCalls = append(f.outboundCalls, response)
+	return f.recordOutbound
 }
 
 func TestInboundProcessorReceivesMessageMetadata(t *testing.T) {
@@ -355,6 +370,104 @@ func TestInboundProcessorErrorDoesNotBreakG2SResponse(t *testing.T) {
 	}
 	if strings.Contains(body, "commsOnLineResponse") {
 		t.Fatalf("unexpected commsOnLineResponse in %s", body)
+	}
+}
+
+func TestG2SResponseRecordedAsOutbound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	server := NewServer("HOST-1", eng)
+	processor := &fakeInboundProcessor{
+		processResult: inbound.ProcessResult{
+			MessageID:   9001,
+			EGMID:       "EGM-1",
+			ActionRunID: "run-1",
+		},
+	}
+	server.SetInboundProcessor(processor)
+	server.RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-1"><keepAlive/></g2sBody>`))
+	req.RemoteAddr = "192.168.10.10:9443"
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	if len(processor.outboundCalls) != 1 {
+		t.Fatalf("outbound calls=%d want 1", len(processor.outboundCalls))
+	}
+	captured := processor.outboundCalls[0]
+	if captured.MessageType != "keepAliveAck" {
+		t.Fatalf("message_type=%q want keepAliveAck", captured.MessageType)
+	}
+	if captured.RelatedMessageID != 9001 {
+		t.Fatalf("related_message_id=%d want 9001", captured.RelatedMessageID)
+	}
+	if captured.FromEndpoint != "/g2s" || captured.ToEndpoint != "192.168.10.10:9443" {
+		t.Fatalf("endpoints from=%q to=%q", captured.FromEndpoint, captured.ToEndpoint)
+	}
+	if captured.TransportMode != "HOST_LISTENER" {
+		t.Fatalf("transport_mode=%q", captured.TransportMode)
+	}
+	if !strings.Contains(captured.RawPayload, "keepAliveAck") {
+		t.Fatalf("payload missing keepAliveAck: %s", captured.RawPayload)
+	}
+}
+
+func TestG2SOutboundRecordIncludesOfferedMetadata(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	server := NewServer("HOST-1", eng)
+	processor := &fakeInboundProcessor{
+		processResult: inbound.ProcessResult{
+			MessageID:   1001,
+			EGMID:       "EGM-1",
+			ActionRunID: "run-1",
+			OfferedMessage: &inbound.OfferedMessage{
+				MessageID:       77,
+				ActionRunID:     "run-1",
+				ActionStepID:    "step-2",
+				TemplateID:      "template-generic-g2s-action",
+				TemplateVersion: "3",
+				MessageType:     "NOTICE",
+				RawPayload:      "<command>silence</command>",
+				OfferedAt:       time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC),
+				OfferCount:      2,
+			},
+		},
+	}
+	server.SetInboundProcessor(processor)
+	server.RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-1"><keepAlive/></g2sBody>`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	if len(processor.outboundCalls) != 1 {
+		t.Fatalf("outbound calls=%d want 1", len(processor.outboundCalls))
+	}
+	captured := processor.outboundCalls[0]
+	if captured.OfferedMessageID != 77 {
+		t.Fatalf("offered_message_id=%d want 77", captured.OfferedMessageID)
+	}
+	if captured.ActionStepID != "step-2" {
+		t.Fatalf("action_step_id=%q want step-2", captured.ActionStepID)
+	}
+	if captured.TemplateID != "template-generic-g2s-action" || captured.TemplateVersion != "3" {
+		t.Fatalf("template ref=%s@%s", captured.TemplateID, captured.TemplateVersion)
 	}
 }
 

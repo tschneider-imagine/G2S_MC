@@ -161,6 +161,8 @@ func NewServer(store Store, options Options, authorizeMutation func(http.Respons
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(operatorRoute(""), s.handleHome)
 	mux.HandleFunc(operatorRoute("/live.json"), s.handleLiveJSON)
+	mux.HandleFunc(operatorRoute("/live"), s.handleLiveMessages)
+	mux.HandleFunc(operatorRoute("/live/messages.json"), s.handleLiveMessagesJSON)
 	mux.HandleFunc(operatorRoute("/inputs"), s.handleInputs)
 	mux.HandleFunc(operatorRoute("/inputs/live.json"), s.handleInputLiveJSON)
 	mux.HandleFunc(operatorRoute("/inputs/fragments/transitions"), s.handleInputTransitionsFragment)
@@ -229,6 +231,81 @@ func (s *Server) handleLiveJSON(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(view); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+type liveMessageFeed struct {
+	GeneratedAt time.Time                       `json:"generated_at"`
+	Rows        []g2sengine.MessageJournalEntry `json:"rows"`
+	MaxID       int64                           `json:"max_id"`
+}
+
+func (s *Server) handleLiveMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rows, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: 120})
+	if err != nil {
+		s.renderError(w, operatorRoute("/live"), "Operator Live Messages", err)
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+
+	body := strings.Builder{}
+	body.WriteString(`<div class="panel"><h2>Live Messages</h2>`)
+	body.WriteString(`<p>Inbound and outbound messages update automatically.</p>`)
+	body.WriteString(`<p class="live-update-status ok" id="live-messages-status">Live update active</p>`)
+	body.WriteString(`<table><thead><tr><th>Timestamp</th><th>Direction</th><th>From</th><th>To</th><th>EGM ID</th><th>Action Run</th><th>Message Type</th><th>Result</th><th>Payload</th></tr></thead><tbody id="live-messages-body">`)
+	if len(rows) == 0 {
+		body.WriteString(`<tr class="live-messages-empty"><td colspan="9">No messages yet.</td></tr>`)
+	} else {
+		for _, row := range rows {
+			body.WriteString(renderLiveStreamMessageRow(row))
+		}
+	}
+	body.WriteString(`</tbody></table></div>`)
+	body.WriteString(liveMessagesScript())
+	s.renderPage(w, operatorRoute("/live"), "Operator Live Messages", body.String(), "", "")
+}
+
+func (s *Server) handleLiveMessagesJSON(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	limit := queryLimit(r, 200)
+	if limit > 2000 {
+		limit = 2000
+	}
+	sinceID, _ := parseOptionalInt64(r.URL.Query().Get("since_id"))
+
+	rows, err := s.Store.ListMessageJournalEntries(r.Context(), store.MessageJournalListQuery{Limit: limit})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	filtered := make([]g2sengine.MessageJournalEntry, 0, len(rows))
+	maxID := int64(0)
+	for _, row := range rows {
+		if row.ID > maxID {
+			maxID = row.ID
+		}
+		if sinceID > 0 && row.ID <= sinceID {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].ID < filtered[j].ID })
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(liveMessageFeed{
+		GeneratedAt: time.Now().UTC(),
+		Rows:        filtered,
+		MaxID:       maxID,
+	})
 }
 
 func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
@@ -3971,7 +4048,7 @@ func (s *Server) renderPage(w http.ResponseWriter, active string, title string, 
 	htmlText.WriteString(esc(title))
 	htmlText.WriteString(`</title><link rel="stylesheet" href="` + operatorCSSRoute + `"></head><body>`)
 	htmlText.WriteString(`<header><h1>Operator Console</h1><nav>`)
-	htmlText.WriteString(navLink(operatorRoute(""), "Live", active))
+	htmlText.WriteString(navLink(operatorRoute(""), "Status", active))
 	htmlText.WriteString(navLink(operatorRoute("/inputs"), "Inputs", active))
 	htmlText.WriteString(navLink(operatorRoute("/actions"), "Actions", active))
 	htmlText.WriteString(navLink(operatorRoute("/comms"), "Comms", active))
@@ -3979,6 +4056,7 @@ func (s *Server) renderPage(w http.ResponseWriter, active string, title string, 
 	htmlText.WriteString(navLink(operatorRoute("/templates"), "Templates", active))
 	htmlText.WriteString(navLink(operatorRoute("/audit"), "Audit", active))
 	htmlText.WriteString(navLink(operatorRoute("/settings"), "Settings", active))
+	htmlText.WriteString(navLink(operatorRoute("/live"), "Live", active))
 	htmlText.WriteString(`</nav></header><main>`)
 	if message != "" {
 		htmlText.WriteString(`<div class="message">` + esc(message) + `</div>`)
@@ -4059,6 +4137,135 @@ func sanitizeSensitiveText(value string) string {
 		return "private key material redacted"
 	}
 	return text
+}
+
+func renderLiveStreamMessageRow(row g2sengine.MessageJournalEntry) string {
+	body := strings.Builder{}
+	body.WriteString(`<tr data-message-id="` + esc(strconv.FormatInt(row.ID, 10)) + `">`)
+	body.WriteString(`<td>` + esc(fmtTime(row.Timestamp)) + `</td>`)
+	body.WriteString(`<td class="mono">` + esc(string(row.Direction)) + `</td>`)
+	body.WriteString(`<td class="mono">` + esc(defaultString(row.FromEndpoint, "-")) + `</td>`)
+	body.WriteString(`<td class="mono">` + esc(defaultString(row.ToEndpoint, "-")) + `</td>`)
+	body.WriteString(`<td class="mono">` + esc(defaultString(row.EGMID, "-")) + `</td>`)
+	body.WriteString(`<td class="mono">` + esc(defaultString(row.ActionRunID, "-")) + `</td>`)
+	body.WriteString(`<td class="mono">` + esc(defaultString(row.MessageType, "-")) + `</td>`)
+	body.WriteString(`<td>` + esc(defaultString(string(row.Result), "-")) + `</td>`)
+	body.WriteString(`<td><details><summary>view</summary><pre>` + esc(defaultString(row.RawPayload, "-")) + `</pre></details></td>`)
+	body.WriteString(`</tr>`)
+	return body.String()
+}
+
+func liveMessagesScript() string {
+	return `<script>
+(function(){
+  const statusEl = document.getElementById('live-messages-status');
+  const bodyEl = document.getElementById('live-messages-body');
+  if (!statusEl || !bodyEl) { return; }
+
+  const endpoint = '/operator/live/messages.json';
+  const refreshIntervalMS = 1000;
+  const maxRows = 600;
+  let lastID = 0;
+
+  function setStatus(text, failed) {
+    statusEl.textContent = text;
+    statusEl.classList.remove('ok');
+    statusEl.classList.remove('error');
+    statusEl.classList.add(failed ? 'error' : 'ok');
+  }
+
+  function td(value, className) {
+    const el = document.createElement('td');
+    if (className) {
+      el.className = className;
+    }
+    el.textContent = value || '-';
+    return el;
+  }
+
+  function payloadCell(payload) {
+    const cell = document.createElement('td');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'view';
+    const pre = document.createElement('pre');
+    pre.textContent = payload || '-';
+    details.appendChild(summary);
+    details.appendChild(pre);
+    cell.appendChild(details);
+    return cell;
+  }
+
+  function addRow(row) {
+    const tr = document.createElement('tr');
+    const messageID = Number(row.id || 0);
+    tr.setAttribute('data-message-id', String(messageID));
+    tr.appendChild(td(row.timestamp || '-', ''));
+    tr.appendChild(td((row.direction || '-').toUpperCase(), 'mono'));
+    tr.appendChild(td(row.from_endpoint || '-', 'mono'));
+    tr.appendChild(td(row.to_endpoint || '-', 'mono'));
+    tr.appendChild(td(row.egm_id || '-', 'mono'));
+    tr.appendChild(td(row.action_run_id || '-', 'mono'));
+    tr.appendChild(td(row.message_type || '-', 'mono'));
+    tr.appendChild(td(row.result || '-', ''));
+    tr.appendChild(payloadCell(row.raw_payload || '-'));
+    bodyEl.appendChild(tr);
+    if (messageID > lastID) {
+      lastID = messageID;
+    }
+  }
+
+  function trimRows() {
+    while (bodyEl.children.length > maxRows) {
+      bodyEl.removeChild(bodyEl.firstElementChild);
+    }
+  }
+
+  function clearEmptyPlaceholder() {
+    const empty = bodyEl.querySelector('.live-messages-empty');
+    if (empty) {
+      empty.remove();
+    }
+  }
+
+  async function refresh() {
+    const url = endpoint + '?limit=250' + (lastID > 0 ? ('&since_id=' + encodeURIComponent(String(lastID))) : '');
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status);
+      }
+      const payload = await resp.json();
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      if (rows.length > 0) {
+        clearEmptyPlaceholder();
+        rows.sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+        for (const row of rows) {
+          addRow(row);
+        }
+        trimRows();
+      } else if (payload.max_id && Number(payload.max_id) > lastID) {
+        lastID = Number(payload.max_id);
+      }
+      setStatus('Live update active', false);
+    } catch (err) {
+      setStatus('Live update unavailable', true);
+    }
+  }
+
+  const existingRows = Array.from(bodyEl.querySelectorAll('tr[data-message-id]'));
+  for (const row of existingRows) {
+    const id = Number(row.getAttribute('data-message-id') || '0');
+    if (id > lastID) {
+      lastID = id;
+    }
+  }
+
+  setStatus('Live update active', false);
+  refresh();
+  window.setInterval(refresh, refreshIntervalMS);
+})();
+</script>`
 }
 
 func yesNo(value bool) string {

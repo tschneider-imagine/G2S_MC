@@ -167,6 +167,63 @@ func (s *Service) Process(ctx context.Context, message InboundMessage) (ProcessR
 	return finalize()
 }
 
+func (s *Service) RecordOutboundResponse(ctx context.Context, response OutboundResponse) error {
+	if s.Store == nil {
+		return fmt.Errorf("store is required")
+	}
+
+	timestamp := response.SentAt
+	if timestamp.IsZero() {
+		timestamp = s.now()
+	}
+	timestamp = timestamp.UTC()
+
+	result := g2sengine.MessageResultSent
+	errorText := strings.TrimSpace(response.DeliveryErrorText)
+	if errorText != "" {
+		result = g2sengine.MessageResultFailed
+	}
+
+	transportMode := strings.TrimSpace(response.TransportMode)
+	if transportMode == "" {
+		transportMode = "HOST_LISTENER"
+	}
+
+	summaryPayload := map[string]any{
+		"message_type": strings.TrimSpace(response.MessageType),
+		"source":       "host_listener_response",
+	}
+	if response.RelatedMessageID > 0 {
+		summaryPayload["inbound_message_id"] = response.RelatedMessageID
+	}
+	if response.OfferedMessageID > 0 {
+		summaryPayload["offered_message_id"] = response.OfferedMessageID
+	}
+
+	entry := g2sengine.MessageJournalEntry{
+		Timestamp:         timestamp,
+		Direction:         g2sengine.DirectionOutbound,
+		FromEndpoint:      strings.TrimSpace(response.FromEndpoint),
+		ToEndpoint:        strings.TrimSpace(response.ToEndpoint),
+		EGMID:             strings.TrimSpace(response.EGMID),
+		ActionRunID:       strings.TrimSpace(response.ActionRunID),
+		ActionStepID:      strings.TrimSpace(response.ActionStepID),
+		TemplateID:        strings.TrimSpace(response.TemplateID),
+		TemplateVersion:   strings.TrimSpace(response.TemplateVersion),
+		MessageType:       strings.TrimSpace(response.MessageType),
+		RawPayload:        response.RawPayload,
+		ParsedSummaryJSON: encodeSummaryJSON(summaryPayload),
+		Result:            result,
+		Error:             errorText,
+		ResponseExcerpt:   strings.TrimSpace(response.ResponseExcerpt),
+		TransportMode:     transportMode,
+		SentAt:            &timestamp,
+		CompletedAt:       &timestamp,
+	}
+	_, err := s.Store.RecordMessageJournalEntry(ctx, entry)
+	return err
+}
+
 type resolvedMetadata struct {
 	EGMID       string
 	ActionRunID string

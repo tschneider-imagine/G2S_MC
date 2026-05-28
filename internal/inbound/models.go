@@ -27,6 +27,24 @@ type InboundMessage struct {
 	HandlerRuleID string
 }
 
+type OutboundResponse struct {
+	SentAt            time.Time
+	FromEndpoint      string
+	ToEndpoint        string
+	EGMID             string
+	ActionRunID       string
+	ActionStepID      string
+	TemplateID        string
+	TemplateVersion   string
+	MessageType       string
+	RawPayload        string
+	RelatedMessageID  int64
+	OfferedMessageID  int64
+	TransportMode     string
+	ResponseExcerpt   string
+	DeliveryErrorText string
+}
+
 type ProcessResult struct {
 	MessageID      int64
 	EGMID          string

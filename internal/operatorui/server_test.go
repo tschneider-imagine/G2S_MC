@@ -64,7 +64,7 @@ func TestOperatorNavLabelsExact(t *testing.T) {
 		t.Fatalf("status=%d", res.Code)
 	}
 	body := res.Body.String()
-	nav := []string{"Live", "Inputs", "Actions", "Comms", "EGMs", "Templates", "Audit", "Settings"}
+	nav := []string{"Status", "Inputs", "Actions", "Comms", "EGMs", "Templates", "Audit", "Settings", "Live"}
 	prev := -1
 	for _, label := range nav {
 		idx := strings.Index(body, ">"+label+"<")
@@ -85,6 +85,7 @@ func TestOperatorPagesExcludeForbiddenTerms(t *testing.T) {
 	mux := setupOperatorServer(t)
 	pages := []string{
 		"/operator",
+		"/operator/live",
 		"/operator/inputs",
 		"/operator/actions",
 		"/operator/comms",
@@ -106,6 +107,91 @@ func TestOperatorPagesExcludeForbiddenTerms(t *testing.T) {
 				t.Fatalf("%s contains forbidden term %q", path, term)
 			}
 		}
+	}
+}
+
+func TestOperatorLiveMessagesPageRendersDirectionFeed(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+	if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:    time.Now().UTC(),
+		Direction:    g2sengine.DirectionInbound,
+		FromEndpoint: "egm://EGM-001",
+		ToEndpoint:   "/g2s",
+		EGMID:        "EGM-001",
+		MessageType:  "keepAlive",
+		RawPayload:   "<keepAlive/>",
+		Result:       g2sengine.MessageResultReceived,
+	}); err != nil {
+		t.Fatalf("seed inbound message: %v", err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/operator/live", nil)
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, expected := range []string{
+		"Live Messages",
+		"Direction",
+		"OUTBOUND",
+		"INBOUND",
+		"/operator/live/messages.json",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected %q in /operator/live", expected)
+		}
+	}
+}
+
+func TestOperatorLiveMessagesJSONSupportsSinceID(t *testing.T) {
+	mux, st := setupOperatorServerWithStore(t)
+	ctx := context.Background()
+
+	initialRes := httptest.NewRecorder()
+	initialReq := httptest.NewRequest(http.MethodGet, "/operator/live/messages.json?limit=300", nil)
+	mux.ServeHTTP(initialRes, initialReq)
+	if initialRes.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", initialRes.Code, initialRes.Body.String())
+	}
+	var initial liveMessageFeed
+	if err := json.Unmarshal(initialRes.Body.Bytes(), &initial); err != nil {
+		t.Fatalf("unmarshal initial: %v", err)
+	}
+
+	if _, err := st.RecordMessageJournalEntry(ctx, g2sengine.MessageJournalEntry{
+		Timestamp:    time.Now().UTC(),
+		Direction:    g2sengine.DirectionInbound,
+		FromEndpoint: "egm://EGM-002",
+		ToEndpoint:   "/g2s",
+		EGMID:        "EGM-002",
+		MessageType:  "commsOnLine",
+		RawPayload:   "<commsOnLine/>",
+		Result:       g2sengine.MessageResultReceived,
+	}); err != nil {
+		t.Fatalf("seed inbound message: %v", err)
+	}
+
+	deltaRes := httptest.NewRecorder()
+	deltaReq := httptest.NewRequest(http.MethodGet, "/operator/live/messages.json?limit=300&since_id="+strconv.FormatInt(initial.MaxID, 10), nil)
+	mux.ServeHTTP(deltaRes, deltaReq)
+	if deltaRes.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", deltaRes.Code, deltaRes.Body.String())
+	}
+	if got := deltaRes.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control=%q", got)
+	}
+	var delta liveMessageFeed
+	if err := json.Unmarshal(deltaRes.Body.Bytes(), &delta); err != nil {
+		t.Fatalf("unmarshal delta: %v", err)
+	}
+	if len(delta.Rows) == 0 {
+		t.Fatal("expected rows after since_id")
+	}
+	if delta.Rows[0].Direction != g2sengine.DirectionInbound {
+		t.Fatalf("direction=%q want INBOUND", delta.Rows[0].Direction)
 	}
 }
 
@@ -3668,5 +3754,3 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 		t.Fatalf("replace cert inventory: %v", err)
 	}
 }
-
-

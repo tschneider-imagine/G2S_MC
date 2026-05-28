@@ -197,6 +197,50 @@ func (f *fakeStore) ListEnabledHandlerRules(_ context.Context, _ int) ([]g2sengi
 	return rows, nil
 }
 
+func TestRecordOutboundResponseJournalsOutboundMessage(t *testing.T) {
+	store := newInboundStoreFixture()
+	svc := &Service{Store: store, Clock: fixedClock()}
+
+	err := svc.RecordOutboundResponse(context.Background(), OutboundResponse{
+		FromEndpoint:     "/g2s",
+		ToEndpoint:       "192.168.10.10:9443",
+		EGMID:            "EGM-001",
+		ActionRunID:      "run-1",
+		ActionStepID:     "step-1",
+		TemplateID:       "template-generic-g2s-action",
+		TemplateVersion:  "1",
+		MessageType:      "keepAliveAck",
+		RawPayload:       `<soap:Envelope><soap:Body><keepAliveAck/></soap:Body></soap:Envelope>`,
+		RelatedMessageID: 123,
+		OfferedMessageID: 456,
+	})
+	if err != nil {
+		t.Fatalf("record outbound response: %v", err)
+	}
+	if len(store.messages) != 1 {
+		t.Fatalf("message rows=%d want 1", len(store.messages))
+	}
+	row := store.messages[0]
+	if row.Direction != g2sengine.DirectionOutbound {
+		t.Fatalf("direction=%q want OUTBOUND", row.Direction)
+	}
+	if row.Result != g2sengine.MessageResultSent {
+		t.Fatalf("result=%q want SENT", row.Result)
+	}
+	if row.TransportMode != "HOST_LISTENER" {
+		t.Fatalf("transport_mode=%q", row.TransportMode)
+	}
+	if row.SentAt == nil || row.CompletedAt == nil {
+		t.Fatalf("expected sent/completed timestamps, got sent=%v completed=%v", row.SentAt, row.CompletedAt)
+	}
+	if !strings.Contains(row.ParsedSummaryJSON, `"inbound_message_id":123`) {
+		t.Fatalf("summary missing inbound_message_id: %s", row.ParsedSummaryJSON)
+	}
+	if !strings.Contains(row.ParsedSummaryJSON, `"offered_message_id":456`) {
+		t.Fatalf("summary missing offered_message_id: %s", row.ParsedSummaryJSON)
+	}
+}
+
 func TestInboundJournalsMessageEvenWhenParsingFails(t *testing.T) {
 	store := newInboundStoreFixture()
 	svc := &Service{Store: store, Clock: fixedClock()}
