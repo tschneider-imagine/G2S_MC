@@ -343,6 +343,56 @@ func TestInboundProcessorReceivesMessageMetadata(t *testing.T) {
 	}
 }
 
+func TestCommsAckUsesIncomingEGMIDAndIncludesRequiredEnvelopeAttrs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	server := NewServer("1", eng)
+	processor := &fakeInboundProcessor{
+		processResult: inbound.ProcessResult{
+			MessageID:   12,
+			EGMID:       "STORED-EGM-999",
+			ActionRunID: "run-1",
+		},
+	}
+	server.SetInboundProcessor(processor)
+	server.RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="WIRE-EGM-123"><commsOnLine/></g2sBody>`))
+	req.RemoteAddr = "192.0.2.44:9443"
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, expected := range []string{
+		`hostId="1"`,
+		`egmId="WIRE-EGM-123"`,
+		`dateTimeSent="`,
+		"commsOnLineAck",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("response missing %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, `egmId="STORED-EGM-999"`) {
+		t.Fatalf("response used stored egm id instead of incoming payload: %s", body)
+	}
+
+	if len(processor.outboundCalls) != 1 {
+		t.Fatalf("outbound calls=%d want 1", len(processor.outboundCalls))
+	}
+	if processor.outboundCalls[0].EGMID != "WIRE-EGM-123" {
+		t.Fatalf("recorded outbound egm id=%q want WIRE-EGM-123", processor.outboundCalls[0].EGMID)
+	}
+}
+
 func TestInboundProcessorErrorDoesNotBreakG2SResponse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

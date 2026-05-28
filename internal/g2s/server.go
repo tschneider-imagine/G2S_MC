@@ -56,9 +56,9 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	message := string(body)
-	egmID := findAttribute(message, "egmId")
-	if egmID == "" {
-		egmID = findElement(message, "egmId")
+	incomingEGMID := findAttribute(message, "egmId")
+	if incomingEGMID == "" {
+		incomingEGMID = findElement(message, "egmId")
 	}
 	sourceIP, sourcePort := parseRemoteEndpoint(r.RemoteAddr)
 
@@ -83,15 +83,13 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			FromEndpoint: strings.TrimSpace(r.RemoteAddr),
 			ToEndpoint:   strings.TrimSpace(r.URL.Path),
 			RemoteAddr:   strings.TrimSpace(r.RemoteAddr),
-			EGMID:        egmID,
+			EGMID:        incomingEGMID,
 			RawPayload:   message,
 			Headers:      headers,
 			QueryParams:  query,
 		})
 	}
-	if trimmed := strings.TrimSpace(inboundResult.EGMID); trimmed != "" {
-		egmID = trimmed
-	}
+	egmID := strings.TrimSpace(incomingEGMID)
 	if strings.TrimSpace(egmID) == "" {
 		egmID = fallbackEGMIDFromSourceIP(sourceIP)
 	}
@@ -109,7 +107,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			SourcePort: sourcePort,
 		})
 		responseName = "commsOnLineAck"
-		responsePayload = buildSOAPAckRoot(`g2s:commsOnLineAck xmlns:g2s="`+g2sSchemaNamespace+`" syncTimer="30000"`, inboundResult.OfferedMessage)
+		responsePayload = buildSOAPCommsAck(s.hostID, egmID, "commsOnLineAck", "30000", inboundResult.OfferedMessage)
 	case strings.Contains(message, "keepAlive"):
 		s.engine.Submit(engine.Event{
 			Type:       engine.EventKeepAlive,
@@ -120,7 +118,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			SourcePort: sourcePort,
 		})
 		responseName = "keepAliveAck"
-		responsePayload = buildSOAPAckRoot("keepAliveAck", inboundResult.OfferedMessage)
+		responsePayload = buildSOAPCommsAck(s.hostID, egmID, "keepAliveAck", "", inboundResult.OfferedMessage)
 	default:
 		if strings.TrimSpace(egmID) != "" {
 			s.engine.Submit(engine.Event{
@@ -133,7 +131,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		responseName = "g2sAck"
-		responsePayload = buildSOAP("g2sAck", s.hostID, egmID, inboundResult.OfferedMessage)
+		responsePayload = buildSOAPG2SAck(s.hostID, egmID)
 	}
 	writeSOAPResponse(w, responsePayload)
 	s.recordOutboundResponse(r.Context(), inboundResult, responseName, egmID, r.URL.Path, r.RemoteAddr, responsePayload)
@@ -192,36 +190,38 @@ func writeSOAPResponse(w http.ResponseWriter, payload string) {
 	_, _ = w.Write([]byte(payload))
 }
 
-func buildSOAP(name string, hostID string, egmID string, offered *inbound.OfferedMessage) string {
+func buildSOAPCommsAck(hostID string, egmID string, ackName string, syncTimer string, offered *inbound.OfferedMessage) string {
+	timestamp := time.Now().UTC().Format(time.RFC3339)
 	var builder strings.Builder
 	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	builder.WriteString(`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">`)
+	builder.WriteString(`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:g2s="` + g2sSchemaNamespace + `">`)
 	builder.WriteString(`<soap:Body>`)
-	builder.WriteString(`<g2sResponse hostId="` + xmlEscape(hostID) + `" egmId="` + xmlEscape(egmID) + `">`)
-	builder.WriteString(`<` + name + `/>`)
+	builder.WriteString(`<g2s:g2sBody hostId="` + xmlEscape(hostID) + `" egmId="` + xmlEscape(egmID) + `" dateTimeSent="` + xmlEscape(timestamp) + `">`)
+	builder.WriteString(`<g2s:communications>`)
+	builder.WriteString(`<g2s:` + ackName)
+	if strings.TrimSpace(syncTimer) != "" {
+		builder.WriteString(` syncTimer="` + xmlEscape(syncTimer) + `"`)
+	}
+	builder.WriteString(`/>`)
 	if offered != nil {
 		builder.WriteString(`<pendingDelivery messageId="` + strconv.FormatInt(offered.MessageID, 10) + `" actionRunId="` + xmlEscape(offered.ActionRunID) + `" actionStepId="` + xmlEscape(offered.ActionStepID) + `" templateId="` + xmlEscape(offered.TemplateID) + `" templateVersion="` + xmlEscape(offered.TemplateVersion) + `" offerCount="` + strconv.Itoa(offered.OfferCount) + `" offeredAt="` + xmlEscape(offered.OfferedAt.UTC().Format(time.RFC3339)) + `">`)
 		builder.WriteString(`<messageType>` + xmlEscape(offered.MessageType) + `</messageType>`)
 		builder.WriteString(`<payload>` + xmlEscape(offered.RawPayload) + `</payload>`)
 		builder.WriteString(`</pendingDelivery>`)
 	}
-	builder.WriteString(`</g2sResponse>`)
+	builder.WriteString(`</g2s:communications>`)
+	builder.WriteString(`</g2s:g2sBody>`)
 	builder.WriteString(`</soap:Body></soap:Envelope>`)
 	return builder.String()
 }
 
-func buildSOAPAckRoot(name string, offered *inbound.OfferedMessage) string {
+func buildSOAPG2SAck(hostID string, egmID string) string {
+	timestamp := time.Now().UTC().Format(time.RFC3339)
 	var builder strings.Builder
 	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	builder.WriteString(`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">`)
+	builder.WriteString(`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:g2s="` + g2sSchemaNamespace + `">`)
 	builder.WriteString(`<soap:Body>`)
-	builder.WriteString(`<` + name + `/>`)
-	if offered != nil {
-		builder.WriteString(`<pendingDelivery messageId="` + strconv.FormatInt(offered.MessageID, 10) + `" actionRunId="` + xmlEscape(offered.ActionRunID) + `" actionStepId="` + xmlEscape(offered.ActionStepID) + `" templateId="` + xmlEscape(offered.TemplateID) + `" templateVersion="` + xmlEscape(offered.TemplateVersion) + `" offerCount="` + strconv.Itoa(offered.OfferCount) + `" offeredAt="` + xmlEscape(offered.OfferedAt.UTC().Format(time.RFC3339)) + `">`)
-		builder.WriteString(`<messageType>` + xmlEscape(offered.MessageType) + `</messageType>`)
-		builder.WriteString(`<payload>` + xmlEscape(offered.RawPayload) + `</payload>`)
-		builder.WriteString(`</pendingDelivery>`)
-	}
+	builder.WriteString(`<g2s:g2sAck hostId="` + xmlEscape(hostID) + `" egmId="` + xmlEscape(egmID) + `" dateTimeSent="` + xmlEscape(timestamp) + `"/>`)
 	builder.WriteString(`</soap:Body></soap:Envelope>`)
 	return builder.String()
 }
