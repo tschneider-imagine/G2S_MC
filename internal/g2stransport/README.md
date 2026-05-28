@@ -3,9 +3,7 @@
 Outbound transport boundary for G2S action messages.
 
 This package owns:
-- transport modes and send gating,
-- disabled/no-send behavior,
-- guarded HTTP transport behavior,
+- outbound HTTP send execution,
 - configured endpoint resolution from EGM/template data,
 - configured TLS/mTLS outbound client construction.
 
@@ -16,7 +14,7 @@ This package does not own:
 - GPIO polling,
 - UI behavior.
 
-Safety gate:
-- real network send requires `TransportMode=HTTP` and `AllowRealSend=true`,
-- capture restriction is applied only when `CaptureOnlySend=true`,
-- all other combinations are blocked with no network call.
+Delivery policy:
+- runtime uses HTTP outbound send attempts for configured messages,
+- delivery success/failure is determined by real endpoint/network response,
+- policy flags must not silently block emergency/test send attempts.

@@ -4,7 +4,7 @@
 
 - Build outbound HTTP delivery client behavior from configured certificate and trust material.
 - Resolve delivery endpoint/method/headers/content type from configured EGM and template data.
-- Keep explicit delivery controls (`delivery_mode`, `allow_delivery`, `capture_only`) in effect.
+- Keep configured delivery controls (`delivery_mode`, timeout) in effect.
 - Record delivery attempt evidence through existing message journal and audit paths.
 
 ## Included Behavior
@@ -13,7 +13,7 @@
 - Missing or invalid endpoint configuration fails clearly.
 - Template endpoint quirks can override method/content type/headers/timeout.
 - TLS/mTLS client setup uses configured CA trust and client certificate/key paths.
-- Capture-only restrictions apply only when capture-only mode is explicitly enabled.
+- Runtime attempts outbound delivery for configured emergency/test actions and records terminal outcome.
 
 ## Not Included
 

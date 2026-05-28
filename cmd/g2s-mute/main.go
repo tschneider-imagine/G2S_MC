@@ -49,10 +49,8 @@ func main() {
 	inputRuntimeInterval := flag.Duration("input-runtime-interval", 100*time.Millisecond, "runtime input poll interval")
 	inputRuntimeSeedDefaults := flag.Bool("input-runtime-seed-defaults", false, "seed default input channels when runtime loop starts")
 	inputRuntimeExecuteActions := flag.Bool("input-runtime-execute-actions", false, "execute newly queued action runs from runtime input transitions")
-	deliveryModeRaw := flag.String("delivery-mode", "disabled", "delivery mode for runtime action execution: disabled|http")
+	deliveryModeRaw := flag.String("delivery-mode", "http", "delivery mode for runtime action execution: http")
 	deliveryTopologyRaw := flag.String("delivery-topology", "", "delivery topology for runtime action execution: host_listener|outbound_endpoint|capture_endpoint")
-	allowDelivery := flag.Bool("allow-delivery", false, "allow configured delivery attempts when runtime action execution is enabled")
-	captureOnly := flag.Bool("capture-only", false, "restrict delivery attempts to localhost capture endpoints")
 	deliveryTimeoutMS := flag.Int("delivery-timeout-ms", 5000, "delivery timeout in milliseconds for runtime action execution")
 	flag.Parse()
 	explicitFlags := visitedFlags()
@@ -68,8 +66,6 @@ func main() {
 		InputRuntimeExecuteActions: *inputRuntimeExecuteActions,
 		DeliveryModeRaw:            *deliveryModeRaw,
 		DeliveryTopologyRaw:        *deliveryTopologyRaw,
-		AllowDelivery:              *allowDelivery,
-		CaptureOnly:                *captureOnly,
 		DeliveryTimeoutMS:          *deliveryTimeoutMS,
 	})
 	if err != nil {
@@ -238,10 +234,8 @@ func main() {
 			DeliveryMode:                   string(deliverySettings.Mode),
 		},
 		DefaultDeliverySettings: g2stransport.DeliverySettings{
-			Mode:          g2stransport.DeliveryModeDisabled,
-			AllowDelivery: false,
-			CaptureOnly:   false,
-			TimeoutMS:     cfg.Timeouts.G2SRequestTimeoutMS,
+			Mode:      g2stransport.DeliveryModeHTTP,
+			TimeoutMS: cfg.Timeouts.G2SRequestTimeoutMS,
 		},
 		EndpointDefaults: endpointDefaults,
 	}
@@ -271,8 +265,6 @@ func main() {
 			ServerCertConfigured:     strings.TrimSpace(cfg.Crypto.WebServerCertPath) != "",
 			DeliveryMode:             string(deliverySettings.Mode),
 			DeliveryTopology:         string(runtimeTopology),
-			AllowDeliveryDefault:     deliverySettings.AllowDelivery,
-			CaptureOnlyDefault:       deliverySettings.CaptureOnly,
 			DeliveryTimeoutMS:        deliverySettings.TimeoutMS,
 			DeliveryEndpointDefaults: endpointDefaults,
 			DeliveryClientConfig: g2stransport.HTTPClientConfig{
@@ -2015,8 +2007,6 @@ type runtimeFlagValues struct {
 	InputRuntimeExecuteActions bool
 	DeliveryModeRaw            string
 	DeliveryTopologyRaw        string
-	AllowDelivery              bool
-	CaptureOnly                bool
 	DeliveryTimeoutMS          int
 }
 
@@ -2037,10 +2027,7 @@ func runtimeOptionsFromConfigAndFlags(cfg config.Config, explicitFlags map[strin
 	enabled := cfg.Runtime.InputRuntimeEnabled
 	seedDefaults := cfg.Runtime.InputRuntimeSeedDefaults
 	executeActions := cfg.Runtime.InputRuntimeExecuteActions
-	deliveryModeRaw := "disabled"
 	deliveryTopologyRaw := cfg.Runtime.DeliveryTopology
-	allowDelivery := false
-	captureOnly := false
 	timeoutMS := cfg.Timeouts.G2SRequestTimeoutMS
 	if timeoutMS <= 0 {
 		timeoutMS = 5000
@@ -2058,31 +2045,23 @@ func runtimeOptionsFromConfigAndFlags(cfg config.Config, explicitFlags map[strin
 	if explicitFlags["input-runtime-execute-actions"] {
 		executeActions = flags.InputRuntimeExecuteActions
 	}
-	if explicitFlags["delivery-mode"] {
-		deliveryModeRaw = flags.DeliveryModeRaw
-	}
 	if explicitFlags["delivery-topology"] {
 		deliveryTopologyRaw = flags.DeliveryTopologyRaw
-	}
-	if explicitFlags["allow-delivery"] {
-		allowDelivery = flags.AllowDelivery
-	}
-	if explicitFlags["capture-only"] {
-		captureOnly = flags.CaptureOnly
 	}
 	if explicitFlags["delivery-timeout-ms"] {
 		timeoutMS = flags.DeliveryTimeoutMS
 	}
 
-	deliveryMode, err := parseDeliveryModeFlag(deliveryModeRaw)
-	if err != nil {
-		return appliance.RuntimeOptions{}, "", fmt.Errorf("invalid runtime delivery mode: %w", err)
-	}
 	deliveryTopology, ok := g2stransport.NormalizeDeliveryTopology(deliveryTopologyRaw)
 	if !ok {
 		return appliance.RuntimeOptions{}, "", fmt.Errorf("invalid runtime delivery topology %q", strings.TrimSpace(deliveryTopologyRaw))
 	}
-	if err := validateInputRuntimeFlags(runtimeInterval, deliveryMode, allowDelivery, timeoutMS); err != nil {
+	if executeActions {
+		if deliveryTopology == g2stransport.DeliveryTopologyHostListener {
+			deliveryTopology = g2stransport.DeliveryTopologyOutboundEndpoint
+		}
+	}
+	if err := validateInputRuntimeFlags(runtimeInterval, timeoutMS); err != nil {
 		return appliance.RuntimeOptions{}, "", err
 	}
 
@@ -2092,10 +2071,8 @@ func runtimeOptionsFromConfigAndFlags(cfg config.Config, explicitFlags map[strin
 		SeedDefaultInputs: seedDefaults,
 		ExecuteActions:    executeActions,
 		DeliverySettings: g2stransport.DeliverySettings{
-			Mode:          deliveryMode,
-			AllowDelivery: allowDelivery,
-			CaptureOnly:   captureOnly,
-			TimeoutMS:     timeoutMS,
+			Mode:      g2stransport.DeliveryModeHTTP,
+			TimeoutMS: timeoutMS,
 		}.Normalize(),
 		DeliveryTopology: deliveryTopology,
 		Actor:            "g2s-mute",
@@ -2116,24 +2093,19 @@ func pendingDeliverySweepOptionsFromConfig(cfg config.Config) pendingdeliveryrun
 
 func parseDeliveryModeFlag(raw string) (g2stransport.DeliveryMode, error) {
 	switch strings.ToUpper(strings.TrimSpace(raw)) {
-	case "", "DISABLED":
-		return g2stransport.DeliveryModeDisabled, nil
-	case "HTTP":
+	case "", "HTTP":
 		return g2stransport.DeliveryModeHTTP, nil
 	default:
-		return "", fmt.Errorf("invalid delivery mode %q (use disabled|http)", raw)
+		return "", fmt.Errorf("invalid delivery mode %q (use http)", raw)
 	}
 }
 
-func validateInputRuntimeFlags(interval time.Duration, mode g2stransport.DeliveryMode, allowDelivery bool, timeoutMS int) error {
+func validateInputRuntimeFlags(interval time.Duration, timeoutMS int) error {
 	if interval <= 0 {
 		return fmt.Errorf("-input-runtime-interval must be > 0")
 	}
 	if timeoutMS < 0 {
 		return fmt.Errorf("-delivery-timeout-ms must be >= 0")
-	}
-	if allowDelivery && mode != g2stransport.DeliveryModeHTTP {
-		return fmt.Errorf("-allow-delivery requires -delivery-mode http")
 	}
 	return nil
 }

@@ -42,6 +42,9 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 	if !topologyOK {
 		return ExecuteResult{}, fmt.Errorf("invalid delivery topology %q", strings.TrimSpace(request.Topology))
 	}
+	if topology == g2stransport.DeliveryTopologyHostListener {
+		topology = g2stransport.DeliveryTopologyOutboundEndpoint
+	}
 
 	run, err := e.Store.GetActionRun(ctx, runID)
 	if err != nil {
@@ -91,8 +94,6 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 		"retry_delay":       retryPolicy.DelayMS,
 		"delivery_mode":     delivery.Mode,
 		"delivery_topology": topology,
-		"allow_delivery":    delivery.AllowDelivery,
-		"capture_only":      delivery.CaptureOnly,
 		"delivery_timeout":  delivery.TimeoutMS,
 	}, run.ID, strings.TrimSpace(request.Actor), 0)
 	if err != nil {
@@ -444,10 +445,8 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 					ContentType:     nonEmpty(deliveryTarget.ContentType, rendered.ContentType),
 					Headers:         g2stransport.MergeHeaders(rendered.Headers, deliveryTarget.Headers),
 					RawPayload:      rendered.RawPayload,
-					AllowRealSend:   delivery.AllowDelivery,
-					TransportMode:   delivery.TransportMode(),
+					TransportMode:   g2stransport.ModeHTTP,
 					RequestedAt:     stepNow,
-					CaptureOnlySend: delivery.CaptureOnly,
 					TimeoutMS:       sendTimeoutMS,
 				})
 				if sendErr != nil {
@@ -458,9 +457,7 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 				}
 
 				resultType := g2sengine.MessageResultSendFailed
-				if sendResult.Blocked {
-					resultType = g2sengine.MessageResultSendBlocked
-				} else if sendResult.Sent {
+				if sendResult.Sent {
 					resultType = g2sengine.MessageResultSendSucceeded
 				}
 				var sentAt *time.Time

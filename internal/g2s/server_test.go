@@ -158,6 +158,96 @@ func TestKeepAliveDiscoversUnknownEGM(t *testing.T) {
 	t.Fatal("expected discovered EGM to appear in snapshot")
 }
 
+func TestKeepAliveWithoutEGMIDFallsBackToSourceIPDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody><keepAlive/></g2sBody>`))
+	req.RemoteAddr = "198.51.100.50:9443"
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "keepAliveAck") {
+		t.Fatalf("expected keepAliveAck, got %s", rr.Body.String())
+	}
+
+	expectedID := "DISCOVERED-IP-198-51-100-50"
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := eng.Snapshot()
+		for _, egm := range snapshot.EGMs {
+			if egm.ID != expectedID {
+				continue
+			}
+			if egm.Source != model.EGMSourceDiscovered {
+				t.Fatalf("expected discovered source, got %q", egm.Source)
+			}
+			if egm.LastEndpointIP != "198.51.100.50" {
+				t.Fatalf("last_endpoint_ip = %q, want 198.51.100.50", egm.LastEndpointIP)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected source-IP discovered EGM to appear in snapshot")
+}
+
+func TestInboundContactWithoutEGMIDStillAppearsInSnapshot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody><status/></g2sBody>`))
+	req.RemoteAddr = "203.0.113.55:9444"
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "g2sAck") {
+		t.Fatalf("expected g2sAck response, got %s", body)
+	}
+	if !strings.Contains(body, `egmId="DISCOVERED-IP-203-0-113-55"`) {
+		t.Fatalf("expected fallback egmId in response, got %s", body)
+	}
+
+	expectedID := "DISCOVERED-IP-203-0-113-55"
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := eng.Snapshot()
+		for _, egm := range snapshot.EGMs {
+			if egm.ID != expectedID {
+				continue
+			}
+			if egm.Source != model.EGMSourceDiscovered {
+				t.Fatalf("expected discovered source, got %q", egm.Source)
+			}
+			if egm.Status != model.EGMGreen {
+				t.Fatalf("expected GREEN status, got %s", egm.Status)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected inbound contact to create discovered EGM entry")
+}
+
 func TestParseRemoteEndpoint(t *testing.T) {
 	ip, port := parseRemoteEndpoint("203.0.113.40:9000")
 	if ip != "203.0.113.40" || port != 9000 {
@@ -170,6 +260,18 @@ func TestParseRemoteEndpoint(t *testing.T) {
 	ip, port = parseRemoteEndpoint("not-a-socket")
 	if ip != "not-a-socket" || port != 0 {
 		t.Fatalf("got %q:%d", ip, port)
+	}
+}
+
+func TestFallbackEGMIDFromSourceIP(t *testing.T) {
+	if got := fallbackEGMIDFromSourceIP("192.168.10.10"); got != "DISCOVERED-IP-192-168-10-10" {
+		t.Fatalf("fallback id = %q", got)
+	}
+	if got := fallbackEGMIDFromSourceIP("2001:db8::2"); got != "DISCOVERED-IP-2001-db8-2" {
+		t.Fatalf("fallback id = %q", got)
+	}
+	if got := fallbackEGMIDFromSourceIP("   "); got != "" {
+		t.Fatalf("fallback id = %q", got)
 	}
 }
 

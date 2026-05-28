@@ -50,8 +50,6 @@ type ActionRunDispatchDryRunRequest struct {
 
 type ActionRunSendPreparedRequest struct {
 	TransportMode   string `json:"transport_mode"`
-	AllowRealSend   bool   `json:"allow_real_send"`
-	CaptureOnlySend bool   `json:"capture_only_send"`
 	CaptureEndpoint string `json:"capture_endpoint,omitempty"`
 	Actor           string `json:"actor,omitempty"`
 }
@@ -61,8 +59,6 @@ type ActionRunExecuteRequest struct {
 	MaxTargets       int    `json:"max_targets,omitempty"`
 	DeliveryMode     string `json:"delivery_mode,omitempty"`
 	DeliveryTopology string `json:"delivery_topology,omitempty"`
-	AllowDelivery    bool   `json:"allow_delivery"`
-	CaptureOnly      bool   `json:"capture_only"`
 	TimeoutMS        int    `json:"timeout_ms,omitempty"`
 }
 

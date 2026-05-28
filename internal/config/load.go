@@ -16,7 +16,7 @@ const (
 	DefaultHeartbeatBlockAfterMissed      = 6
 	DefaultInputRuntimeIntervalMS         = 100
 	DefaultPendingDeliverySweepIntervalMS = 5000
-	DefaultDeliveryTopology               = "HOST_LISTENER"
+	DefaultDeliveryTopology               = "OUTBOUND_ENDPOINT"
 )
 
 func LoadFile(path string) (Config, error) {

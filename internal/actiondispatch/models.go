@@ -38,8 +38,6 @@ type DispatchResult struct {
 type SendPreparedMessagesRequest struct {
 	ActionRunID     string
 	TransportMode   g2stransport.Mode
-	AllowRealSend   bool
-	CaptureOnlySend bool
 	CaptureEndpoint string
 	Actor           string
 	RequestedAt     time.Time
@@ -51,7 +49,6 @@ type SendPreparedMessagesResult struct {
 	TransportMode g2stransport.Mode
 	SentCount     int
 	FailedCount   int
-	BlockedCount  int
 	AuditEntryID  int64
 }
 

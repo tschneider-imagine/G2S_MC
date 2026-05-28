@@ -132,8 +132,6 @@ type Options struct {
 	DeliveryMode                   string
 	DeliveryTopology               string
 	DeliveryCaptureEndpoint        string
-	AllowDeliveryDefault           bool
-	CaptureOnlyDefault             bool
 	DeliveryTimeoutMS              int
 	DeliveryEndpointDefaults       g2stransport.EndpointDefaults
 	DeliveryClientConfig           g2stransport.HTTPClientConfig
@@ -322,6 +320,7 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 						if s.Options.InputRuntimeExecuteActions {
 							executor := actionexecutor.Executor{
 								Store:            s.Store,
+								Sender:           g2stransport.NewConfiguredHTTPSender(s.Options.DeliveryClientConfig),
 								EndpointDefaults: s.Options.DeliveryEndpointDefaults,
 							}
 							executeResult, executeErr := executor.Execute(r.Context(), actionexecutor.ExecuteRequest{
@@ -329,10 +328,8 @@ func (s *Server) handleInputByID(w http.ResponseWriter, r *http.Request) {
 								Actor:       actor,
 								RequestedAt: clearedAt,
 								Delivery: g2stransport.DeliverySettings{
-									Mode:          g2stransport.DeliveryMode(strings.ToUpper(strings.TrimSpace(s.Options.DeliveryMode))),
-									AllowDelivery: s.Options.AllowDeliveryDefault,
-									CaptureOnly:   s.Options.CaptureOnlyDefault,
-									TimeoutMS:     s.Options.DeliveryTimeoutMS,
+									Mode:      g2stransport.DeliveryMode(strings.ToUpper(strings.TrimSpace(s.Options.DeliveryMode))),
+									TimeoutMS: s.Options.DeliveryTimeoutMS,
 								},
 								Topology: s.Options.DeliveryTopology,
 							})
@@ -3874,9 +3871,6 @@ func (s *Server) renderSettingsPage(w http.ResponseWriter, r *http.Request, form
 	body.WriteString(`<tr><td>Delivery Mode</td><td class="mono">` + esc(defaultString(strings.TrimSpace(s.Options.DeliveryMode), "DISABLED")) + `</td></tr>`)
 	body.WriteString(`<tr><td>Pending Delivery Sweep</td><td>` + esc(enabledText(s.Options.PendingDeliverySweepEnabled)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Sweep Interval (ms)</td><td class="mono">` + esc(strconv.Itoa(s.Options.PendingDeliverySweepIntervalMS)) + `</td></tr>`)
-	body.WriteString(`<tr><td>Delivery Default</td><td>` + esc(enabledText(s.Options.AllowDeliveryDefault)) + `</td></tr>`)
-	body.WriteString(`<tr><td>Approved Delivery</td><td>` + esc(enabledText(s.Options.AllowDeliveryDefault)) + `</td></tr>`)
-	body.WriteString(`<tr><td>Capture Only</td><td>` + esc(enabledText(s.Options.CaptureOnlyDefault)) + `</td></tr>`)
 	body.WriteString(`<tr><td>Delivery Timeout (ms)</td><td class="mono">` + esc(strconv.Itoa(s.Options.DeliveryTimeoutMS)) + `</td></tr>`)
 	body.WriteString(`</table></div>`)
 

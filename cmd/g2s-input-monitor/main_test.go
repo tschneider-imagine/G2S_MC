@@ -146,10 +146,10 @@ func TestParseTransportMode(t *testing.T) {
 		expect g2stransport.Mode
 		ok     bool
 	}{
-		{raw: "", expect: g2stransport.ModeDisabled, ok: true},
-		{raw: "disabled", expect: g2stransport.ModeDisabled, ok: true},
-		{raw: "dry-run", expect: g2stransport.ModeDryRun, ok: true},
+		{raw: "", expect: g2stransport.ModeHTTP, ok: true},
 		{raw: "http", expect: g2stransport.ModeHTTP, ok: true},
+		{raw: "disabled", expect: "", ok: false},
+		{raw: "dry-run", expect: "", ok: false},
 		{raw: "udp", expect: "", ok: false},
 	}
 	for _, tc := range cases {
@@ -173,39 +173,34 @@ func TestValidateCaptureSendConfig(t *testing.T) {
 		allowRealSend   bool
 		captureOnlySend bool
 		endpoint        string
-		wantErr         bool
 	}{
 		{
 			name:            "default no send",
-			mode:            g2stransport.ModeDisabled,
+			mode:            g2stransport.ModeHTTP,
 			allowRealSend:   false,
 			captureOnlySend: false,
 			endpoint:        "",
-			wantErr:         false,
 		},
 		{
-			name:            "allow send requires http mode",
-			mode:            g2stransport.ModeDryRun,
+			name:            "http mode with capture-only flag",
+			mode:            g2stransport.ModeHTTP,
 			allowRealSend:   true,
 			captureOnlySend: true,
 			endpoint:        "http://127.0.0.1:18080/capture",
-			wantErr:         true,
 		},
 		{
-			name:            "allow send requires capture only",
+			name:            "capture-only flag is non-blocking",
 			mode:            g2stransport.ModeHTTP,
 			allowRealSend:   true,
 			captureOnlySend: false,
 			endpoint:        "http://127.0.0.1:18080/capture",
-			wantErr:         true,
 		},
 		{
-			name:            "allow send requires local endpoint",
+			name:            "non-local endpoint allowed",
 			mode:            g2stransport.ModeHTTP,
 			allowRealSend:   true,
 			captureOnlySend: true,
 			endpoint:        "http://10.20.30.40:18080/capture",
-			wantErr:         true,
 		},
 		{
 			name:            "allow send localhost ok",
@@ -213,16 +208,12 @@ func TestValidateCaptureSendConfig(t *testing.T) {
 			allowRealSend:   true,
 			captureOnlySend: true,
 			endpoint:        "http://localhost:18080/capture",
-			wantErr:         false,
 		},
 	}
 
 	for _, tc := range cases {
-		err := validateCaptureSendConfig(tc.mode, tc.allowRealSend, tc.captureOnlySend, tc.endpoint)
-		if tc.wantErr && err == nil {
-			t.Fatalf("%s: expected error", tc.name)
-		}
-		if !tc.wantErr && err != nil {
+		err := validateCaptureSendConfig(tc.mode, tc.endpoint)
+		if err != nil {
 			t.Fatalf("%s: unexpected error: %v", tc.name, err)
 		}
 	}
@@ -287,7 +278,7 @@ func TestRunClearLatchPath(t *testing.T) {
 	evaluator := &inputruntime.Evaluator{Store: st, Clock: time.Now}
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, nil, nil, channel.ID, true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, nil, nil, channel.ID, true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeHTTP, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	rows, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})
@@ -305,9 +296,9 @@ func TestParseDeliveryMode(t *testing.T) {
 		expect g2stransport.DeliveryMode
 		ok     bool
 	}{
-		{raw: "", expect: g2stransport.DeliveryModeDisabled, ok: true},
-		{raw: "disabled", expect: g2stransport.DeliveryModeDisabled, ok: true},
+		{raw: "", expect: g2stransport.DeliveryModeHTTP, ok: true},
 		{raw: "http", expect: g2stransport.DeliveryModeHTTP, ok: true},
+		{raw: "disabled", expect: "", ok: false},
 		{raw: "dry-run", expect: "", ok: false},
 	}
 	for _, tc := range cases {
@@ -325,13 +316,10 @@ func TestParseDeliveryMode(t *testing.T) {
 }
 
 func TestValidateExecuteDeliveryConfig(t *testing.T) {
-	if err := validateExecuteDeliveryConfig(g2stransport.DeliveryModeDisabled, false, 5000); err != nil {
-		t.Fatalf("unexpected err for disabled mode: %v", err)
+	if err := validateExecuteDeliveryConfig(5000); err != nil {
+		t.Fatalf("unexpected err for positive timeout: %v", err)
 	}
-	if err := validateExecuteDeliveryConfig(g2stransport.DeliveryModeDisabled, true, 5000); err == nil {
-		t.Fatal("expected error when allow-delivery with non-http mode")
-	}
-	if err := validateExecuteDeliveryConfig(g2stransport.DeliveryModeHTTP, true, -1); err == nil {
+	if err := validateExecuteDeliveryConfig(-1); err == nil {
 		t.Fatal("expected error for negative timeout")
 	}
 }
@@ -375,7 +363,7 @@ func TestRunClearLatchWithoutExecuteQueuesButDoesNotExecute(t *testing.T) {
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &fakeMonitorExecutor{}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, false, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeHTTP, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	if len(executor.calls) != 0 {
@@ -403,15 +391,15 @@ func TestRunClearLatchWithExecuteRunsQueuedAction(t *testing.T) {
 	queuer := &actionruntime.Queuer{Store: st, Clock: time.Now}
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &fakeMonitorExecutor{}
-	delivery := g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP, AllowDelivery: true, TimeoutMS: 5000}
+	delivery := g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP, TimeoutMS: 5000}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeHTTP, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	if len(executor.calls) != 1 {
 		t.Fatalf("executor calls=%d, want 1", len(executor.calls))
 	}
-	if executor.calls[0].Delivery.Mode != g2stransport.DeliveryModeHTTP || !executor.calls[0].Delivery.AllowDelivery {
+	if executor.calls[0].Delivery.Mode != g2stransport.DeliveryModeHTTP {
 		t.Fatalf("unexpected delivery settings: %+v", executor.calls[0].Delivery)
 	}
 }
@@ -442,7 +430,7 @@ func TestRunClearLatchExecutesOnlyCurrentProcessQueuedRun(t *testing.T) {
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &fakeMonitorExecutor{}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeHTTP, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 	if len(executor.calls) != 1 {
@@ -453,7 +441,7 @@ func TestRunClearLatchExecutesOnlyCurrentProcessQueuedRun(t *testing.T) {
 	}
 }
 
-func TestRunClearLatchExecuteHostListenerRecordsPreparedPendingEvidence(t *testing.T) {
+func TestRunClearLatchExecuteWithoutSenderFailsAndRecordsEvidence(t *testing.T) {
 	ctx := context.Background()
 	st := newMonitorStore(t, ctx)
 	defer st.Close()
@@ -464,7 +452,7 @@ func TestRunClearLatchExecuteHostListenerRecordsPreparedPendingEvidence(t *testi
 	dispatcher := &actiondispatch.Dispatcher{Store: st, Clock: time.Now}
 	executor := &actionexecutor.Executor{Store: st, Clock: time.Now}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeDisabled, AllowDelivery: false}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP}, false, false, g2stransport.ModeHTTP, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
 
@@ -475,8 +463,8 @@ func TestRunClearLatchExecuteHostListenerRecordsPreparedPendingEvidence(t *testi
 	if len(runs) == 0 {
 		t.Fatal("expected action run")
 	}
-	if runs[0].Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("expected waiting-confirmation status in host listener mode: %+v", runs[0])
+	if runs[0].Status != actions.RunStatusFailed {
+		t.Fatalf("expected failed status when sender is missing: %+v", runs[0])
 	}
 	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 20, ActionRunID: runs[0].ID})
 	if err != nil {
@@ -485,7 +473,7 @@ func TestRunClearLatchExecuteHostListenerRecordsPreparedPendingEvidence(t *testi
 	if len(rows) == 0 {
 		t.Fatal("expected message journal attempt row")
 	}
-	if rows[0].Result != g2sengine.MessageResultPrepared {
+	if rows[0].Result != g2sengine.MessageResultSendFailed {
 		t.Fatalf("unexpected message result: %q", rows[0].Result)
 	}
 	auditRows, err := st.ListAuditTimelineEntries(ctx, store.AuditTimelineListQuery{Limit: 50})
@@ -528,7 +516,7 @@ func TestRunClearLatchExecutePrintsEscalationQueuedWithoutAutoExecution(t *testi
 		}},
 	}
 	output := captureStdout(t, func() {
-		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+		if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, g2stransport.DeliverySettings{}, false, false, g2stransport.ModeHTTP, ""); err != nil {
 			t.Fatalf("runClearLatch: %v", err)
 		}
 	})
@@ -640,7 +628,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	return <-done
 }
 
-func TestRunClearLatchExecuteHostListenerDoesNotSendEvenWhenDeliveryConfigured(t *testing.T) {
+func TestRunClearLatchExecuteWithSenderAttemptsDelivery(t *testing.T) {
 	ctx := context.Background()
 	st := newMonitorStore(t, ctx)
 	defer st.Close()
@@ -656,13 +644,13 @@ func TestRunClearLatchExecuteHostListenerDoesNotSendEvenWhenDeliveryConfigured(t
 		EndpointDefaults: g2stransport.EndpointDefaults{Scheme: "http", Port: 80},
 		Clock:            time.Now,
 	}
-	delivery := g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP, AllowDelivery: true, TimeoutMS: 5000}
+	delivery := g2stransport.DeliverySettings{Mode: g2stransport.DeliveryModeHTTP, TimeoutMS: 5000}
 
-	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeDisabled, false, false, ""); err != nil {
+	if err := runClearLatch(ctx, evaluator, queuer, dispatcher, executor, nil, "emergency-broadcast", true, true, delivery, false, false, g2stransport.ModeHTTP, ""); err != nil {
 		t.Fatalf("runClearLatch: %v", err)
 	}
-	if sender.calls != 0 {
-		t.Fatalf("expected zero sender calls in host listener mode, got %d", sender.calls)
+	if sender.calls == 0 {
+		t.Fatalf("expected sender calls for outbound delivery attempts, got %d", sender.calls)
 	}
 	runs, err := st.ListActionRuns(ctx, store.ActionRunListQuery{Limit: 10})
 	if err != nil {
@@ -671,8 +659,8 @@ func TestRunClearLatchExecuteHostListenerDoesNotSendEvenWhenDeliveryConfigured(t
 	if len(runs) == 0 {
 		t.Fatal("expected action run")
 	}
-	if runs[0].Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("status=%q want WAITING_CONFIRMATION", runs[0].Status)
+	if runs[0].Status != actions.RunStatusSucceeded {
+		t.Fatalf("status=%q want SUCCEEDED", runs[0].Status)
 	}
 	rows, err := st.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 20, ActionRunID: runs[0].ID})
 	if err != nil {
@@ -681,8 +669,8 @@ func TestRunClearLatchExecuteHostListenerDoesNotSendEvenWhenDeliveryConfigured(t
 	if len(rows) == 0 {
 		t.Fatal("expected message row")
 	}
-	if rows[0].Result != g2sengine.MessageResultPrepared {
-		t.Fatalf("result=%q want PREPARED", rows[0].Result)
+	if rows[0].Result != g2sengine.MessageResultSendSucceeded {
+		t.Fatalf("result=%q want SEND_SUCCEEDED", rows[0].Result)
 	}
 }
 
@@ -705,3 +693,5 @@ func (s *monitorSenderOK) Send(_ context.Context, request g2stransport.SendReque
 		CompletedAt:     time.Now().UTC(),
 	}, nil
 }
+
+

@@ -334,8 +334,8 @@ func TestPiFieldTestConfigEnablesRuntimeExecution(t *testing.T) {
 	if cfg.Runtime.InputRuntimeIntervalMS != 100 {
 		t.Fatalf("input_runtime_interval_ms=%d, want 100", cfg.Runtime.InputRuntimeIntervalMS)
 	}
-	if cfg.Runtime.DeliveryTopology != "HOST_LISTENER" {
-		t.Fatalf("delivery_topology=%q, want HOST_LISTENER", cfg.Runtime.DeliveryTopology)
+	if cfg.Runtime.DeliveryTopology != "OUTBOUND_ENDPOINT" {
+		t.Fatalf("delivery_topology=%q, want OUTBOUND_ENDPOINT", cfg.Runtime.DeliveryTopology)
 	}
 	if cfg.Runtime.PendingDeliverySweepEnabled {
 		t.Fatalf("pending_delivery_sweep_enabled=true, want false")

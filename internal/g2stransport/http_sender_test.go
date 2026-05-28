@@ -13,7 +13,7 @@ import (
 // These tests verify the current capture-proof guardrails. They do not
 // establish permanent production endpoint policy.
 
-func TestHTTPSenderBlocksWhenAllowFalse(t *testing.T) {
+func TestHTTPSenderAllowFlagDoesNotBlockHTTPSend(t *testing.T) {
 	var hitCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hitCount, 1)
@@ -28,21 +28,19 @@ func TestHTTPSenderBlocksWhenAllowFalse(t *testing.T) {
 		EndpointURL:     server.URL,
 		RawPayload:      "<x/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   false,
-		CaptureOnlySend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !result.Blocked || result.Sent {
+	if result.Blocked || !result.Sent {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if got := atomic.LoadInt32(&hitCount); got != 0 {
-		t.Fatalf("expected no network call, hitCount=%d", got)
+	if got := atomic.LoadInt32(&hitCount); got != 1 {
+		t.Fatalf("expected one network call, hitCount=%d", got)
 	}
 }
 
-func TestHTTPSenderBlocksWhenModeNotHTTP(t *testing.T) {
+func TestHTTPSenderModeDoesNotBlockConfiguredHTTPSend(t *testing.T) {
 	var hitCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hitCount, 1)
@@ -56,18 +54,16 @@ func TestHTTPSenderBlocksWhenModeNotHTTP(t *testing.T) {
 		EGMID:           "EGM-2",
 		EndpointURL:     server.URL,
 		RawPayload:      "<x/>",
-		TransportMode:   ModeDisabled,
-		AllowRealSend:   true,
-		CaptureOnlySend: true,
+		TransportMode:   Mode("DISABLED"),
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !result.Blocked || result.Sent {
+	if result.Blocked || !result.Sent {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if got := atomic.LoadInt32(&hitCount); got != 0 {
-		t.Fatalf("expected no network call, hitCount=%d", got)
+	if got := atomic.LoadInt32(&hitCount); got != 1 {
+		t.Fatalf("expected one network call, hitCount=%d", got)
 	}
 }
 
@@ -89,8 +85,6 @@ func TestHTTPSenderSendsWhenAllowed(t *testing.T) {
 		EndpointURL:     server.URL,
 		RawPayload:      "<send/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -121,8 +115,6 @@ func TestHTTPSenderAllowsConfiguredHTTPWhenCaptureOnlyNotSet(t *testing.T) {
 		EndpointURL:     server.URL,
 		RawPayload:      "<send/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: false,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -135,25 +127,35 @@ func TestHTTPSenderAllowsConfiguredHTTPWhenCaptureOnlyNotSet(t *testing.T) {
 	}
 }
 
-func TestHTTPSenderCaptureProofBlocksNonLocalEndpoint(t *testing.T) {
-	sender := &HTTPSender{}
+func TestHTTPSenderCaptureOnlyFlagDoesNotBlockNonLocalEndpoint(t *testing.T) {
+	calls := int32(0)
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&calls, 1)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("ok")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+	sender := &HTTPSender{Client: client}
 	result, err := sender.Send(context.Background(), SendRequest{
 		MessageID:       5,
 		EGMID:           "EGM-5",
 		EndpointURL:     "http://10.20.30.40:18080/capture",
 		RawPayload:      "<send/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !result.Blocked || result.Sent {
+	if result.Blocked || !result.Sent {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if result.Error == "" || result.Error == "send blocked: capture_only_send_required" {
-		t.Fatalf("unexpected blocked reason: %q", result.Error)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("expected one transport call, got %d", got)
 	}
 }
 
@@ -178,8 +180,6 @@ func TestHTTPSenderNonCaptureModeDoesNotApplyLoopbackRestriction(t *testing.T) {
 		EndpointURL:     "http://10.20.30.40:8080/g2s",
 		RawPayload:      "<send/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: false,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -206,8 +206,6 @@ func TestHTTPSenderMissingEndpointFailsClearly(t *testing.T) {
 		EndpointURL:     "",
 		RawPayload:      "<send/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: false,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -231,8 +229,6 @@ func TestHTTPSenderInvalidEndpointFailsClearly(t *testing.T) {
 		EndpointURL:     "://bad-url",
 		RawPayload:      "<send/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: false,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -259,8 +255,6 @@ func TestHTTPSenderNon2xxReturnsFailedResult(t *testing.T) {
 		EndpointURL:     server.URL,
 		RawPayload:      "<send/>",
 		TransportMode:   ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: false,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -275,3 +269,4 @@ func TestHTTPSenderNon2xxReturnsFailedResult(t *testing.T) {
 		t.Fatalf("excerpt=%q", result.ResponseExcerpt)
 	}
 }
+

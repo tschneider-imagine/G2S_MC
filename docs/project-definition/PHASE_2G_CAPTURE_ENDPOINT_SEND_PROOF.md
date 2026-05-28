@@ -2,14 +2,13 @@
 
 ## Scope
 
-Phase 2G proves controlled HTTP send behavior against an explicit capture endpoint while keeping all EGM behavior disabled.
+Phase 2G proves outbound HTTP send behavior against a capture endpoint while preserving normal runtime send-attempt behavior.
 
 This phase adds:
 
 - a local capture sink command for recording outbound payloads,
-- stricter HTTP transport safety checks,
-- monitor flags for explicit capture-only send proof,
-- message journal updates for capture send success/failure.
+- endpoint override support for observability testing,
+- message journal evidence for send attempt and terminal outcome.
 
 ## Why This Is Not an EGM Simulator
 
@@ -21,22 +20,7 @@ The capture sink:
 - does not emulate cabinet behavior,
 - does not emit simulated acknowledgements.
 
-It is only an analyzer/capture endpoint for outbound transport verification.
-
-## Capture Endpoint Safety Rules
-
-Real HTTP send in Phase 2G is allowed only when all conditions are true:
-
-1. `transport_mode` is `HTTP`.
-2. `allow_real_send` is `true`.
-3. `capture_only_send` is `true`.
-4. endpoint host is loopback-only:
-   - `localhost`
-   - `127.0.0.1`
-   - `::1`
-
-If any condition is missing, send is blocked with a clear reason, including
-`endpoint_not_allowed_for_capture_phase` for non-loopback hosts.
+It is an observability endpoint for outbound delivery verification.
 
 ## Smoke Test Commands
 
@@ -55,12 +39,10 @@ go run ./cmd/g2s-input-monitor \
   -seed-demo-actions \
   -seed-demo-egms \
   -capture-endpoint http://127.0.0.1:18080/capture \
-  -capture-only-send \
   -queue-actions \
   -dispatch-dry-run \
   -send-prepared \
   -transport http \
-  -allow-real-send \
   -duration 60s \
   -interval 100ms
 ```
@@ -68,30 +50,21 @@ go run ./cmd/g2s-input-monitor \
 Expected on trigger:
 
 - queued run created,
-- dry-run dispatch prepares rendered messages,
-- send-prepared reports sent count for capture endpoint,
+- dispatch prepares rendered messages,
+- send-prepared reports attempted/succeeded/failed counts,
 - capture JSONL contains rendered payloads,
-- action run is not marked `SUCCEEDED`.
+- action run state remains matcher/confirmation driven.
 
 ## Intentionally Not Included
 
-- no real EGM command workflow,
-- no response-confirmation protocol,
-- no retry/escalation policy,
-- no run completion semantics,
+- no fake cabinet workflow,
+- no response-confirmation protocol change,
+- no retry/escalation redesign,
 - no UI changes.
 
 ## Definition Of Done
 
-- `cmd/g2s-capture-sink` exists and records raw payloads.
-- HTTP send remains blocked unless explicit capture-only gate is satisfied.
-- Non-loopback endpoints are blocked in Phase 2G.
-- Prepared messages can be sent to loopback capture endpoint only.
-- Message journal records send metadata and results.
-- Action runs are not marked `SUCCEEDED`.
+- `cmd/g2s-capture-sink` records raw payloads.
+- prepared messages can be sent to the configured capture endpoint.
+- message journal records send metadata and outcomes.
 - `go test ./...` passes.
-
-## Next Expected Phase
-
-Phase 2H: controlled production endpoint policy and send lifecycle progression (still safety-first, with explicit operational controls).
-

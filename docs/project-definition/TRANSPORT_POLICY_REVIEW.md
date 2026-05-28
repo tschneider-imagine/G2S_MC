@@ -2,46 +2,32 @@
 
 ## Scope
 
-This note reviews current outbound transport enforcement after removal of unapproved runtime UI/export surfaces.
+This note reviews current outbound transport behavior after runtime simplification.
 
 Prime directive: the appliance should attempt configured emergency downstream delivery when operator-approved endpoint, action, and template configuration is present. Safety controls should diagnose, warn, audit, and require explicit configuration; they must not become hidden blockers.
 
-## Current Blockers Classification
+## Current Policy
 
-### A. Keep (explicit safety and anti-accidental-send controls)
+- Delivery mode is HTTP in runtime send flow.
+- Configured prepared messages are sent to resolved endpoints.
+- Outcomes are evidence-first: attempted, succeeded, failed.
+- Transport/network/TLS failures are recorded as failures, not suppressed by policy gates.
 
-- Default no-send posture (`ModeDisabled`/`ModeDryRun`).
-- Explicit real-send opt-in (`AllowRealSend=true`).
-- Explicit transport mode selection (`ModeHTTP` required for HTTP send path).
-- Audit + message journal result recording for blocked/failed/succeeded attempts.
+## Observability Controls
 
-These are explicit operator configuration gates and should remain.
+- Message journal captures send metadata (`http_status_code`, latency, response excerpt).
+- Audit timeline captures dispatch/send lifecycle entries.
+- Operator surfaces remain evidence-oriented for diagnosis.
 
-### B. Rework before production send
+## Production Requirements
 
-- `CaptureOnlySend` hard requirement in HTTP sender.
-- Loopback-only endpoint restriction enforced by `CaptureEndpointAllowed`.
-
-These are valid for capture proofing but would become hidden product blockers if left as permanent behavior for real EGM delivery.
-
-### C. Capture-proof-only behavior (must stay isolated from product send policy)
-
-- Requirement that endpoint host must be loopback (`localhost`, `127.0.0.1`, `::1`) when capture-only mode is active.
-- Capture-endpoint override usage for send-prepared smoke/capture flows.
-
-This behavior is phase-specific proof instrumentation and not a long-term endpoint policy.
-
-## Required Design Decision Before Real EGM Send
-
-Before enabling product real-send flow:
-
-1. Define explicit operator-approved endpoint policy for production (not implicit loopback-only).
-2. Separate capture-proof mode from production mode in config and runtime behavior.
-3. Keep explicit opt-in + audit trail for all send attempts.
-4. Ensure emergency-triggered configured actions attempt delivery once approved settings exist.
+1. Endpoint configuration must remain explicit and operator-reviewed.
+2. Certificate and trust material policy must remain explicit and auditable.
+3. Retry/escalation policy must remain transparent and deterministic.
+4. Emergency/test runtime path must continue to attempt configured outbound delivery.
 
 ## Current Status
 
-- No real send is enabled by default.
-- Capture-proof guardrails remain in place.
-- Runtime UI no longer exposes unapproved transport/readiness framing.
+- Runtime send path is configured for outbound HTTP attempts.
+- Legacy local send-block policy controls have been removed from runtime behavior.
+- Evidence paths remain in place for operational verification.

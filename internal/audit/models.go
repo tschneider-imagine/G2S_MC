@@ -21,7 +21,6 @@ const (
 	EventTypeInputLatchClearFailed    = "INPUT_LATCH_CLEAR_FAILED"
 	EventTypeActionQueued             = "ACTION_QUEUED"
 	EventTypeActionDispatchPrepared   = "ACTION_DISPATCH_PREPARED"
-	EventTypeMessageSendBlocked       = "MESSAGE_SEND_BLOCKED"
 	EventTypeMessageSendAttempted     = "MESSAGE_SEND_ATTEMPTED"
 	EventTypeMessageSendSucceeded     = "MESSAGE_SEND_SUCCEEDED"
 	EventTypeMessageSendFailed        = "MESSAGE_SEND_FAILED"

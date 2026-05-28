@@ -305,16 +305,15 @@ func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPrepa
 
 	sender := d.Sender
 	if sender == nil {
-		sender = g2stransport.NewSender(request.TransportMode)
+		sender = &g2stransport.HTTPSender{}
 	}
 
 	sentCount := 0
 	failedCount := 0
-	blockedCount := 0
 	processed := 0
 	for _, entry := range entries {
 		switch entry.Result {
-		case g2sengine.MessageResultDryRun, g2sengine.MessageResultSendBlocked, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendAttempted:
+		case g2sengine.MessageResultDryRun, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendAttempted:
 		default:
 			continue
 		}
@@ -340,9 +339,7 @@ func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPrepa
 			ContentType:     "application/soap+xml",
 			RawPayload:      entry.RawPayload,
 			TimeoutMS:       request.DefaultTimeout,
-			AllowRealSend:   request.AllowRealSend,
-			CaptureOnlySend: request.CaptureOnlySend,
-			TransportMode:   request.TransportMode,
+			TransportMode:   g2stransport.ModeHTTP,
 			RequestedAt:     now,
 		})
 		if sendErr != nil {
@@ -351,10 +348,7 @@ func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPrepa
 		}
 
 		resultType := g2sengine.MessageResultSendFailed
-		if sendResult.Blocked {
-			resultType = g2sengine.MessageResultSendBlocked
-			blockedCount++
-		} else if sendResult.Sent {
+		if sendResult.Sent {
 			resultType = g2sengine.MessageResultSendSucceeded
 			sentCount++
 		} else {
@@ -384,29 +378,22 @@ func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPrepa
 
 	eventType := audit.EventTypeMessageSendAttempted
 	severity := audit.AuditSeverityInfo
-	if blockedCount > 0 && sentCount == 0 && failedCount == 0 {
-		eventType = audit.EventTypeMessageSendBlocked
-		severity = audit.AuditSeverityWarning
-	}
 	if failedCount > 0 {
 		eventType = audit.EventTypeMessageSendFailed
 		severity = audit.AuditSeverityWarning
 	}
-	if sentCount > 0 && failedCount == 0 && blockedCount == 0 {
+	if sentCount > 0 && failedCount == 0 {
 		eventType = audit.EventTypeMessageSendSucceeded
 		severity = audit.AuditSeverityInfo
 	}
 
 	detailJSON, err := json.Marshal(map[string]any{
 		"action_run_id":     actionRunID,
-		"transport_mode":    request.TransportMode,
-		"allow_real_send":   request.AllowRealSend,
-		"capture_only_send": request.CaptureOnlySend,
+		"transport_mode":    g2stransport.ModeHTTP,
 		"capture_endpoint":  strings.TrimSpace(request.CaptureEndpoint),
 		"processed":         processed,
 		"sent":              sentCount,
 		"failed":            failedCount,
-		"blocked":           blockedCount,
 	})
 	if err != nil {
 		return SendPreparedMessagesResult{}, fmt.Errorf("marshal send-prepared detail: %w", err)
@@ -426,10 +413,9 @@ func (d *Dispatcher) SendPreparedMessages(ctx context.Context, request SendPrepa
 
 	return SendPreparedMessagesResult{
 		ActionRunID:   actionRunID,
-		TransportMode: request.TransportMode,
+		TransportMode: g2stransport.ModeHTTP,
 		SentCount:     sentCount,
 		FailedCount:   failedCount,
-		BlockedCount:  blockedCount,
 		AuditEntryID:  auditID,
 	}, nil
 }

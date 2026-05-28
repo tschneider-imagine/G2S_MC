@@ -28,23 +28,11 @@ func (s *HTTPSender) Send(ctx context.Context, request SendRequest) (SendResult,
 	if clock == nil {
 		clock = time.Now
 	}
-	mode := normalizeMode(request.TransportMode)
 	result := SendResult{
 		MessageID:     request.MessageID,
 		EGMID:         request.EGMID,
-		TransportMode: mode,
+		TransportMode: ModeHTTP,
 		CompletedAt:   clock().UTC(),
-	}
-
-	if mode != ModeHTTP {
-		result.Blocked = true
-		result.Error = fmt.Sprintf("send blocked: transport mode %q is not HTTP", mode)
-		return result, nil
-	}
-	if !request.AllowRealSend {
-		result.Blocked = true
-		result.Error = "send blocked: allow_real_send is false"
-		return result, nil
 	}
 
 	endpointURL := strings.TrimSpace(request.EndpointURL)
@@ -56,14 +44,6 @@ func (s *HTTPSender) Send(ctx context.Context, request SendRequest) (SendResult,
 	if parseErr != nil || strings.TrimSpace(parsedURL.Scheme) == "" || strings.TrimSpace(parsedURL.Host) == "" {
 		result.Error = "invalid endpoint URL"
 		return result, nil
-	}
-	if request.CaptureOnlySend {
-		allowed, reason := CaptureEndpointAllowed(endpointURL)
-		if !allowed {
-			result.Blocked = true
-			result.Error = "send blocked: " + reason
-			return result, nil
-		}
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(request.Method))

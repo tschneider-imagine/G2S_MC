@@ -1862,10 +1862,9 @@ func TestParseDeliveryModeFlag(t *testing.T) {
 		want    g2stransport.DeliveryMode
 		wantErr bool
 	}{
-		{name: "default disabled", raw: "", want: g2stransport.DeliveryModeDisabled},
-		{name: "disabled uppercase", raw: "DISABLED", want: g2stransport.DeliveryModeDisabled},
+		{name: "default http", raw: "", want: g2stransport.DeliveryModeHTTP},
 		{name: "http lowercase", raw: "http", want: g2stransport.DeliveryModeHTTP},
-		{name: "invalid", raw: "dry-run", wantErr: true},
+		{name: "invalid", raw: "disabled", wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1887,17 +1886,14 @@ func TestParseDeliveryModeFlag(t *testing.T) {
 }
 
 func TestValidateInputRuntimeFlags(t *testing.T) {
-	if err := validateInputRuntimeFlags(100*time.Millisecond, g2stransport.DeliveryModeDisabled, false, 5000); err != nil {
+	if err := validateInputRuntimeFlags(100*time.Millisecond, 5000); err != nil {
 		t.Fatalf("expected valid flags: %v", err)
 	}
-	if err := validateInputRuntimeFlags(0, g2stransport.DeliveryModeDisabled, false, 5000); err == nil {
+	if err := validateInputRuntimeFlags(0, 5000); err == nil {
 		t.Fatal("expected interval validation error")
 	}
-	if err := validateInputRuntimeFlags(100*time.Millisecond, g2stransport.DeliveryModeDisabled, false, -1); err == nil {
+	if err := validateInputRuntimeFlags(100*time.Millisecond, -1); err == nil {
 		t.Fatal("expected timeout validation error")
-	}
-	if err := validateInputRuntimeFlags(100*time.Millisecond, g2stransport.DeliveryModeDisabled, true, 5000); err == nil {
-		t.Fatal("expected allow-delivery/mode validation error")
 	}
 }
 
@@ -1922,11 +1918,11 @@ func TestRuntimeOptionsFromConfigAndFlagsUsesConfigDefaults(t *testing.T) {
 	if options.PollInterval != 125*time.Millisecond {
 		t.Fatalf("poll interval = %s, want 125ms", options.PollInterval)
 	}
-	if topology != g2stransport.DeliveryTopologyHostListener {
-		t.Fatalf("topology = %q, want HOST_LISTENER", topology)
+	if topology != g2stransport.DeliveryTopologyOutboundEndpoint {
+		t.Fatalf("topology = %q, want OUTBOUND_ENDPOINT", topology)
 	}
-	if options.DeliverySettings.Mode != g2stransport.DeliveryModeDisabled || options.DeliverySettings.AllowDelivery {
-		t.Fatalf("delivery defaults changed unexpectedly: %+v", options.DeliverySettings)
+	if options.DeliverySettings.Mode != g2stransport.DeliveryModeHTTP {
+		t.Fatalf("delivery defaults = %+v, want mode=http", options.DeliverySettings)
 	}
 	if options.DeliverySettings.TimeoutMS != 7000 {
 		t.Fatalf("delivery timeout = %d, want 7000", options.DeliverySettings.TimeoutMS)
@@ -1961,7 +1957,6 @@ func TestRuntimeOptionsFromConfigAndFlagsExplicitFlagsOverrideConfig(t *testing.
 		InputRuntimeInterval:       225 * time.Millisecond,
 		DeliveryModeRaw:            "http",
 		DeliveryTopologyRaw:        "OUTBOUND_ENDPOINT",
-		AllowDelivery:              true,
 		DeliveryTimeoutMS:          9000,
 	})
 	if err != nil {
@@ -1976,7 +1971,7 @@ func TestRuntimeOptionsFromConfigAndFlagsExplicitFlagsOverrideConfig(t *testing.
 	if topology != g2stransport.DeliveryTopologyOutboundEndpoint {
 		t.Fatalf("topology = %q, want OUTBOUND_ENDPOINT", topology)
 	}
-	if options.DeliverySettings.Mode != g2stransport.DeliveryModeHTTP || !options.DeliverySettings.AllowDelivery {
+	if options.DeliverySettings.Mode != g2stransport.DeliveryModeHTTP {
 		t.Fatalf("delivery settings did not honor explicit flags: %+v", options.DeliverySettings)
 	}
 	if options.DeliverySettings.TimeoutMS != 9000 {
@@ -2037,3 +2032,4 @@ func TestPendingDeliverySweepOptionsFromConfigDefaultsInterval(t *testing.T) {
 		t.Fatalf("interval=%s, want %s", options.Interval, pendingdeliveryruntime.DefaultSweepInterval)
 	}
 }
+

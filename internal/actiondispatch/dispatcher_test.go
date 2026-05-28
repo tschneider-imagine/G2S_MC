@@ -303,7 +303,7 @@ func TestDispatchMissingTemplateVersionStillRecordsJournalWarning(t *testing.T) 
 	}
 }
 
-func TestSendPreparedMessagesBlockedUpdatesJournal(t *testing.T) {
+func TestSendPreparedMessagesFailedUpdatesJournal(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
 	dispatcher := &Dispatcher{Store: st, Sender: &fakeSender{sendFn: func(_ context.Context, request g2stransport.SendRequest) (g2stransport.SendResult, error) {
@@ -329,23 +329,21 @@ func TestSendPreparedMessagesBlockedUpdatesJournal(t *testing.T) {
 
 	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
 		ActionRunID:     "run-1",
-		TransportMode:   g2stransport.ModeDisabled,
-		AllowRealSend:   false,
-		CaptureOnlySend: false,
+		TransportMode:   g2stransport.ModeHTTP,
 		RequestedAt:     now,
 	})
 	if err != nil {
 		t.Fatalf("send prepared: %v", err)
 	}
-	if result.BlockedCount == 0 {
-		t.Fatalf("blocked count=%d, want >0", result.BlockedCount)
+	if result.FailedCount == 0 {
+		t.Fatalf("failed count=%d, want >0", result.FailedCount)
 	}
 	for _, row := range st.messages {
 		if row.ActionRunID != "run-1" {
 			continue
 		}
-		if row.Result != g2sengine.MessageResultSendBlocked {
-			t.Fatalf("expected send-blocked result, got %q", row.Result)
+		if row.Result != g2sengine.MessageResultSendFailed {
+			t.Fatalf("expected send-failed result, got %q", row.Result)
 		}
 	}
 }
@@ -378,8 +376,6 @@ func TestSendPreparedMessagesAllowedMarksSucceeded(t *testing.T) {
 	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
 		ActionRunID:     "run-1",
 		TransportMode:   g2stransport.ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: true,
 		CaptureEndpoint: "http://127.0.0.1:18080/capture",
 		RequestedAt:     now,
 	})
@@ -420,16 +416,11 @@ func TestSendPreparedMessagesRealSenderAttemptsDeliveryWithoutCaptureOnly(t *tes
 	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
 		ActionRunID:     "run-1",
 		TransportMode:   g2stransport.ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: false,
 		CaptureEndpoint: "http://127.0.0.1:18080/capture",
 		RequestedAt:     now,
 	})
 	if err != nil {
 		t.Fatalf("send prepared: %v", err)
-	}
-	if result.BlockedCount != 0 {
-		t.Fatalf("blocked count=%d want 0", result.BlockedCount)
 	}
 	if result.FailedCount == 0 {
 		t.Fatalf("failed count=%d want >0", result.FailedCount)
@@ -459,8 +450,6 @@ func TestSendPreparedMessagesRealSenderLocalhostCaptureSucceeds(t *testing.T) {
 	result, err := dispatcher.SendPreparedMessages(context.Background(), SendPreparedMessagesRequest{
 		ActionRunID:     "run-1",
 		TransportMode:   g2stransport.ModeHTTP,
-		AllowRealSend:   true,
-		CaptureOnlySend: true,
 		CaptureEndpoint: server.URL + "/capture",
 		RequestedAt:     now,
 	})
@@ -541,3 +530,4 @@ func newFakeStore(now time.Time) *fakeStore {
 		audits:   []audit.AuditTimelineEntry{},
 	}
 }
+

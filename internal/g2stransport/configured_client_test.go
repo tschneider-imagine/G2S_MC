@@ -32,7 +32,6 @@ func TestConfiguredHTTPSenderSendsWithTrustedCA(t *testing.T) {
 		EndpointURL:   server.URL,
 		RawPayload:    "<cmd/>",
 		TransportMode: ModeHTTP,
-		AllowRealSend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -57,7 +56,6 @@ func TestConfiguredHTTPSenderFailsWhenTLSRequiredWithoutCA(t *testing.T) {
 		EndpointURL:   server.URL,
 		RawPayload:    "<cmd/>",
 		TransportMode: ModeHTTP,
-		AllowRealSend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -88,7 +86,6 @@ func TestConfiguredHTTPSenderSupportsMutualTLS(t *testing.T) {
 		EndpointURL:   server.URL,
 		RawPayload:    "<cmd/>",
 		TransportMode: ModeHTTP,
-		AllowRealSend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -116,7 +113,6 @@ func TestConfiguredHTTPSenderInvalidClientKeyPathFailsClearly(t *testing.T) {
 		EndpointURL:   server.URL,
 		RawPayload:    "<cmd/>",
 		TransportMode: ModeHTTP,
-		AllowRealSend: true,
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -173,3 +169,4 @@ func newTLSServer(t *testing.T, paths certs.DevCertPaths, requireClientCert bool
 	server.StartTLS()
 	return server
 }
+

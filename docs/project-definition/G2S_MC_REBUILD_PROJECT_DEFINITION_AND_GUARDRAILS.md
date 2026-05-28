@@ -135,6 +135,8 @@ When a configured emergency signal is triggered, the system should:
 6. record everything,
 7. restore/return to normal when the signal returns to normal or when an authorized operator clears it.
 
+Stopping, blocking, or suppressing a configured emergency/test outbound message in the runtime path is a breach of project contract.
+
 ### 1.2 Compliance posture
 
 G2S compliance is useful for diagnostics, interoperability, and template creation. It must not be the core runtime blocker.
@@ -912,6 +914,8 @@ Not allowed as core product work:
 ### 7.7 No compliance blocker in emergency path
 
 Compliance/validation can warn, diagnose, and improve template creation. It should not block a configured emergency action simply because it is non-standard.
+
+Any runtime logic that prevents a configured emergency/test message from being attempted is contract-noncompliant and must be treated as a breach.
 
 ### 7.8 No silent template changes
 

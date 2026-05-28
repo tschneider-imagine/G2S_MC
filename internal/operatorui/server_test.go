@@ -773,7 +773,7 @@ func TestCommsPageRendersMessageEvidence(t *testing.T) {
 		"run-1",
 		"template-generic-g2s-action@1",
 		"emergency_broadcast_silence",
-		"SEND_BLOCKED",
+		"SEND_FAILED",
 		"Match",
 		"EXPECTED:message_ok",
 		"dry-run rendered",
@@ -2324,8 +2324,6 @@ func TestSettingsPageShowsDeliverySettings(t *testing.T) {
 		"Pending Delivery Sweep",
 		"Sweep Interval (ms)",
 		"DISABLED",
-		"Delivery Default",
-		"Approved Delivery",
 		"Delivery Timeout (ms)",
 	} {
 		if !strings.Contains(body, expected) {
@@ -3282,10 +3280,10 @@ func TestClearLatchRouteExecutesQueuedRunWhenInputRuntimeExecutionEnabled(t *tes
 	if matched == nil {
 		t.Fatalf("expected queued return action run for transition_id=%d", transition.ID)
 	}
-	if matched.Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("run status=%q want WAITING_CONFIRMATION", matched.Status)
+	if matched.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q want FAILED", matched.Status)
 	}
-	if !strings.Contains(res.Body.String(), "run status: WAITING_CONFIRMATION") {
+	if !strings.Contains(res.Body.String(), "run status: FAILED") {
 		t.Fatalf("expected executed run status in response, body=%s", res.Body.String())
 	}
 
@@ -3296,20 +3294,8 @@ func TestClearLatchRouteExecutesQueuedRunWhenInputRuntimeExecutionEnabled(t *tes
 	if err != nil {
 		t.Fatalf("list message journal: %v", err)
 	}
-	if len(rows) == 0 {
-		t.Fatalf("expected prepared message rows for action run %s", matched.ID)
-	}
-	foundPrepared := false
-	for _, row := range rows {
-		if row.Result == g2sengine.MessageResultPrepared {
-			foundPrepared = true
-		}
-		if row.Result == g2sengine.MessageResultSendFailed {
-			t.Fatalf("unexpected SEND_FAILED row in host listener execution: %+v", row)
-		}
-	}
-	if !foundPrepared {
-		t.Fatalf("expected PREPARED message result for action run %s", matched.ID)
+	if len(rows) != 0 {
+		t.Fatalf("expected no message rows when delivery target cannot be resolved, got %+v", rows)
 	}
 }
 
@@ -3456,8 +3442,6 @@ func defaultOperatorOptions() Options {
 		ServerCertConfigured:     true,
 		DeliveryMode:             "DISABLED",
 		DeliveryTopology:         string(g2stransport.DeliveryTopologyHostListener),
-		AllowDeliveryDefault:     false,
-		CaptureOnlyDefault:       false,
 		DeliveryTimeoutMS:        5000,
 		DeliveryEndpointDefaults: g2stransport.EndpointDefaults{Scheme: "https", Port: 8444},
 		DeliveryClientConfig: g2stransport.HTTPClientConfig{
@@ -3650,7 +3634,7 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 		MessageType:       "emergency_broadcast_silence",
 		RawPayload:        `<message action="emergency-broadcast-trigger" egm="EGM-001"/>`,
 		ParsedSummaryJSON: `{"summary":"dry-run rendered","egm_id":"EGM-001"}`,
-		Result:            g2sengine.MessageResultSendBlocked,
+		Result:            g2sengine.MessageResultSendFailed,
 		TransportMode:     "HTTP",
 		Error:             "send_disabled",
 		HTTPStatusCode:    403,
@@ -3681,3 +3665,5 @@ func seedOperatorData(t *testing.T, ctx context.Context, st *store.SQLiteStore) 
 		t.Fatalf("replace cert inventory: %v", err)
 	}
 }
+
+

@@ -422,7 +422,7 @@ func TestExecuteNoSenderFailsWithoutPretendingSuccess(t *testing.T) {
 	}
 }
 
-func TestExecuteHostListenerWithoutEndpointPreparesPendingAndDoesNotSend(t *testing.T) {
+func TestExecuteHostListenerWithoutEndpointFailsDeliveryResolution(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
 	record := st.egmsByID["EGM-001"]
@@ -456,27 +456,17 @@ func TestExecuteHostListenerWithoutEndpointPreparesPendingAndDoesNotSend(t *test
 	if sendCalls != 0 {
 		t.Fatalf("sender must not be called in host listener mode, calls=%d", sendCalls)
 	}
-	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
+	if result.ActionRun.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
 	}
-	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusPending {
+	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusFailed {
 		t.Fatalf("unexpected target rows: %+v", result.TargetResults)
 	}
-	if len(st.messages) != 1 || st.messages[0].Result != g2sengine.MessageResultPrepared {
-		t.Fatalf("expected prepared message journal row: %+v", st.messages)
+	if len(st.messages) != 0 {
+		t.Fatalf("expected no message journal rows when endpoint resolution fails: %+v", st.messages)
 	}
-	if len(result.Attempts) == 0 || result.Attempts[0].DeliveryResult != string(g2sengine.MessageResultPrepared) {
-		t.Fatalf("expected prepared attempt summary: %+v", result.Attempts)
-	}
-	foundPreparedAudit := false
-	for _, row := range st.audits {
-		if row.EventType == audit.EventTypeMessagePrepared {
-			foundPreparedAudit = true
-			break
-		}
-	}
-	if !foundPreparedAudit {
-		t.Fatalf("expected %s audit entry", audit.EventTypeMessagePrepared)
+	if len(result.Attempts) != 0 {
+		t.Fatalf("expected no send attempts when endpoint resolution fails: %+v", result.Attempts)
 	}
 }
 
@@ -518,15 +508,15 @@ func TestExecuteHostListenerMissingEndpointDoesNotQueueEscalation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
+	if result.ActionRun.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
 	}
 	if result.EscalationRun != nil {
 		t.Fatalf("did not expect escalation run: %+v", result.EscalationRun)
 	}
 }
 
-func TestExecuteDefaultDeliverySettingsDoNotSilentlySend(t *testing.T) {
+func TestExecuteDefaultDeliverySettingsAlwaysAttemptSend(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
 	calls := 0
@@ -534,19 +524,15 @@ func TestExecuteDefaultDeliverySettingsDoNotSilentlySend(t *testing.T) {
 		Store: st,
 		Sender: &fakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
 			calls++
-			if req.AllowRealSend {
-				t.Fatalf("allow_real_send must be false by default: %+v", req)
-			}
-			if req.TransportMode != g2stransport.ModeDisabled {
-				t.Fatalf("transport mode must be disabled by default: %q", req.TransportMode)
+			if req.TransportMode != g2stransport.ModeHTTP {
+				t.Fatalf("transport mode must be http: %q", req.TransportMode)
 			}
 			return g2stransport.SendResult{
 				MessageID:     req.MessageID,
 				EGMID:         req.EGMID,
 				TransportMode: req.TransportMode,
-				Blocked:       true,
 				Sent:          false,
-				Error:         "send blocked: allow_real_send is false",
+				Error:         "network unavailable",
 				CompletedAt:   now,
 			}, nil
 		}},
@@ -593,8 +579,6 @@ func TestExecuteUsesConfiguredDeliverySettings(t *testing.T) {
 
 	settings := g2stransport.DeliverySettings{
 		Mode:          g2stransport.DeliveryModeHTTP,
-		AllowDelivery: true,
-		CaptureOnly:   false,
 		TimeoutMS:     4321,
 	}
 	_, err := executor.Execute(context.Background(), ExecuteRequest{
@@ -605,7 +589,7 @@ func TestExecuteUsesConfiguredDeliverySettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if captured.TransportMode != g2stransport.ModeHTTP || !captured.AllowRealSend || captured.CaptureOnlySend || captured.TimeoutMS != 4321 {
+	if captured.TransportMode != g2stransport.ModeHTTP || captured.TimeoutMS != 4321 {
 		t.Fatalf("send request did not reflect delivery settings: %+v", captured)
 	}
 }
@@ -758,7 +742,7 @@ func TestExecuteRestoreActionUsesSamePath(t *testing.T) {
 	}
 }
 
-func TestExecuteRestoreActionUsesHostListenerPendingPath(t *testing.T) {
+func TestExecuteRestoreActionHostListenerWithoutEndpointFails(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
 	restoreRun := actions.ActionRun{
@@ -806,10 +790,10 @@ func TestExecuteRestoreActionUsesHostListenerPendingPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("restore run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
+	if result.ActionRun.Status != actions.RunStatusFailed {
+		t.Fatalf("restore run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
 	}
-	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusPending {
+	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusFailed {
 		t.Fatalf("unexpected restore target rows: %+v", result.TargetResults)
 	}
 }
@@ -817,8 +801,6 @@ func TestExecuteRestoreActionUsesHostListenerPendingPath(t *testing.T) {
 func enabledDeliverySettings() g2stransport.DeliverySettings {
 	return g2stransport.DeliverySettings{
 		Mode:          g2stransport.DeliveryModeHTTP,
-		AllowDelivery: true,
-		CaptureOnly:   false,
 		TimeoutMS:     5000,
 	}
 }
@@ -900,3 +882,4 @@ func newFakeStore(now time.Time) *fakeStore {
 		nextMessageID: 0,
 	}
 }
+

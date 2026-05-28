@@ -242,9 +242,7 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 		dispatcher := actiondispatch.Dispatcher{Store: s.Store}
 		result, err := dispatcher.SendPreparedMessages(r.Context(), actiondispatch.SendPreparedMessagesRequest{
 			ActionRunID:     id,
-			TransportMode:   g2stransport.Mode(strings.ToUpper(strings.TrimSpace(req.TransportMode))),
-			AllowRealSend:   req.AllowRealSend,
-			CaptureOnlySend: req.CaptureOnlySend,
+			TransportMode:   g2stransport.ModeHTTP,
 			CaptureEndpoint: strings.TrimSpace(req.CaptureEndpoint),
 			Actor:           strings.TrimSpace(req.Actor),
 		})
@@ -274,18 +272,14 @@ func (s *Server) handleActionRunByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		delivery := s.DefaultDeliverySettings.Normalize()
-		if mode := strings.TrimSpace(req.DeliveryMode); mode != "" {
-			delivery.Mode = g2stransport.DeliveryMode(strings.ToUpper(mode))
-		}
-		if hasBody {
-			delivery.AllowDelivery = req.AllowDelivery
-			delivery.CaptureOnly = req.CaptureOnly
-			if req.TimeoutMS > 0 {
-				delivery.TimeoutMS = req.TimeoutMS
-			}
+		if hasBody && req.TimeoutMS > 0 {
+			delivery.TimeoutMS = req.TimeoutMS
 		}
 		delivery = delivery.Normalize()
 		topology := strings.TrimSpace(s.DeliveryTopology)
+		if topology == "" {
+			topology = string(g2stransport.DeliveryTopologyOutboundEndpoint)
+		}
 		if override := strings.TrimSpace(req.DeliveryTopology); override != "" {
 			topology = override
 		}

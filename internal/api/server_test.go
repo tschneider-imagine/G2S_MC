@@ -642,7 +642,7 @@ func TestPostActionRunSendPreparedRequiresMutationAuth(t *testing.T) {
 	}
 	server.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http","allow_real_send":false}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http"}`)))
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
 
@@ -724,7 +724,7 @@ func TestPostActionRunDispatchDryRunCreatesMessages(t *testing.T) {
 	}
 }
 
-func TestPostActionRunSendPreparedBlocksWithoutAllowFlag(t *testing.T) {
+func TestPostActionRunSendPreparedAttemptsDeliveryWithoutAllowFlag(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
@@ -742,7 +742,7 @@ func TestPostActionRunSendPreparedBlocksWithoutAllowFlag(t *testing.T) {
 		t.Fatalf("dispatch status=%d, want %d", dispatchRes.Code, http.StatusOK)
 	}
 
-	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http","allow_real_send":false}`)))
+	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http"}`)))
 	sendRes := httptest.NewRecorder()
 	mux.ServeHTTP(sendRes, sendReq)
 	if sendRes.Code != http.StatusOK {
@@ -752,8 +752,8 @@ func TestPostActionRunSendPreparedBlocksWithoutAllowFlag(t *testing.T) {
 	if err := json.Unmarshal(sendRes.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.BlockedCount == 0 {
-		t.Fatalf("blocked count=%d, want >0", response.BlockedCount)
+	if response.FailedCount == 0 {
+		t.Fatalf("failed count=%d, want >0", response.FailedCount)
 	}
 	messages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 50, ActionRunID: "run-1"})
 	if err != nil {
@@ -762,8 +762,8 @@ func TestPostActionRunSendPreparedBlocksWithoutAllowFlag(t *testing.T) {
 	if len(messages) == 0 {
 		t.Fatal("expected prepared messages")
 	}
-	if messages[0].Result != g2sengine.MessageResultSendBlocked {
-		t.Fatalf("message result=%q, want %q", messages[0].Result, g2sengine.MessageResultSendBlocked)
+	if messages[0].Result != g2sengine.MessageResultSendFailed {
+		t.Fatalf("message result=%q, want %q", messages[0].Result, g2sengine.MessageResultSendFailed)
 	}
 }
 
@@ -785,7 +785,7 @@ func TestPostActionRunSendPreparedAttemptsDeliveryWithoutCaptureOnly(t *testing.
 		t.Fatalf("dispatch status=%d, want %d", dispatchRes.Code, http.StatusOK)
 	}
 
-	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http","allow_real_send":true,"capture_only_send":false,"capture_endpoint":"http://127.0.0.1:18080/capture"}`)))
+	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(`{"transport_mode":"http","capture_endpoint":"http://127.0.0.1:18080/capture"}`)))
 	sendRes := httptest.NewRecorder()
 	mux.ServeHTTP(sendRes, sendReq)
 	if sendRes.Code != http.StatusOK {
@@ -794,9 +794,6 @@ func TestPostActionRunSendPreparedAttemptsDeliveryWithoutCaptureOnly(t *testing.
 	var response actiondispatch.SendPreparedMessagesResult
 	if err := json.Unmarshal(sendRes.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
-	}
-	if response.BlockedCount != 0 {
-		t.Fatalf("blocked count=%d, want 0", response.BlockedCount)
 	}
 	if response.FailedCount == 0 {
 		t.Fatalf("failed count=%d, want >0", response.FailedCount)
@@ -829,7 +826,7 @@ func TestPostActionRunSendPreparedLocalhostCaptureSends(t *testing.T) {
 		t.Fatalf("dispatch status=%d, want %d", dispatchRes.Code, http.StatusOK)
 	}
 
-	body := fmt.Sprintf(`{"transport_mode":"http","allow_real_send":true,"capture_only_send":true,"capture_endpoint":"%s/capture"}`, captureServer.URL)
+	body := fmt.Sprintf(`{"transport_mode":"http","capture_endpoint":"%s/capture"}`, captureServer.URL)
 	sendReq := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/send-prepared", bytes.NewReader([]byte(body)))
 	sendRes := httptest.NewRecorder()
 	mux.ServeHTTP(sendRes, sendReq)
@@ -922,7 +919,7 @@ func TestPostActionRunExecuteExecutesSpecifiedRunOnly(t *testing.T) {
 	}
 }
 
-func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsPreparesAndWaits(t *testing.T) {
+func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsAttemptsOutboundSend(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
@@ -954,22 +951,25 @@ func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsPreparesAndWaits
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
 	}
-	if sendCalls != 0 {
-		t.Fatalf("sender must not be called in host listener mode, got %d calls", sendCalls)
+	if sendCalls == 0 {
+		t.Fatalf("sender must be called for outbound delivery attempt, got %d calls", sendCalls)
 	}
 	run, err := db.GetActionRun(ctx, "run-1")
 	if err != nil {
 		t.Fatalf("get run-1: %v", err)
 	}
-	if run == nil || run.Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("run should wait for inbound confirmation in host listener mode, got %+v", run)
+	if run == nil || run.Status == actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run should not stay in waiting-confirmation host-listener mode, got %+v", run)
 	}
 	messages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 50, ActionRunID: "run-1"})
 	if err != nil {
 		t.Fatalf("list message journal: %v", err)
 	}
-	if len(messages) == 0 || messages[0].Result != g2sengine.MessageResultPrepared {
-		t.Fatalf("expected prepared message entry, got %+v", messages)
+	if len(messages) == 0 {
+		t.Fatalf("expected message journal entry, got %+v", messages)
+	}
+	if messages[0].Result == g2sengine.MessageResultPrepared {
+		t.Fatalf("expected send-attempt result, got %+v", messages)
 	}
 }
 
@@ -999,7 +999,7 @@ func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
 		AuthorizeMutation: allowMutation,
 		ActionSender: &apiFakeSender{sendFn: func(_ context.Context, req g2stransport.SendRequest) (g2stransport.SendResult, error) {
 			sendCalls++
-			if req.TransportMode != g2stransport.ModeHTTP || !req.AllowRealSend || req.CaptureOnlySend || req.TimeoutMS != 5000 {
+			if req.TransportMode != g2stransport.ModeHTTP || req.TimeoutMS != 5000 {
 				t.Fatalf("unexpected send request: %+v", req)
 			}
 			return g2stransport.SendResult{
@@ -1015,7 +1015,7 @@ func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
 	}
 	server.RegisterRoutes(mux)
 
-	body := `{"actor":"tester","delivery_mode":"HTTP","delivery_topology":"OUTBOUND_ENDPOINT","allow_delivery":true,"capture_only":false,"timeout_ms":5000}`
+	body := `{"actor":"tester","delivery_mode":"HTTP","delivery_topology":"OUTBOUND_ENDPOINT","timeout_ms":5000}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/actions/runs/run-1/execute", bytes.NewReader([]byte(body)))
 	res := httptest.NewRecorder()
 	mux.ServeHTTP(res, req)
@@ -1034,7 +1034,7 @@ func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
 	}
 }
 
-func TestPostActionRunExecuteHostListenerWithoutEndpointReturnsWaiting(t *testing.T) {
+func TestPostActionRunExecuteHostListenerWithoutEndpointReturnsFailed(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
@@ -1068,8 +1068,8 @@ func TestPostActionRunExecuteHostListenerWithoutEndpointReturnsWaiting(t *testin
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode execute result: %v", err)
 	}
-	if payload.ActionRun.Status != actions.RunStatusWaitingConfirmation {
-		t.Fatalf("run status=%q, want WAITING_CONFIRMATION", payload.ActionRun.Status)
+	if payload.ActionRun.Status != actions.RunStatusFailed {
+		t.Fatalf("run status=%q, want FAILED", payload.ActionRun.Status)
 	}
 }
 
@@ -1263,9 +1263,7 @@ func TestPostMessageDeliveryCheckReadOnlyReturnsJSONAndIsNonMutating(t *testing.
 		EndpointDefaults:  g2stransport.EndpointDefaults{Scheme: "http", Port: 8444},
 		DeliveryMode:      "DISABLED",
 		DefaultDeliverySettings: g2stransport.DeliverySettings{
-			Mode:          g2stransport.DeliveryModeDisabled,
-			AllowDelivery: false,
-			CaptureOnly:   false,
+			Mode:          g2stransport.DeliveryModeHTTP,
 			TimeoutMS:     5000,
 		},
 	}
@@ -1331,9 +1329,7 @@ func TestPostMessageDeliveryCheckHostListenerWithoutEndpointReturnsNonError(t *t
 		G2SHostURL:        "https://host.local/g2s",
 		G2SHostID:         "HOST-1",
 		DefaultDeliverySettings: g2stransport.DeliverySettings{
-			Mode:          g2stransport.DeliveryModeDisabled,
-			AllowDelivery: false,
-			CaptureOnly:   false,
+			Mode:          g2stransport.DeliveryModeHTTP,
 			TimeoutMS:     5000,
 		},
 	}
@@ -2175,3 +2171,4 @@ func seedDeliveryCheckFixtures(t *testing.T, ctx context.Context, db *store.SQLi
 		t.Fatalf("seed cert inventory: %v", err)
 	}
 }
+

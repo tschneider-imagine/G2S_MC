@@ -71,7 +71,7 @@
     "input_runtime_interval_ms": 100,
     "pending_delivery_sweep_enabled": false,
     "pending_delivery_sweep_interval_ms": 5000,
-    "delivery_topology": "HOST_LISTENER"
+    "delivery_topology": "OUTBOUND_ENDPOINT"
   },
   "egm_roster": [
     {

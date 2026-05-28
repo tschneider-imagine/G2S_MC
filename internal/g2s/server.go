@@ -85,6 +85,12 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			QueryParams:  query,
 		})
 	}
+	if trimmed := strings.TrimSpace(inboundResult.EGMID); trimmed != "" {
+		egmID = trimmed
+	}
+	if strings.TrimSpace(egmID) == "" {
+		egmID = fallbackEGMIDFromSourceIP(sourceIP)
+	}
 
 	switch {
 	case strings.Contains(message, "commsOnLine") || strings.Contains(message, "commsOnline"):
@@ -108,8 +114,47 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 		})
 		writeSOAPAckRoot(w, "keepAliveAck", inboundResult.OfferedMessage)
 	default:
+		if strings.TrimSpace(egmID) != "" {
+			s.engine.Submit(engine.Event{
+				Type:       engine.EventKeepAlive,
+				EGMID:      egmID,
+				At:         time.Now(),
+				Detail:     "inbound contact",
+				SourceIP:   sourceIP,
+				SourcePort: sourcePort,
+			})
+		}
 		writeSOAP(w, "g2sAck", s.hostID, egmID, inboundResult.OfferedMessage)
 	}
+}
+
+func fallbackEGMIDFromSourceIP(sourceIP string) string {
+	value := strings.TrimSpace(sourceIP)
+	if value == "" {
+		return ""
+	}
+	var normalized strings.Builder
+	normalized.Grow(len(value))
+	lastDash := false
+	for _, ch := range value {
+		switch {
+		case ch >= 'a' && ch <= 'z',
+			ch >= 'A' && ch <= 'Z',
+			ch >= '0' && ch <= '9':
+			normalized.WriteRune(ch)
+			lastDash = false
+		default:
+			if !lastDash {
+				normalized.WriteRune('-')
+				lastDash = true
+			}
+		}
+	}
+	segment := strings.Trim(normalized.String(), "-")
+	if segment == "" {
+		return ""
+	}
+	return "DISCOVERED-IP-" + segment
 }
 
 func parseRemoteEndpoint(remoteAddr string) (string, int) {

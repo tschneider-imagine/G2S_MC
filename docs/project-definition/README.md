@@ -10,6 +10,12 @@ MVP runtime exports are Comms export and Audit/Evidence export only.
 Legacy dashboard routes are removed from active runtime serving.
 Fake EGM tooling is not active product scope.
 
+Host listener discovery note (2026-05-27):
+Any machine that reaches the `/g2s` host listener must appear in the runtime EGM list. If inbound traffic does not include `egmId`, runtime should create a discovered EGM entry from source endpoint identity so operators can still see and triage that contact.
+
+Contract guardrail (2026-05-27):
+Stopping, blocking, or suppressing a configured emergency/test outbound message in the runtime path is a breach of project contract. Runtime must attempt delivery and record real send outcomes (success/failure) as evidence.
+
 Runtime Operator Console navigation contract:
 
 - Live

@@ -247,8 +247,6 @@ func TestRuntimeExecuteEnabledExecutesOnlyNewlyQueuedRuns(t *testing.T) {
 			ExecuteActions: true,
 			DeliverySettings: g2stransport.DeliverySettings{
 				Mode:          g2stransport.DeliveryModeHTTP,
-				AllowDelivery: true,
-				CaptureOnly:   false,
 				TimeoutMS:     4200,
 			},
 		},
@@ -263,7 +261,7 @@ func TestRuntimeExecuteEnabledExecutesOnlyNewlyQueuedRuns(t *testing.T) {
 	if calls[0].ActionRunID != "run-new" {
 		t.Fatalf("executed run id=%q", calls[0].ActionRunID)
 	}
-	if calls[0].Delivery.Mode != g2stransport.DeliveryModeHTTP || !calls[0].Delivery.AllowDelivery || calls[0].Delivery.TimeoutMS != 4200 {
+	if calls[0].Delivery.Mode != g2stransport.DeliveryModeHTTP || calls[0].Delivery.TimeoutMS != 4200 {
 		t.Fatalf("unexpected delivery settings: %+v", calls[0].Delivery)
 	}
 }
@@ -352,3 +350,4 @@ func TestRuntimeSeedsDefaultsOnlyWhenEnabled(t *testing.T) {
 		t.Fatalf("seed calls when disabled=%d, want 0", seedCalls)
 	}
 }
+

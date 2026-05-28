@@ -415,7 +415,7 @@ func TestMessageJournalUpdateResultPersistsSendFields(t *testing.T) {
 	if err := store.UpdateMessageJournalResult(
 		ctx,
 		messageID,
-		g2sengine.MessageResultSendBlocked,
+		g2sengine.MessageResultSendFailed,
 		"blocked by transport gate",
 		"no response",
 		0,
@@ -435,8 +435,8 @@ func TestMessageJournalUpdateResultPersistsSendFields(t *testing.T) {
 		t.Fatalf("entries len=%d, want 1", len(entries))
 	}
 	row := entries[0]
-	if row.Result != g2sengine.MessageResultSendBlocked {
-		t.Fatalf("result=%q, want %q", row.Result, g2sengine.MessageResultSendBlocked)
+	if row.Result != g2sengine.MessageResultSendFailed {
+		t.Fatalf("result=%q, want %q", row.Result, g2sengine.MessageResultSendFailed)
 	}
 	if row.TransportMode != "DISABLED" {
 		t.Fatalf("transport_mode=%q", row.TransportMode)
@@ -754,3 +754,4 @@ func assertHandlerRulesColumns(t *testing.T, store *SQLiteStore) {
 		}
 	}
 }
+

@@ -30,7 +30,6 @@ const (
 	MessageResultDelivered     MessageResult = "DELIVERED_TO_CLIENT"
 	MessageResultExpired       MessageResult = "EXPIRED"
 	MessageResultSuperseded    MessageResult = "SUPERSEDED"
-	MessageResultSendBlocked   MessageResult = "SEND_BLOCKED"
 	MessageResultSendAttempted MessageResult = "SEND_ATTEMPTED"
 	MessageResultSendFailed    MessageResult = "SEND_FAILED"
 	MessageResultSendSucceeded MessageResult = "SEND_SUCCEEDED"
@@ -75,7 +74,7 @@ func (m MessageJournalEntry) Validate() error {
 		return fmt.Errorf("raw_payload is required")
 	}
 	switch m.Result {
-	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun, MessageResultPrepared, MessageResultPending, MessageResultOffered, MessageResultDelivered, MessageResultExpired, MessageResultSuperseded, MessageResultSendBlocked, MessageResultSendAttempted, MessageResultSendFailed, MessageResultSendSucceeded:
+	case MessageResultSent, MessageResultReceived, MessageResultAcked, MessageResultConfirmed, MessageResultFailed, MessageResultIgnored, MessageResultEscalated, MessageResultDryRun, MessageResultPrepared, MessageResultPending, MessageResultOffered, MessageResultDelivered, MessageResultExpired, MessageResultSuperseded, MessageResultSendAttempted, MessageResultSendFailed, MessageResultSendSucceeded:
 	default:
 		return fmt.Errorf("result is invalid")
 	}

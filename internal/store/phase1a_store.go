@@ -1221,7 +1221,7 @@ func (s *SQLiteStore) UpdateMessageJournalResult(
 	completedAt *time.Time,
 ) error {
 	switch result {
-	case g2sengine.MessageResultSent, g2sengine.MessageResultReceived, g2sengine.MessageResultAcked, g2sengine.MessageResultConfirmed, g2sengine.MessageResultFailed, g2sengine.MessageResultIgnored, g2sengine.MessageResultEscalated, g2sengine.MessageResultDryRun, g2sengine.MessageResultPrepared, g2sengine.MessageResultPending, g2sengine.MessageResultOffered, g2sengine.MessageResultDelivered, g2sengine.MessageResultExpired, g2sengine.MessageResultSuperseded, g2sengine.MessageResultSendBlocked, g2sengine.MessageResultSendAttempted, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendSucceeded:
+	case g2sengine.MessageResultSent, g2sengine.MessageResultReceived, g2sengine.MessageResultAcked, g2sengine.MessageResultConfirmed, g2sengine.MessageResultFailed, g2sengine.MessageResultIgnored, g2sengine.MessageResultEscalated, g2sengine.MessageResultDryRun, g2sengine.MessageResultPrepared, g2sengine.MessageResultPending, g2sengine.MessageResultOffered, g2sengine.MessageResultDelivered, g2sengine.MessageResultExpired, g2sengine.MessageResultSuperseded, g2sengine.MessageResultSendAttempted, g2sengine.MessageResultSendFailed, g2sengine.MessageResultSendSucceeded:
 	default:
 		return fmt.Errorf("result is invalid")
 	}

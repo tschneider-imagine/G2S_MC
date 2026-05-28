@@ -97,12 +97,10 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 
 	r.logf(
-		"input_runtime started interval=%s execute_actions=%t delivery_mode=%s allow_delivery=%t capture_only=%t timeout_ms=%d",
+		"input_runtime started interval=%s execute_actions=%t delivery_mode=%s timeout_ms=%d",
 		options.PollInterval,
 		options.ExecuteActions,
 		options.DeliverySettings.Mode,
-		options.DeliverySettings.AllowDelivery,
-		options.DeliverySettings.CaptureOnly,
 		options.DeliverySettings.TimeoutMS,
 	)
 
