@@ -66,13 +66,20 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 	message := string(body)
 	incomingHostID := firstNonEmpty(
 		findAttribute(message, "hostId"),
+		findAttribute(message, "g2s:hostId"),
 		findElement(message, "hostId"),
 		findElement(message, "g2s:hostId"),
+		findElement(message, "g2sHostId"),
+		findElement(message, "g2s:g2sHostId"),
 	)
-	incomingEGMID := findAttribute(message, "egmId")
-	if incomingEGMID == "" {
-		incomingEGMID = findElement(message, "egmId")
-	}
+	incomingEGMID := firstNonEmpty(
+		findAttribute(message, "egmId"),
+		findAttribute(message, "g2s:egmId"),
+		findElement(message, "egmId"),
+		findElement(message, "g2s:egmId"),
+		findElement(message, "g2sEgmId"),
+		findElement(message, "g2s:g2sEgmId"),
+	)
 	hostID := firstNonEmpty(strings.TrimSpace(incomingHostID), strings.TrimSpace(s.hostID))
 	sourceIP, sourcePort := parseRemoteEndpoint(r.RemoteAddr)
 

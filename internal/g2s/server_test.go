@@ -137,6 +137,33 @@ func TestCommsOnlineAckFallsBackToConfiguredHostID(t *testing.T) {
 	}
 }
 
+func TestCommsOnlineAckUsesWrapperG2SIDs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-CONFIG", eng).RegisterRoutes(mux, "/g2s")
+
+	requestBody := `<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:g2s="http://www.gamingstandards.com/wsdl/g2s/v1.0"><SOAP-ENV:Body><g2s:g2sRequest><g2s:g2sTransportReqVersion>1.0</g2s:g2sTransportReqVersion><g2s:g2sEgmId>IGT_000129786B1B</g2s:g2sEgmId><g2s:g2sHostId>1</g2s:g2sHostId></g2s:g2sRequest></SOAP-ENV:Body></SOAP-ENV:Envelope>`
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(requestBody))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `hostId="1"`) {
+		t.Fatalf("expected hostId from wrapper g2sHostId, got %s", body)
+	}
+	if !strings.Contains(body, `egmId="IGT_000129786B1B"`) {
+		t.Fatalf("expected egmId from wrapper g2sEgmId, got %s", body)
+	}
+}
+
 func TestCommsOnlineDiscoversUnknownEGM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
