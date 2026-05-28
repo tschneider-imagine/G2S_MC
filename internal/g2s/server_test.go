@@ -89,6 +89,54 @@ func TestCommsOnlineSupportsUppercaseGEndpointAlias(t *testing.T) {
 	}
 }
 
+func TestCommsOnlineAckUsesInboundHostID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-CONFIG", eng).RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody hostId="1" egmId="EGM-1"><commsOnLine/></g2sBody>`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `hostId="1"`) {
+		t.Fatalf("expected ack hostId=1, got %s", body)
+	}
+	if strings.Contains(body, `hostId="HOST-CONFIG"`) {
+		t.Fatalf("expected inbound hostId to win over configured hostId, got %s", body)
+	}
+}
+
+func TestCommsOnlineAckFallsBackToConfiguredHostID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-CONFIG", eng).RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/g2s", strings.NewReader(`<g2sBody egmId="EGM-1"><commsOnLine/></g2sBody>`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `hostId="HOST-CONFIG"`) {
+		t.Fatalf("expected fallback hostId from config, got %s", rr.Body.String())
+	}
+}
+
 func TestCommsOnlineDiscoversUnknownEGM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

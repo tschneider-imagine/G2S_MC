@@ -64,10 +64,16 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	message := string(body)
+	incomingHostID := firstNonEmpty(
+		findAttribute(message, "hostId"),
+		findElement(message, "hostId"),
+		findElement(message, "g2s:hostId"),
+	)
 	incomingEGMID := findAttribute(message, "egmId")
 	if incomingEGMID == "" {
 		incomingEGMID = findElement(message, "egmId")
 	}
+	hostID := firstNonEmpty(strings.TrimSpace(incomingHostID), strings.TrimSpace(s.hostID))
 	sourceIP, sourcePort := parseRemoteEndpoint(r.RemoteAddr)
 
 	var inboundResult inbound.ProcessResult
@@ -115,7 +121,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			SourcePort: sourcePort,
 		})
 		responseName = "commsOnLineAck"
-		responsePayload = buildSOAPCommsAck(s.hostID, egmID, "commsOnLineAck", "30000", inboundResult.OfferedMessage)
+		responsePayload = buildSOAPCommsAck(hostID, egmID, "commsOnLineAck", "30000", inboundResult.OfferedMessage)
 	case strings.Contains(message, "keepAlive"):
 		s.engine.Submit(engine.Event{
 			Type:       engine.EventKeepAlive,
@@ -126,7 +132,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			SourcePort: sourcePort,
 		})
 		responseName = "keepAliveAck"
-		responsePayload = buildSOAPCommsAck(s.hostID, egmID, "keepAliveAck", "", inboundResult.OfferedMessage)
+		responsePayload = buildSOAPCommsAck(hostID, egmID, "keepAliveAck", "", inboundResult.OfferedMessage)
 	default:
 		if strings.TrimSpace(egmID) != "" {
 			s.engine.Submit(engine.Event{
@@ -139,7 +145,7 @@ func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		responseName = "g2sAck"
-		responsePayload = buildSOAPG2SAck(s.hostID, egmID)
+		responsePayload = buildSOAPG2SAck(hostID, egmID)
 	}
 	writeSOAPResponse(w, responsePayload)
 	s.recordOutboundResponse(r.Context(), inboundResult, responseName, egmID, r.URL.Path, r.RemoteAddr, responsePayload)
