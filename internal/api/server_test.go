@@ -919,7 +919,7 @@ func TestPostActionRunExecuteExecutesSpecifiedRunOnly(t *testing.T) {
 	}
 }
 
-func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsAttemptsOutboundSend(t *testing.T) {
+func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsPreparesPendingDelivery(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
@@ -951,15 +951,15 @@ func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsAttemptsOutbound
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d, want %d body=%s", res.Code, http.StatusOK, res.Body.String())
 	}
-	if sendCalls == 0 {
-		t.Fatalf("sender must be called for outbound delivery attempt, got %d calls", sendCalls)
+	if sendCalls != 0 {
+		t.Fatalf("sender must not be called in host-listener mode, got %d calls", sendCalls)
 	}
 	run, err := db.GetActionRun(ctx, "run-1")
 	if err != nil {
 		t.Fatalf("get run-1: %v", err)
 	}
-	if run == nil || run.Status == actions.RunStatusWaitingConfirmation {
-		t.Fatalf("run should not stay in waiting-confirmation host-listener mode, got %+v", run)
+	if run == nil || run.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run should stay in waiting-confirmation host-listener mode, got %+v", run)
 	}
 	messages, err := db.ListMessageJournalEntries(ctx, store.MessageJournalListQuery{Limit: 50, ActionRunID: "run-1"})
 	if err != nil {
@@ -968,8 +968,8 @@ func TestPostActionRunExecuteHostListenerWithoutDeliverySettingsAttemptsOutbound
 	if len(messages) == 0 {
 		t.Fatalf("expected message journal entry, got %+v", messages)
 	}
-	if messages[0].Result == g2sengine.MessageResultPrepared {
-		t.Fatalf("expected send-attempt result, got %+v", messages)
+	if messages[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("expected prepared result in host-listener mode, got %+v", messages)
 	}
 }
 
@@ -1034,7 +1034,7 @@ func TestPostActionRunExecuteWithExplicitHTTPDeliveryUsesSender(t *testing.T) {
 	}
 }
 
-func TestPostActionRunExecuteHostListenerWithoutEndpointReturnsFailed(t *testing.T) {
+func TestPostActionRunExecuteHostListenerWithoutEndpointReturnsWaitingConfirmation(t *testing.T) {
 	ctx := context.Background()
 	db := newTestStore(t, ctx)
 	defer db.Close()
@@ -1068,8 +1068,8 @@ func TestPostActionRunExecuteHostListenerWithoutEndpointReturnsFailed(t *testing
 	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode execute result: %v", err)
 	}
-	if payload.ActionRun.Status != actions.RunStatusFailed {
-		t.Fatalf("run status=%q, want FAILED", payload.ActionRun.Status)
+	if payload.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q, want WAITING_CONFIRMATION", payload.ActionRun.Status)
 	}
 }
 

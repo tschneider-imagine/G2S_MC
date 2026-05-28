@@ -3280,10 +3280,10 @@ func TestClearLatchRouteExecutesQueuedRunWhenInputRuntimeExecutionEnabled(t *tes
 	if matched == nil {
 		t.Fatalf("expected queued return action run for transition_id=%d", transition.ID)
 	}
-	if matched.Status != actions.RunStatusFailed {
-		t.Fatalf("run status=%q want FAILED", matched.Status)
+	if matched.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q want WAITING_CONFIRMATION", matched.Status)
 	}
-	if !strings.Contains(res.Body.String(), "run status: FAILED") {
+	if !strings.Contains(res.Body.String(), "run status: WAITING_CONFIRMATION") {
 		t.Fatalf("expected executed run status in response, body=%s", res.Body.String())
 	}
 
@@ -3294,8 +3294,11 @@ func TestClearLatchRouteExecutesQueuedRunWhenInputRuntimeExecutionEnabled(t *tes
 	if err != nil {
 		t.Fatalf("list message journal: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("expected no message rows when delivery target cannot be resolved, got %+v", rows)
+	if len(rows) == 0 {
+		t.Fatalf("expected prepared message rows for host-listener pending delivery")
+	}
+	if rows[0].Result != g2sengine.MessageResultPrepared {
+		t.Fatalf("message result=%q want %q", rows[0].Result, g2sengine.MessageResultPrepared)
 	}
 }
 

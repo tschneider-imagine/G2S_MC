@@ -2056,11 +2056,6 @@ func runtimeOptionsFromConfigAndFlags(cfg config.Config, explicitFlags map[strin
 	if !ok {
 		return appliance.RuntimeOptions{}, "", fmt.Errorf("invalid runtime delivery topology %q", strings.TrimSpace(deliveryTopologyRaw))
 	}
-	if executeActions {
-		if deliveryTopology == g2stransport.DeliveryTopologyHostListener {
-			deliveryTopology = g2stransport.DeliveryTopologyOutboundEndpoint
-		}
-	}
 	if err := validateInputRuntimeFlags(runtimeInterval, timeoutMS); err != nil {
 		return appliance.RuntimeOptions{}, "", err
 	}

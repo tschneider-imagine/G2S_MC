@@ -1918,8 +1918,8 @@ func TestRuntimeOptionsFromConfigAndFlagsUsesConfigDefaults(t *testing.T) {
 	if options.PollInterval != 125*time.Millisecond {
 		t.Fatalf("poll interval = %s, want 125ms", options.PollInterval)
 	}
-	if topology != g2stransport.DeliveryTopologyOutboundEndpoint {
-		t.Fatalf("topology = %q, want OUTBOUND_ENDPOINT", topology)
+	if topology != g2stransport.DeliveryTopologyHostListener {
+		t.Fatalf("topology = %q, want HOST_LISTENER", topology)
 	}
 	if options.DeliverySettings.Mode != g2stransport.DeliveryModeHTTP {
 		t.Fatalf("delivery defaults = %+v, want mode=http", options.DeliverySettings)

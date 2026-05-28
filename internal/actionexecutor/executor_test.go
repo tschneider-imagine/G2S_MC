@@ -422,7 +422,7 @@ func TestExecuteNoSenderFailsWithoutPretendingSuccess(t *testing.T) {
 	}
 }
 
-func TestExecuteHostListenerWithoutEndpointFailsDeliveryResolution(t *testing.T) {
+func TestExecuteHostListenerWithoutEndpointPreparesPendingDelivery(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
 	record := st.egmsByID["EGM-001"]
@@ -456,17 +456,20 @@ func TestExecuteHostListenerWithoutEndpointFailsDeliveryResolution(t *testing.T)
 	if sendCalls != 0 {
 		t.Fatalf("sender must not be called in host listener mode, calls=%d", sendCalls)
 	}
-	if result.ActionRun.Status != actions.RunStatusFailed {
-		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
+	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
 	}
-	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusFailed {
+	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusPending {
 		t.Fatalf("unexpected target rows: %+v", result.TargetResults)
 	}
-	if len(st.messages) != 0 {
-		t.Fatalf("expected no message journal rows when endpoint resolution fails: %+v", st.messages)
+	if len(st.messages) == 0 {
+		t.Fatalf("expected prepared message rows in host listener mode")
 	}
-	if len(result.Attempts) != 0 {
-		t.Fatalf("expected no send attempts when endpoint resolution fails: %+v", result.Attempts)
+	if got := st.messages[0].Result; got != g2sengine.MessageResultPrepared {
+		t.Fatalf("message result=%q, want %q", got, g2sengine.MessageResultPrepared)
+	}
+	if len(result.Attempts) == 0 || result.Attempts[0].DeliveryResult != string(g2sengine.MessageResultPrepared) {
+		t.Fatalf("expected prepared attempt summary: %+v", result.Attempts)
 	}
 }
 
@@ -508,8 +511,8 @@ func TestExecuteHostListenerMissingEndpointDoesNotQueueEscalation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if result.ActionRun.Status != actions.RunStatusFailed {
-		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
+	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
 	}
 	if result.EscalationRun != nil {
 		t.Fatalf("did not expect escalation run: %+v", result.EscalationRun)
@@ -742,7 +745,7 @@ func TestExecuteRestoreActionUsesSamePath(t *testing.T) {
 	}
 }
 
-func TestExecuteRestoreActionHostListenerWithoutEndpointFails(t *testing.T) {
+func TestExecuteRestoreActionHostListenerWithoutEndpointPreparesPending(t *testing.T) {
 	now := time.Now().UTC()
 	st := newFakeStore(now)
 	restoreRun := actions.ActionRun{
@@ -790,10 +793,10 @@ func TestExecuteRestoreActionHostListenerWithoutEndpointFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if result.ActionRun.Status != actions.RunStatusFailed {
-		t.Fatalf("restore run status=%q, want %q", result.ActionRun.Status, actions.RunStatusFailed)
+	if result.ActionRun.Status != actions.RunStatusWaitingConfirmation {
+		t.Fatalf("restore run status=%q, want %q", result.ActionRun.Status, actions.RunStatusWaitingConfirmation)
 	}
-	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusFailed {
+	if len(result.TargetResults) != 1 || result.TargetResults[0].Status != actions.TargetStatusPending {
 		t.Fatalf("unexpected restore target rows: %+v", result.TargetResults)
 	}
 }

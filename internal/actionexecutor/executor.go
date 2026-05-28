@@ -42,9 +42,6 @@ func (e *Executor) Execute(ctx context.Context, request ExecuteRequest) (Execute
 	if !topologyOK {
 		return ExecuteResult{}, fmt.Errorf("invalid delivery topology %q", strings.TrimSpace(request.Topology))
 	}
-	if topology == g2stransport.DeliveryTopologyHostListener {
-		topology = g2stransport.DeliveryTopologyOutboundEndpoint
-	}
 
 	run, err := e.Store.GetActionRun(ctx, runID)
 	if err != nil {
