@@ -67,6 +67,28 @@ func TestCommsOnlineUpdatesEngine(t *testing.T) {
 	t.Fatal("expected EGM last seen and endpoint metadata to update")
 }
 
+func TestCommsOnlineSupportsUppercaseGEndpointAlias(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := engine.New("controller", []config.EGM{{EGMID: "EGM-1", IPAddress: "127.0.0.1", Port: 9443}})
+	eng.Start(ctx)
+
+	mux := http.NewServeMux()
+	NewServer("HOST-1", eng).RegisterRoutes(mux, "/g2s")
+
+	req := httptest.NewRequest(http.MethodPost, "/G2s", strings.NewReader(`<g2sBody egmId="EGM-1"><commsOnLine/></g2sBody>`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 on /G2s alias, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "commsOnLineAck") {
+		t.Fatalf("expected commsOnLineAck on /G2s alias, got %s", rr.Body.String())
+	}
+}
+
 func TestCommsOnlineDiscoversUnknownEGM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

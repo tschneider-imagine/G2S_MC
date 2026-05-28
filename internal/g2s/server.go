@@ -40,6 +40,14 @@ func (s *Server) SetInboundProcessor(processor InboundProcessor) {
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux, endpointPath string) {
 	mux.HandleFunc(endpointPath, s.handleG2S)
+	if strings.EqualFold(strings.TrimSpace(endpointPath), "/g2s") {
+		if endpointPath != "/g2s" {
+			mux.HandleFunc("/g2s", s.handleG2S)
+		}
+		if endpointPath != "/G2s" {
+			mux.HandleFunc("/G2s", s.handleG2S)
+		}
+	}
 }
 
 func (s *Server) handleG2S(w http.ResponseWriter, r *http.Request) {
